@@ -8,7 +8,6 @@ import type {
   Unit,
   UnitPatch,
 } from "./types";
-import { unitTextColor } from "./UnitColor";
 import EditUnitModal from "./EditUnitModal";
 import UnitCard from "./UnitCard";
 
@@ -47,48 +46,6 @@ function PlusIcon(props: { className?: string }) {
         stroke="currentColor"
         strokeWidth="2"
         strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function TrashIcon(props: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      className={props.className}
-      aria-hidden="true"
-    >
-      <path
-        d="M9 3h6m-8 4h10m-9 0 1 14h6l1-14M10 11v7M14 11v7"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function PenIcon(props: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      className={props.className}
-      aria-hidden="true"
-    >
-      <path
-        d="M12 20h9"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-      <path
-        d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4 11.5-11.5Z"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinejoin="round"
       />
     </svg>
   );
@@ -325,26 +282,6 @@ export default function UnitsPanel(props: {
 
   const [panelMode, setPanelMode] = useState<"units" | "markers">("units");
   const isMarkerMode = panelMode === "markers";
-  const [shiftDown, setShiftDown] = useState(false);
-
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Shift") setShiftDown(true);
-    };
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key === "Shift") setShiftDown(false);
-    };
-    const onBlur = () => setShiftDown(false);
-
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("blur", onBlur);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", onBlur);
-    };
-  }, []);
 
   useEffect(() => {
     if (isMarkerMode && createOpen) setCreateOpen(false);
@@ -455,17 +392,6 @@ export default function UnitsPanel(props: {
 
     closeCreate();
   }
-
-  const displayUnits = useMemo(() => {
-    if (!selectedId) return units;
-
-    const idx = units.findIndex((u) => u.id === selectedId);
-    if (idx <= 0) return units; // 없거나 이미 맨 위면 그대로
-
-    const sel = units[idx];
-    // ✅ 선택 유닛을 맨 앞으로, 나머지 순서는 그대로 유지
-    return [sel, ...units.slice(0, idx), ...units.slice(idx + 1)];
-  }, [units, selectedId]);
 
   const pinnedUnit = selectedId
     ? (units.find((u) => u.id === selectedId) ?? null)

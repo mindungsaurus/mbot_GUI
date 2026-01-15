@@ -19,12 +19,6 @@ function mod(n: number, m: number) {
   return ((n % m) + m) % m;
 }
 
-function unitLabel(u: Unit | undefined | null) {
-  if (!u) return "unknown";
-  const alias = ((u as any).alias ?? "").toString().trim();
-  return alias ? `${u.name} (${alias})` : u.name;
-}
-
 function turnLabel(u: Unit | undefined | null) {
   if (!u) return "unknown";
   const alias = ((u as any).alias ?? "").toString().trim();

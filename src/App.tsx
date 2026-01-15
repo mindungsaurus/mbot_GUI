@@ -272,7 +272,6 @@ export default function App() {
   );
 
   const canControlMove = selectedIds.length > 0 || !!selectedId;
-  const canControlAction = selectedIds.length > 0; // 다중 선택 기준
   const tagGrantTargetCount = selectedIds.length
     ? selectedIds.length
     : selectedId

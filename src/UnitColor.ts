@@ -1,5 +1,5 @@
 // src/unitColor.ts
-import type { Side, Unit } from "./types";
+import type { Unit } from "./types";
 
 /**
  * backend encounter.render.ts 기준:

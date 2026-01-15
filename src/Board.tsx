@@ -9,18 +9,6 @@ function keyXZ(x: number, z: number) {
   return `${x},${z}`;
 }
 
-function bringSelectedFirst<T extends { id: string }>(
-  arr: T[],
-  selectedId: string | null
-): T[] {
-  if (!selectedId) return arr;
-  const idx = arr.findIndex((u) => u.id === selectedId);
-  if (idx <= 0) return arr; // 없거나 이미 맨 앞이면 그대로
-
-  // 선택된 것만 맨 앞으로 (나머지는 기존 상대 순서 유지)
-  return [arr[idx], ...arr.slice(0, idx), ...arr.slice(idx + 1)];
-}
-
 export default function Board(props: {
   units: Unit[];
   markers: Marker[];

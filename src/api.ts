@@ -2,7 +2,7 @@ import type { Pos } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:3000";
 
-function getAuthHeaders() {
+function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem("operator.auth.token");
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
