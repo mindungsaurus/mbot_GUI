@@ -88,7 +88,6 @@ export default function TurnOrderBar(props: {
       | { kind: "unit"; unitId: string; sourceIndex: number }
       | { kind: "marker"; markerId: string; sourceIndex: number }
     > = [];
-
     if (Array.isArray(turnOrder) && turnOrder.length > 0) {
       for (let i = 0; i < turnOrder.length; i++) {
         const entry = turnOrder[i];
@@ -142,10 +141,12 @@ export default function TurnOrderBar(props: {
     for (let k = 0; k < turnOrder.length; k++) {
       const e = turnOrder[mod(idx + k, turnOrder.length)];
       const id = extractUnitId(e);
-      if (id) return id;
+      if (!id) continue;
+      if (unitById.get(id)?.turnDisabled) continue;
+      return id;
     }
     return null;
-  }, [turnOrder, turnOrderIndex]);
+  }, [turnOrder, turnOrderIndex, unitById]);
 
   const tempStack = useMemo(() => {
     const arr = Array.isArray(tempTurnStack) ? tempTurnStack : [];
@@ -178,10 +179,12 @@ export default function TurnOrderBar(props: {
     for (let k = 0; k < turnOrder.length; k++) {
       const e = turnOrder[mod(idx + k, turnOrder.length)];
       const id = extractUnitId(e);
-      if (id) return id;
+      if (!id) continue;
+      if (unitById.get(id)?.turnDisabled) continue;
+      return id;
     }
     return null;
-  }, [currentUnitId, turnOrder, turnOrderIndex, isBattleStarted]);
+  }, [currentUnitId, turnOrder, turnOrderIndex, isBattleStarted, unitById]);
 
   const displayIndexFromTurnIndex = useMemo(() => {
     if (!Array.isArray(turnOrder) || turnOrder.length === 0) return null;
@@ -526,6 +529,7 @@ export default function TurnOrderBar(props: {
                 !isUnit && entry?.kind === "marker"
                   ? markerById.get(entry.markerId)
                   : null;
+              const isDisabled = isUnit && !!u?.turnDisabled;
               const isCurrent = isBattleStarted && isUnit && idx === currentIndex;
               const currentColor =
                 isCurrent && u ? unitTextColor(u) : undefined;
@@ -570,7 +574,7 @@ export default function TurnOrderBar(props: {
                   <div
                     className={[
                       "rounded-lg border text-center",
-                      isMarker
+                      isMarker || isDisabled
                         ? "border-amber-800/50 bg-amber-950/20"
                         : "bg-zinc-950/30 border-zinc-800",
                       "px-2 py-1",
@@ -592,7 +596,7 @@ export default function TurnOrderBar(props: {
                         title={isUnit ? u?.name ?? "" : markerTitle}
                         className={[
                           "block truncate",
-                          isMarker
+                          isMarker || isDisabled
                             ? "text-amber-200"
                             : isCurrent
                               ? "text-zinc-100"

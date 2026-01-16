@@ -22,7 +22,10 @@ export default function TurnOrderReorderModal(props: {
   turnOrder: TurnEntry[];
   busy?: boolean;
   onClose: () => void;
-  onApply: (unitIds: string[]) => Promise<void> | void;
+  onApply: (
+    unitIds: string[],
+    disabledChanges: { unitId: string; turnDisabled: boolean }[]
+  ) => Promise<void> | void;
 }) {
   const { open, units, turnOrder, busy, onClose, onApply } = props;
 
@@ -46,18 +49,27 @@ export default function TurnOrderReorderModal(props: {
   }, [turnOrder, units]);
 
   const [draftIds, setDraftIds] = useState<string[]>([]);
+  // Track turn-disabled toggles while the modal is open.
+  const [draftDisabled, setDraftDisabled] = useState<Record<string, boolean>>(
+    {}
+  );
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
   const initialIdsRef = useRef<string[]>([]);
+  const initialDisabledRef = useRef<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!open) return;
     const base = orderUnitIds;
     initialIdsRef.current = base;
     setDraftIds(base);
+    const disabledMap: Record<string, boolean> = {};
+    for (const u of units) disabledMap[u.id] = !!u.turnDisabled;
+    initialDisabledRef.current = disabledMap;
+    setDraftDisabled({ ...disabledMap });
     setDragIndex(null);
     setOverIndex(null);
-  }, [open, orderUnitIds]);
+  }, [open, orderUnitIds, units]);
 
   useEffect(() => {
     if (!open) return;
@@ -105,13 +117,29 @@ export default function TurnOrderReorderModal(props: {
     setOverIndex(null);
   }
 
+  function toggleDisabled(unitId: string) {
+    if (busy) return;
+    setDraftDisabled((prev) => ({
+      ...prev,
+      [unitId]: !prev[unitId],
+    }));
+  }
+
   function resetOrder() {
     setDraftIds(initialIdsRef.current);
+    setDraftDisabled({ ...initialDisabledRef.current });
   }
 
   async function applyOrder() {
     if (busy) return;
-    await onApply(draftIds);
+    const disabledChanges: { unitId: string; turnDisabled: boolean }[] = [];
+    for (const [unitId, disabled] of Object.entries(draftDisabled)) {
+      const before = !!initialDisabledRef.current[unitId];
+      if (!!disabled !== before) {
+        disabledChanges.push({ unitId, turnDisabled: !!disabled });
+      }
+    }
+    await onApply(draftIds, disabledChanges);
   }
 
   const empty = draftIds.length === 0;
@@ -169,6 +197,7 @@ export default function TurnOrderReorderModal(props: {
               const color = unit ? unitTextColor(unit) : undefined;
               const isOver = overIndex === idx && dragIndex !== null;
               const isDragging = dragIndex === idx;
+              const isDisabled = !!draftDisabled[unitId];
 
               return (
                 <div
@@ -184,6 +213,7 @@ export default function TurnOrderReorderModal(props: {
                     "text-xs text-zinc-200",
                     isOver ? "border-amber-400/60 bg-amber-950/20" : "",
                     isDragging ? "opacity-60" : "",
+                    isDisabled ? "opacity-60" : "",
                   ].join(" ")}
                 >
                   <div className="flex items-center gap-2">
@@ -210,6 +240,17 @@ export default function TurnOrderReorderModal(props: {
                       {label}
                     </span>
                   </div>
+
+                  <label className="flex items-center gap-2 text-[11px] text-zinc-400">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-amber-500"
+                      checked={isDisabled}
+                      onChange={() => toggleDisabled(unitId)}
+                      disabled={busy}
+                    />
+                    <span>비활성화</span>
+                  </label>
                 </div>
               );
             })

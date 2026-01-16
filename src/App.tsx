@@ -1136,17 +1136,30 @@ export default function App() {
     await run(actions);
   }
 
-  async function applyTurnOrderReorder(unitIds: string[]) {
+  async function applyTurnOrderReorder(
+    unitIds: string[],
+    disabledChanges: { unitId: string; turnDisabled: boolean }[]
+  ) {
     const order = Array.isArray(state?.turnOrder) ? state.turnOrder : [];
-    if (order.length === 0) return false;
+    const patchActions = (disabledChanges ?? []).map((change) => ({
+      type: "PATCH_UNIT",
+      unitId: change.unitId,
+      patch: { turnDisabled: change.turnDisabled },
+    }));
+    if (order.length === 0) {
+      if (patchActions.length === 0) return false;
+      await run(patchActions);
+      return true;
+    }
 
     const { actions, error } = buildMoveTurnEntryActions(order, unitIds);
     if (error) {
       setErr(error);
       return false;
     }
-    if (actions.length === 0) return true;
-    await run(actions);
+    const combined = [...actions, ...patchActions];
+    if (combined.length === 0) return true;
+    await run(combined);
     return true;
   }
 
@@ -2099,8 +2112,11 @@ export default function App() {
           turnOrder={(state as any)?.turnOrder ?? []}
           busy={busy}
           onClose={() => setReorderOpen(false)}
-          onApply={async (unitIds) => {
-            const ok = await applyTurnOrderReorder(unitIds);
+          onApply={async (unitIds, disabledChanges) => {
+            const ok = await applyTurnOrderReorder(
+              unitIds,
+              disabledChanges
+            );
             if (ok) setReorderOpen(false);
           }}
         />

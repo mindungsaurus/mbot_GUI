@@ -21,6 +21,7 @@ export interface UnitPatch {
   note?: string | null;
   colorCode?: number | null;
   hidden?: boolean | null;
+  turnDisabled?: boolean | null;
 }
 
 export type TurnEntry =
@@ -42,6 +43,7 @@ export type Unit = {
   note?: string;
   colorCode?: number;
   hidden?: boolean;
+  turnDisabled?: boolean;
 
   pos?: Pos;
   hp?: { cur: number; max: number; temp?: number };

@@ -227,6 +227,9 @@ export default function UnitCard(props: {
     ? "border-zinc-500 bg-zinc-800"
     : "border-zinc-800 bg-zinc-900 hover:bg-zinc-800/60";
   const busyCls = busy ? "opacity-70 cursor-not-allowed" : "";
+  const disabledBgCls = u.turnDisabled
+    ? "!bg-amber-950/30 hover:!bg-amber-900/35 !border-amber-600/70"
+    : "";
 
   const pinnedCls =
     variant === "pinned"
@@ -235,7 +238,7 @@ export default function UnitCard(props: {
 
   return (
     <div
-      className={[baseCls, selCls, pinnedCls, busyCls].join(" ")}
+      className={[baseCls, selCls, pinnedCls, busyCls, disabledBgCls].join(" ")}
       onClick={(e) => {
         if (busy) return;
         onSelect(e);
