@@ -98,6 +98,7 @@ export type EncounterState = {
 
   turnOrder?: TurnEntry[];
   turnIndex?: number;
+  battleStarted?: boolean;
 
   // optional (backend has these)
   round?: number;

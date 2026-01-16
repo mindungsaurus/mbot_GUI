@@ -41,9 +41,11 @@ export default function TurnOrderBar(props: {
   currentUnitId?: string | null; // 현재 턴 유닛 id
   className?: string;
   round?: number | null; // backend state.round
+  battleStarted?: boolean;
   busy?: boolean;
   onReorder?: () => void;
   onNextTurn?: () => void;
+  onBattleStart?: () => void;
   onTempTurn: () => void;
   canTempTurn: boolean;
   tempTurnStack?: string[];
@@ -56,13 +58,17 @@ export default function TurnOrderBar(props: {
     currentUnitId,
     className,
     round: roundProp,
+    battleStarted,
     busy,
     onReorder,
     onNextTurn,
+    onBattleStart,
     onTempTurn,
     canTempTurn,
     tempTurnStack,
   } = props;
+
+  const isBattleStarted = battleStarted !== false;
 
   const unitById = useMemo(() => {
     const m = new Map<string, Unit>();
@@ -148,7 +154,7 @@ export default function TurnOrderBar(props: {
     );
   }, [tempTurnStack]);
 
-  const isTempTurn = tempStack.length > 0;
+  const isTempTurn = isBattleStarted && tempStack.length > 0;
   const tempTurnUnitId = isTempTurn ? tempStack[tempStack.length - 1] : null;
 
   // NEXT_TURN을 누르면(임시턴 중엔 pop) “다음으로 보일 턴”
@@ -159,6 +165,7 @@ export default function TurnOrderBar(props: {
     : null;
 
   const resolvedCurrentId = useMemo(() => {
+    if (!isBattleStarted) return null;
     if (currentUnitId) return currentUnitId;
 
     if (!Array.isArray(turnOrder) || turnOrder.length === 0) return null;
@@ -174,7 +181,7 @@ export default function TurnOrderBar(props: {
       if (id) return id;
     }
     return null;
-  }, [currentUnitId, turnOrder, turnOrderIndex]);
+  }, [currentUnitId, turnOrder, turnOrderIndex, isBattleStarted]);
 
   const displayIndexFromTurnIndex = useMemo(() => {
     if (!Array.isArray(turnOrder) || turnOrder.length === 0) return null;
@@ -403,10 +410,26 @@ export default function TurnOrderBar(props: {
                 순서 조정
               </button>
             ) : null}
-            {onNextTurn ? (
+            {!isBattleStarted && onBattleStart ? (
               <button
                 type="button"
                 disabled={busy}
+                onClick={onBattleStart}
+                className={[
+                  "rounded-lg border px-2 py-1 text-[11px] font-semibold",
+                  "border-rose-500/50 bg-rose-950/30 text-rose-200",
+                  "hover:bg-rose-900/35 hover:text-rose-100",
+                  "disabled:opacity-50",
+                ].join(" ")}
+                title="Start Battle"
+              >
+                전투 개시
+              </button>
+            ) : null}
+            {onNextTurn ? (
+              <button
+                type="button"
+                disabled={busy || !isBattleStarted}
                 onClick={onNextTurn}
                 className={[
                   "rounded-lg border px-2 py-1 text-[11px] font-semibold",
@@ -422,12 +445,14 @@ export default function TurnOrderBar(props: {
 
             <button
               type="button"
-              disabled={busy || !canTempTurn}
+              disabled={busy || !isBattleStarted || !canTempTurn}
               onClick={onTempTurn}
               title={
-                !canTempTurn
-                  ? "임시 턴을 줄 유닛을 먼저 선택해줘"
-                  : "선택된 유닛에게 임시 턴 부여"
+                !isBattleStarted
+                  ? "전투 개시 후 사용할 수 있어"
+                  : !canTempTurn
+                    ? "임시 턴을 줄 유닛을 먼저 선택해줘"
+                    : "선택된 유닛에게 임시 턴 부여"
               }
               className={[
                 "rounded-lg border px-2 py-1 text-[11px] font-semibold",
@@ -459,14 +484,18 @@ export default function TurnOrderBar(props: {
               <span
                 className={[
                   "font-semibold",
-                  currentHeaderColor ? "" : "text-zinc-200",
+                  currentHeaderColor && isBattleStarted
+                    ? ""
+                    : "text-zinc-400",
                 ].join(" ")}
                 style={
-                  currentHeaderColor ? { color: currentHeaderColor } : undefined
+                  currentHeaderColor && isBattleStarted
+                    ? { color: currentHeaderColor }
+                    : undefined
                 }
                 title={currentUnit?.name ?? ""}
               >
-                {turnLabel(currentUnit)}
+                {isBattleStarted ? turnLabel(currentUnit) : "-"}
               </span>
             </span>
           </div>
@@ -497,7 +526,7 @@ export default function TurnOrderBar(props: {
                 !isUnit && entry?.kind === "marker"
                   ? markerById.get(entry.markerId)
                   : null;
-              const isCurrent = isUnit && idx === currentIndex;
+              const isCurrent = isBattleStarted && isUnit && idx === currentIndex;
               const currentColor =
                 isCurrent && u ? unitTextColor(u) : undefined;
               const markerAlias = (m?.alias ?? "").trim();

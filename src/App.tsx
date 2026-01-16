@@ -274,6 +274,7 @@ export default function App() {
     const logs = state?.logs ?? [];
     return logs.slice(-200).reverse();
   }, [state?.logs]);
+  const battleStarted = state?.battleStarted ?? false;
   const activeEncounter = useMemo(
     () => encounters.find((enc) => enc.id === encounterId) ?? null,
     [encounters, encounterId]
@@ -623,6 +624,11 @@ export default function App() {
     setErr(null);
     setEncounterId(id);
     setSessionSelected(true);
+  }
+
+  async function startBattle() {
+    if (!state) return;
+    await run({ type: "BATTLE_START" });
   }
 
   // 최초 1회: localStorage에서 채널 값/최근 목록 불러오기
@@ -1609,9 +1615,11 @@ export default function App() {
             turnOrder={(state as any)?.turnOrder ?? []}
             turnOrderIndex={(state as any)?.turnIndex ?? 0}
             round={(state as any)?.round ?? 1}
+            battleStarted={battleStarted}
             busy={busy}
             onReorder={() => setReorderOpen(true)}
             onNextTurn={() => applyPanelAction("NEXT_TURN")}
+            onBattleStart={startBattle}
             canTempTurn={!!selectedId}
             onTempTurn={grantTempTurn}
             tempTurnStack={(state as any)?.tempTurnStack ?? []}
