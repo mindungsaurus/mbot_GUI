@@ -370,11 +370,11 @@ export default function EditUnitModal(props: {
     if (cc === null) {
       if (prevColor != null) patch.colorCode = null;
     } else {
-      // backend 허용 범위: 30~37, 90~97, 39
-      const ok = (cc >= 30 && cc <= 37) || (cc >= 90 && cc <= 97) || cc === 39;
+      // backend 허용 범위: 30~37, 39
+      const ok = (cc >= 30 && cc <= 37) || cc === 39;
       if (!ok) {
         setErr(
-          "colorCode는 30~37, 90~97, 39 중 하나만 가능해. (또는 비워서 자동)"
+          "colorCode는 30~37, 39 중 하나만 가능해. (또는 비워서 자동)"
         );
         return;
       }
@@ -693,14 +693,7 @@ export default function EditUnitModal(props: {
               <option value="35">Magenta (35)</option>
               <option value="36">Cyan (36)</option>
               <option value="37">White (37)</option>
-
-              <option value="91">Bright Red (91)</option>
-              <option value="92">Bright Green (92)</option>
-              <option value="93">Bright Yellow (93)</option>
-              <option value="94">Bright Blue (94)</option>
-              <option value="95">Bright Magenta (95)</option>
-              <option value="96">Bright Cyan (96)</option>
-              <option value="97">Bright White (97)</option>
+              <option value="30">Gray (30)</option>
             </select>
           </div>
 

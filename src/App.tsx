@@ -231,6 +231,22 @@ export default function App() {
   const [markerDraftAlias, setMarkerDraftAlias] = useState("");
   const [markerDraftDuration, setMarkerDraftDuration] = useState("");
   const [markerDraftErr, setMarkerDraftErr] = useState<string | null>(null);
+  const [markerEmojiOpen, setMarkerEmojiOpen] = useState(false);
+  const markerEmojiRef = useRef<HTMLDivElement | null>(null);
+  // Quick emojis for marker alias.
+  const markerEmojiList = [
+    "🛢️",
+    "💀",
+    "🧊",
+    "🪜",
+    "💣",
+    "🌪️",
+    "💫",
+    "☄️",
+    "🔥",
+    "🚪",
+    "🪟",
+  ];
   // Status tag grant modal
   const [tagGrantOpen, setTagGrantOpen] = useState(false);
   const [tagGrantName, setTagGrantName] = useState("");
@@ -711,8 +727,22 @@ export default function App() {
       setMarkerDraftAlias("");
       setMarkerDraftDuration("");
       setMarkerDraftErr(null);
+      setMarkerEmojiOpen(false);
     }
   }, [markerCreateOpen]);
+
+  useEffect(() => {
+    if (!markerEmojiOpen) return;
+    // Close emoji popover when clicking outside the alias input area.
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (markerEmojiRef.current?.contains(target)) return;
+      setMarkerEmojiOpen(false);
+    };
+    window.addEventListener("mousedown", handleClick);
+    return () => window.removeEventListener("mousedown", handleClick);
+  }, [markerEmojiOpen]);
 
   useEffect(() => {
     if (!tagGrantOpen) {
@@ -1655,13 +1685,49 @@ export default function App() {
                   <label className="mb-1 block text-xs text-zinc-400">
                     별명
                   </label>
-                  <input
-                    value={markerDraftAlias}
-                    onChange={(e) => setMarkerDraftAlias(e.target.value)}
-                    className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
-                    disabled={busy}
-                    placeholder="예: 🔥"
-                  />
+                  <div className="relative" ref={markerEmojiRef}>
+                    <div className="flex items-center gap-2">
+                      <input
+                        value={markerDraftAlias}
+                        onChange={(e) => setMarkerDraftAlias(e.target.value)}
+                        className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
+                        disabled={busy}
+                        placeholder="예: 🔥"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setMarkerEmojiOpen((prev) => !prev)}
+                        disabled={busy}
+                        className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-2 py-2 text-sm text-zinc-200 hover:bg-zinc-800/60 disabled:opacity-50"
+                        aria-label="이모지 선택"
+                        title="이모지 선택"
+                      >
+                        🙂
+                      </button>
+                    </div>
+
+                    {markerEmojiOpen && (
+                      <div className="absolute right-0 top-full z-20 mt-2 w-40 rounded-lg border border-zinc-800 bg-zinc-950 p-2 shadow-lg">
+                        <div className="grid grid-cols-3 gap-2 text-lg">
+                          {markerEmojiList.map((emoji) => (
+                            <button
+                              key={emoji}
+                              type="button"
+                              className="rounded-md border border-transparent px-1 py-1 hover:border-zinc-700 hover:bg-zinc-800/60"
+                              onClick={() => {
+                                setMarkerDraftAlias((prev) =>
+                                  prev ? `${prev}${emoji}` : emoji
+                                );
+                                setMarkerEmojiOpen(false);
+                              }}
+                            >
+                              {emoji}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div>
@@ -2049,6 +2115,7 @@ export default function App() {
             onEditDeathSaves={editDeathSaves}
             onSetUnitPos={setUnitPos}
             onToggleHidden={toggleHidden}
+            onToggleMarkerCreate={toggleMarkerCreate}
             onUpsertMarker={upsertMarkerFromPanel}
             onRemoveMarker={removeMarkerFromPanel}
           />

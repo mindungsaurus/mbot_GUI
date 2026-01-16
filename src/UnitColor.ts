@@ -23,9 +23,9 @@ export function ansiColorCodeToCss(code?: number): string | undefined {
   // 39: default(기존 글자색 유지)
   if (code === 39) return undefined;
 
-  // 기본 30~37
+  // 기본 30~37 (UI 가독성 보정: 30은 회색으로 표시)
   const base: Record<number, string> = {
-    30: "#111827", // black-ish
+    30: "#9ca3af", // gray (Discord 30, UI에서는 밝게 보정)
     31: "#ef4444", // red
     32: "#22c55e", // green
     33: "#eab308", // yellow

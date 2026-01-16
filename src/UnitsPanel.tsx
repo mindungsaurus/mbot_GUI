@@ -29,7 +29,7 @@ function clampInt(v: unknown, fallback: number) {
 function normalizeAnsiColorCode(v: unknown): number | undefined {
   const n = Math.trunc(Number(v));
   if (!Number.isFinite(n)) return undefined;
-  const ok = (n >= 30 && n <= 37) || (n >= 90 && n <= 97) || n === 39;
+  const ok = (n >= 30 && n <= 37) || n === 39;
   return ok ? n : undefined;
 }
 
@@ -252,6 +252,7 @@ export default function UnitsPanel(props: {
   ) => Promise<void> | void;
   onSetUnitPos: (unitId: string, x: number, z: number) => Promise<void> | void;
   onToggleHidden: (unitId: string) => Promise<void> | void;
+  onToggleMarkerCreate: () => void;
   onUpsertMarker: (payload: MarkerUpsertPayload) => Promise<void> | void;
   onRemoveMarker: (markerId: string) => Promise<void> | void;
 }) {
@@ -271,6 +272,7 @@ export default function UnitsPanel(props: {
     onRemoveMarker,
     onEditDeathSaves,
     onToggleHidden,
+    onToggleMarkerCreate,
   } = props;
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -286,6 +288,7 @@ export default function UnitsPanel(props: {
   useEffect(() => {
     if (isMarkerMode && createOpen) setCreateOpen(false);
   }, [isMarkerMode, createOpen]);
+
 
   const defaultPos = useMemo(() => {
     return selected?.pos ?? { x: 0, z: 0 };
@@ -370,7 +373,7 @@ export default function UnitsPanel(props: {
       const normalized = normalizeAnsiColorCode(ccRaw);
       if (normalized === undefined) {
         setLocalErr(
-          "colorCode는 30~37, 90~97, 39 중 하나만 가능해. (또는 비워서 자동)"
+          "colorCode는 30~37, 39 중 하나만 가능해. (또는 비워서 자동)"
         );
         return;
       }
@@ -391,6 +394,20 @@ export default function UnitsPanel(props: {
     });
 
     closeCreate();
+  }
+
+  function handlePlusClick() {
+    if (isMarkerMode) {
+      // Marker creation lives in the Board panel; just toggle it here.
+      setCreateOpen(false);
+      onToggleMarkerCreate();
+      return;
+    }
+    if (createOpen) {
+      closeCreate();
+    } else {
+      openCreate();
+    }
   }
 
   const pinnedUnit = selectedId
@@ -425,9 +442,17 @@ export default function UnitsPanel(props: {
         {/* + icon button (스크린샷의 빨간 영역) */}
         <button
           type="button"
-          onClick={() => (createOpen ? closeCreate() : openCreate())}
-          disabled={busy || isMarkerMode}
-          title={createOpen ? "Close Create Unit" : "Create Unit"}
+          onClick={handlePlusClick}
+          disabled={busy}
+          title={
+            createOpen
+              ? isMarkerMode
+                ? "Close Create Marker"
+                : "Close Create Unit"
+              : isMarkerMode
+                ? "Create Marker"
+                : "Create Unit"
+          }
           className={[
             "inline-flex items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950/30 text-zinc-200",
             "hover:bg-zinc-800/60 disabled:opacity-50",
@@ -620,14 +645,7 @@ export default function UnitsPanel(props: {
                 <option value="35">Magenta (35)</option>
                 <option value="36">Cyan (36)</option>
                 <option value="37">White (37)</option>
-
-                <option value="91">Bright Red (91)</option>
-                <option value="92">Bright Green (92)</option>
-                <option value="93">Bright Yellow (93)</option>
-                <option value="94">Bright Blue (94)</option>
-                <option value="95">Bright Magenta (95)</option>
-                <option value="96">Bright Cyan (96)</option>
-                <option value="97">Bright White (97)</option>
+                <option value="30">Gray (30)</option>
               </select>
             </div>
 
