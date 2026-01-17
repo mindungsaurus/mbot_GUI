@@ -1,14 +1,12 @@
-// src/components/UnitsPanel.tsx
-import { useEffect, useMemo, useState } from "react";
+﻿// src/components/UnitsPanel.tsx
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import type {
   CreateUnitPayload,
   Marker,
   Side,
   TurnEntry,
   Unit,
-  UnitPatch,
 } from "./types";
-import EditUnitModal from "./EditUnitModal";
 import UnitCard from "./UnitCard";
 
 type CreateUnitForm = Omit<
@@ -31,6 +29,14 @@ function normalizeAnsiColorCode(v: unknown): number | undefined {
   if (!Number.isFinite(n)) return undefined;
   const ok = (n >= 30 && n <= 37) || n === 39;
   return ok ? n : undefined;
+}
+
+function moveItem<T>(arr: T[], from: number, to: number): T[] {
+  if (from === to) return arr;
+  const next = arr.slice();
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
 }
 
 function PlusIcon(props: { className?: string }) {
@@ -242,16 +248,15 @@ export default function UnitsPanel(props: {
   turnOrder: TurnEntry[];
 
   onSelectUnit: (id: string, opts?: { additive?: boolean }) => void;
+  onEditUnit: (unitId: string) => void;
   onCreateUnit: (payload: CreateUnitPayload) => Promise<void> | void;
   onRemoveUnit: (unitId: string) => Promise<void> | void;
-  onPatchUnit: (unitId: string, patch: UnitPatch) => Promise<void> | void;
-  onEditDeathSaves: (
-    unitId: string,
-    success: number,
-    failure: number
-  ) => Promise<void> | void;
-  onSetUnitPos: (unitId: string, x: number, z: number) => Promise<void> | void;
   onToggleHidden: (unitId: string) => Promise<void> | void;
+  onReorderUnits: (payload: {
+    unitIds: string[];
+    sideChanges?: { unitId: string; side: Side }[];
+    benchChanges?: { unitId: string; bench: "TEAM" | "ENEMY" | null }[];
+  }) => Promise<void> | void;
   onToggleMarkerCreate: () => void;
   onUpsertMarker: (payload: MarkerUpsertPayload) => Promise<void> | void;
   onRemoveMarker: (markerId: string) => Promise<void> | void;
@@ -265,29 +270,40 @@ export default function UnitsPanel(props: {
     busy,
     turnOrderLen,
     turnOrder,
-    onSelectUnit,
-    onCreateUnit,
+  onSelectUnit,
+  onEditUnit,
+  onCreateUnit,
     onRemoveUnit,
     onUpsertMarker,
-    onRemoveMarker,
-    onEditDeathSaves,
-    onToggleHidden,
+  onRemoveMarker,
+  onToggleHidden,
+  onReorderUnits,
     onToggleMarkerCreate,
   } = props;
 
   const [createOpen, setCreateOpen] = useState(false);
   const [localErr, setLocalErr] = useState<string | null>(null);
-  const [editUnitId, setEditUnitId] = useState<string | null>(null);
-  const editUnit = editUnitId
-    ? (units.find((u) => u.id === editUnitId) ?? null)
-    : null;
 
   const [panelMode, setPanelMode] = useState<"units" | "markers">("units");
   const isMarkerMode = panelMode === "markers";
+  const [compactMode, setCompactMode] = useState(false);
+  const [unitOrder, setUnitOrder] = useState<string[]>([]);
+  const [dragUnitId, setDragUnitId] = useState<string | null>(null);
+  const [overUnitId, setOverUnitId] = useState<string | null>(null);
+  const [reorderPending, setReorderPending] = useState(false);
+  const unitListRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (isMarkerMode && createOpen) setCreateOpen(false);
   }, [isMarkerMode, createOpen]);
+
+  useEffect(() => {
+    if (busy || dragUnitId || reorderPending) return;
+    const ids = units.map((u) => u.id);
+    setUnitOrder(ids);
+  }, [units]);
+
+  const unitListSpacing = compactMode ? "space-y-1" : "space-y-2";
 
 
   const defaultPos = useMemo(() => {
@@ -413,11 +429,360 @@ export default function UnitsPanel(props: {
   const pinnedUnit = selectedId
     ? (units.find((u) => u.id === selectedId) ?? null)
     : null;
+  const showPinned = !!pinnedUnit && !pinnedUnit.bench && !compactMode;
+  const unitById = useMemo(() => {
+    const map = new Map<string, Unit>();
+    for (const u of units) map.set(u.id, u);
+    return map;
+  }, [units]);
+  const baseOrder = useMemo(() => {
+    return unitOrder.length ? unitOrder : units.map((u) => u.id);
+  }, [unitOrder, units]);
+  const sideOrder = useMemo(() => {
+    const teamIds: string[] = [];
+    const enemyIds: string[] = [];
+    const neutralIds: string[] = [];
+    const benchTeamIds: string[] = [];
+    const benchEnemyIds: string[] = [];
+
+    for (const id of baseOrder) {
+      const u = unitById.get(id);
+      if (!u) continue;
+      if (u.bench === "TEAM") {
+        benchTeamIds.push(id);
+        continue;
+      }
+      if (u.bench === "ENEMY") {
+        benchEnemyIds.push(id);
+        continue;
+      }
+      if (u.side === "TEAM") {
+        teamIds.push(id);
+      } else if (u.side === "ENEMY") {
+        enemyIds.push(id);
+      } else {
+        neutralIds.push(id);
+      }
+    }
+
+    return { teamIds, enemyIds, neutralIds, benchTeamIds, benchEnemyIds };
+  }, [baseOrder, unitById]);
+
+  const teamUnits = useMemo(
+    () => sideOrder.teamIds.map((id) => unitById.get(id)).filter(Boolean) as Unit[],
+    [sideOrder.teamIds, unitById]
+  );
+  const enemyUnits = useMemo(
+    () =>
+      sideOrder.enemyIds
+        .map((id) => unitById.get(id))
+        .filter(Boolean) as Unit[],
+    [sideOrder.enemyIds, unitById]
+  );
+  const neutralUnits = useMemo(
+    () =>
+      sideOrder.neutralIds
+        .map((id) => unitById.get(id))
+        .filter(Boolean) as Unit[],
+    [sideOrder.neutralIds, unitById]
+  );
 
   async function handleRemove(u: Unit) {
     const ok = window.confirm(`Remove unit: ${u.name}?`);
     if (!ok) return;
     await onRemoveUnit(u.id);
+  }
+
+  function handleDragStart(unitId: string, e: DragEvent<HTMLDivElement>) {
+    if (busy || isMarkerMode) return;
+    setDragUnitId(unitId);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", unitId);
+  }
+
+  function handleDragOver(unitId: string, e: DragEvent<HTMLDivElement>) {
+    if (busy || isMarkerMode) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (overUnitId !== unitId) setOverUnitId(unitId);
+    autoScrollDuringDrag(e);
+    e.dataTransfer.dropEffect = "move";
+  }
+
+  function handleSideDragOver(e: DragEvent<HTMLDivElement>) {
+    if (busy || isMarkerMode) return;
+    e.preventDefault();
+    if (overUnitId) setOverUnitId(null);
+    autoScrollDuringDrag(e);
+    e.dataTransfer.dropEffect = "move";
+  }
+
+  function autoScrollDuringDrag(e: DragEvent<HTMLElement>) {
+    if (!dragUnitId) return;
+
+    const edge = 48;
+    const speed = 12;
+    const container = unitListRef.current;
+
+    if (container && container.scrollHeight > container.clientHeight + 1) {
+      const rect = container.getBoundingClientRect();
+      const topGap = e.clientY - rect.top;
+      const bottomGap = rect.bottom - e.clientY;
+      if (topGap < edge) container.scrollTop -= speed;
+      else if (bottomGap < edge) container.scrollTop += speed;
+      return;
+    }
+
+    if (e.clientY < edge) window.scrollBy({ top: -speed, behavior: "auto" });
+    else if (window.innerHeight - e.clientY < edge)
+      window.scrollBy({ top: speed, behavior: "auto" });
+  }
+
+  function commitOrder(
+    nextTeam: string[],
+    nextEnemy: string[],
+    nextNeutral: string[],
+    nextBenchTeam: string[],
+    nextBenchEnemy: string[],
+    sideChanges?: { unitId: string; side: Side }[],
+    benchChanges?: { unitId: string; bench: "TEAM" | "ENEMY" | null }[]
+  ) {
+    const nextOrder = [
+      ...nextTeam,
+      ...nextEnemy,
+      ...nextNeutral,
+      ...nextBenchTeam,
+      ...nextBenchEnemy,
+    ];
+    if (nextOrder.length === 0) return;
+    setUnitOrder(nextOrder);
+    setReorderPending(true);
+    Promise.resolve(
+      onReorderUnits({ unitIds: nextOrder, sideChanges, benchChanges })
+    ).finally(() => setReorderPending(false));
+  }
+
+  function handleDropToSide(
+    targetSide: Side,
+    targetUnitId: string | null,
+    e: DragEvent<HTMLDivElement>
+  ) {
+    if (busy || isMarkerMode) return;
+    e.preventDefault();
+    const fromId = dragUnitId ?? e.dataTransfer.getData("text/plain");
+    if (!fromId) {
+      setDragUnitId(null);
+      setOverUnitId(null);
+      return;
+    }
+
+    const dragUnit = unitById.get(fromId);
+    if (!dragUnit) {
+      setDragUnitId(null);
+      setOverUnitId(null);
+      return;
+    }
+
+    const nextTeam = [...sideOrder.teamIds];
+    const nextEnemy = [...sideOrder.enemyIds];
+    const nextNeutral = [...sideOrder.neutralIds];
+    const nextBenchTeam = [...sideOrder.benchTeamIds];
+    const nextBenchEnemy = [...sideOrder.benchEnemyIds];
+    const sourceBench = dragUnit.bench ?? null;
+
+    const pickActiveList = (side: Side) => {
+      if (side === "TEAM") return nextTeam;
+      if (side === "ENEMY") return nextEnemy;
+      return nextNeutral;
+    };
+    const pickBenchList = (bench: "TEAM" | "ENEMY") => {
+      if (bench === "TEAM") return nextBenchTeam;
+      return nextBenchEnemy;
+    };
+
+    const targetList = pickActiveList(targetSide);
+    let sideChanges: { unitId: string; side: Side }[] | undefined = undefined;
+    let benchChanges:
+      | { unitId: string; bench: "TEAM" | "ENEMY" | null }[]
+      | undefined = undefined;
+
+    if (sourceBench) {
+      const sourceList = pickBenchList(sourceBench);
+      const fromIdx = sourceList.indexOf(fromId);
+      if (fromIdx < 0) {
+        setDragUnitId(null);
+        setOverUnitId(null);
+        return;
+      }
+
+      const toIdx = targetUnitId
+        ? targetList.indexOf(targetUnitId)
+        : targetList.length;
+      if (toIdx < 0) {
+        setDragUnitId(null);
+        setOverUnitId(null);
+        return;
+      }
+      sourceList.splice(fromIdx, 1);
+      targetList.splice(toIdx, 0, fromId);
+      benchChanges = [{ unitId: fromId, bench: null }];
+      if (dragUnit.side !== targetSide) {
+        sideChanges = [{ unitId: fromId, side: targetSide }];
+      }
+      commitOrder(
+        nextTeam,
+        nextEnemy,
+        nextNeutral,
+        nextBenchTeam,
+        nextBenchEnemy,
+        sideChanges,
+        benchChanges
+      );
+    } else {
+      const sourceSide = dragUnit.side;
+      const sourceList = pickActiveList(sourceSide);
+      const fromIdx = sourceList.indexOf(fromId);
+      if (fromIdx < 0) {
+        setDragUnitId(null);
+        setOverUnitId(null);
+        return;
+      }
+
+      const isSameSide = sourceSide === targetSide;
+      if (isSameSide) {
+        const toIdx = targetUnitId
+          ? targetList.indexOf(targetUnitId)
+          : targetList.length;
+        if (toIdx < 0) {
+          setDragUnitId(null);
+          setOverUnitId(null);
+          return;
+        }
+        const nextList = moveItem(targetList, fromIdx, toIdx);
+        if (targetSide === "TEAM") {
+          commitOrder(
+            nextList,
+            nextEnemy,
+            nextNeutral,
+            nextBenchTeam,
+            nextBenchEnemy
+          );
+        } else if (targetSide === "ENEMY") {
+          commitOrder(
+            nextTeam,
+            nextList,
+            nextNeutral,
+            nextBenchTeam,
+            nextBenchEnemy
+          );
+        } else {
+          commitOrder(
+            nextTeam,
+            nextEnemy,
+            nextList,
+            nextBenchTeam,
+            nextBenchEnemy
+          );
+        }
+      } else {
+        sourceList.splice(fromIdx, 1);
+        const insertAt = targetUnitId
+          ? targetList.indexOf(targetUnitId)
+          : targetList.length;
+        if (insertAt < 0) {
+          setDragUnitId(null);
+          setOverUnitId(null);
+          return;
+        }
+        targetList.splice(insertAt, 0, fromId);
+        sideChanges = [{ unitId: fromId, side: targetSide }];
+        commitOrder(
+          nextTeam,
+          nextEnemy,
+          nextNeutral,
+          nextBenchTeam,
+          nextBenchEnemy,
+          sideChanges
+        );
+      }
+    }
+
+    setDragUnitId(null);
+    setOverUnitId(null);
+  }
+
+  function handleDropOnUnit(unitId: string, e: DragEvent<HTMLDivElement>) {
+    e.stopPropagation();
+    const targetUnit = unitById.get(unitId);
+    if (!targetUnit) return;
+    handleDropToSide(targetUnit.side, unitId, e);
+  }
+
+  function handleDropOnSide(side: Side, e: DragEvent<HTMLDivElement>) {
+    handleDropToSide(side, null, e);
+  }
+
+  function handleDragEnd() {
+    setDragUnitId(null);
+    setOverUnitId(null);
+  }
+
+  function renderUnitCard(u: Unit) {
+    const isPrimary = u.id === selectedId;
+    const isMulti = selectedIds.includes(u.id);
+    const multiIdx = selectedIds.indexOf(u.id);
+    const isMultiMode = selectedIds.length > 1;
+    const isDragging = dragUnitId === u.id;
+    const isOver = overUnitId === u.id && dragUnitId !== u.id;
+
+    return (
+      <div
+        key={u.id}
+        onDragOver={(e) => handleDragOver(u.id, e)}
+        onDrop={(e) => handleDropOnUnit(u.id, e)}
+        className={[
+          "relative rounded-xl",
+          isMultiMode && isMulti
+            ? "ring-2 ring-sky-400/60 shadow-[0_0_0_1px_rgba(56,189,248,0.20)]"
+            : "",
+          isOver ? "ring-2 ring-amber-400/60" : "",
+          isDragging ? "opacity-70" : "",
+        ].join(" ")}
+      >
+        {isMultiMode && isMulti && (
+          <div
+            className={[
+              "pointer-events-none absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-md border border-sky-600/60 bg-sky-950/70 font-semibold text-sky-200",
+              compactMode ? "px-1.5 py-0.5 text-[9px]" : "px-2 py-1 text-[10px]",
+            ].join(" ")}
+          >
+            <span>#{multiIdx >= 0 ? multiIdx + 1 : ""}</span>
+            {isPrimary && <span className="text-sky-100/90">primary</span>}
+          </div>
+        )}
+
+        <UnitCard
+          unit={u}
+          isSelected={isPrimary}
+          busy={busy}
+          variant="list"
+          density={compactMode ? "compact" : "normal"}
+          draggable={!busy && !isMarkerMode}
+          onDragStart={(e) => handleDragStart(u.id, e)}
+          onDragEnd={handleDragEnd}
+          onSelect={(e) =>
+            onSelectUnit(u.id, {
+              additive: e.shiftKey || e.ctrlKey || e.metaKey,
+            })
+          }
+          onEdit={() => onEditUnit(u.id)}
+          onRemove={() => handleRemove(u)}
+          onToggleHidden={() => onToggleHidden(u.id)}
+          hideSide={compactMode || (isMultiMode && isMulti)}
+          hideActions={compactMode || isMultiMode}
+        />
+      </div>
+    );
   }
 
   return (
@@ -488,6 +853,19 @@ export default function UnitsPanel(props: {
           ].join(" ")}
         >
           마커 관리
+        </button>
+        <button
+          type="button"
+          onClick={() => setCompactMode((prev) => !prev)}
+          className={[
+            "rounded-md border px-2 py-1 font-semibold",
+            compactMode
+              ? "border-amber-700/70 bg-amber-950/30 text-amber-100"
+              : "border-zinc-800 bg-zinc-950/30 text-zinc-400 hover:text-zinc-200",
+          ].join(" ")}
+          title="간략화 모드: 드래그/정보 확인을 쉽게"
+        >
+          간략화
         </button>
       </div>
 
@@ -683,74 +1061,114 @@ export default function UnitsPanel(props: {
 
       {/* Unit list */}
       <div
-        className={[
-          "space-y-2",
-          isMarkerMode ? "hidden" : "",
-        ].join(" ")}
+        ref={unitListRef}
+        className={[unitListSpacing, isMarkerMode ? "hidden" : ""].join(" ")}
       >
         {/* ✅ 선택된 유닛이 있으면, 맨 위에 '복제(pinned)' 카드 추가 */}
-        {pinnedUnit && (
+        {showPinned && pinnedUnit && (
           <UnitCard
             key={`pinned-${pinnedUnit.id}`}
             unit={pinnedUnit}
             isSelected={true}
             busy={busy}
             variant="pinned"
+            density={compactMode ? "compact" : "normal"}
             onSelect={() => onSelectUnit(pinnedUnit.id, { additive: false })}
-            onEdit={() => setEditUnitId(pinnedUnit.id)}
+            onEdit={() => onEditUnit(pinnedUnit.id)}
             onRemove={() => handleRemove(pinnedUnit)}
             onToggleHidden={() => onToggleHidden(pinnedUnit.id)}
-            hideActions={selectedIds.length > 1}
+            hideActions={compactMode || selectedIds.length > 1}
           />
         )}
 
         {/* ✅ 원래 목록은 그대로 유지 (원래 자리에 남겨두기) */}
-        {units.map((u) => {
-          const isPrimary = u.id === selectedId;
-          const isMulti = selectedIds.includes(u.id);
-          const multiIdx = selectedIds.indexOf(u.id); // 선택 순서 표시용(0-based)
-          const isMultiMode = selectedIds.length > 1;
-
-          return (
+        <div className="space-y-3">
+          <div
+            className={[
+              "rounded-xl border border-zinc-800/70 bg-zinc-950/30",
+              compactMode ? "p-1.5" : "p-2",
+            ].join(" ")}
+          >
             <div
-              key={u.id}
               className={[
-                "relative rounded-xl",
-                // multi 모드면 primary/secondary 모두 같은 링으로 강조
-                isMultiMode && isMulti
-                  ? "ring-2 ring-sky-400/60 shadow-[0_0_0_1px_rgba(56,189,248,0.20)]"
-                  : "",
+                "flex items-center justify-between font-semibold",
+                compactMode ? "mb-1 text-[10px]" : "mb-2 text-[11px]",
               ].join(" ")}
             >
-              {/* ✅ secondary 선택 배지(클릭 방해 X) */}
-              {isMultiMode && isMulti && (
-                <div className="pointer-events-none absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-md border border-sky-600/60 bg-sky-950/70 px-2 py-1 text-[10px] font-semibold text-sky-200">
-                  <span>✓{multiIdx >= 0 ? multiIdx + 1 : ""}</span>
-                  {isPrimary && (
-                    <span className="text-sky-100/90">primary</span>
-                  )}
-                </div>
-              )}
-
-              <UnitCard
-                unit={u}
-                isSelected={isPrimary} // 기존 규칙 유지
-                busy={busy}
-                variant="list"
-                onSelect={(e) =>
-                  onSelectUnit(u.id, {
-                    additive: e.shiftKey || e.ctrlKey || e.metaKey,
-                  })
-                }
-                onEdit={() => setEditUnitId(u.id)}
-                onRemove={() => handleRemove(u)}
-                onToggleHidden={() => onToggleHidden(u.id)}
-                hideSide={isMultiMode && isMulti}
-                hideActions={isMultiMode}
-              />
+              <span className="text-sky-300">TEAM</span>
+              <span className="text-sky-300/80">{teamUnits.length}</span>
             </div>
-          );
-        })}
+            <div
+              className="space-y-2"
+              onDragOver={handleSideDragOver}
+              onDrop={(e) => handleDropOnSide("TEAM", e)}
+            >
+              {teamUnits.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-zinc-800/60 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-500">
+                  No TEAM units.
+                </div>
+              ) : (
+                teamUnits.map((u) => renderUnitCard(u))
+              )}
+            </div>
+          </div>
+
+          <div
+            className={[
+              "rounded-xl border border-zinc-800/70 bg-zinc-950/30",
+              compactMode ? "p-1.5" : "p-2",
+            ].join(" ")}
+          >
+            <div
+              className={[
+                "flex items-center justify-between font-semibold",
+                compactMode ? "mb-1 text-[10px]" : "mb-2 text-[11px]",
+              ].join(" ")}
+            >
+              <span className="text-red-300">ENEMY</span>
+              <span className="text-red-300/80">{enemyUnits.length}</span>
+            </div>
+            <div
+              className="space-y-2"
+              onDragOver={handleSideDragOver}
+              onDrop={(e) => handleDropOnSide("ENEMY", e)}
+            >
+              {enemyUnits.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-zinc-800/60 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-500">
+                  No ENEMY units.
+                </div>
+              ) : (
+                enemyUnits.map((u) => renderUnitCard(u))
+              )}
+            </div>
+          </div>
+
+          {neutralUnits.length > 0 && (
+            <div
+              className={[
+                "rounded-xl border border-zinc-800/70 bg-zinc-950/30",
+                compactMode ? "p-1.5" : "p-2",
+              ].join(" ")}
+            >
+              <div
+                className={[
+                  "flex items-center justify-between font-semibold text-zinc-400",
+                  compactMode ? "mb-1 text-[10px]" : "mb-2 text-[11px]",
+                ].join(" ")}
+              >
+                <span>NEUTRAL</span>
+                <span className="text-zinc-500">{neutralUnits.length}</span>
+              </div>
+              <div
+                className="space-y-2"
+                onDragOver={handleSideDragOver}
+                onDrop={(e) => handleDropOnSide("NEUTRAL", e)}
+              >
+                {neutralUnits.map((u) => renderUnitCard(u))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {isMarkerMode && (
@@ -774,21 +1192,7 @@ export default function UnitsPanel(props: {
         </div>
       )}
 
-      <EditUnitModal
-        open={!!editUnit}
-        unit={editUnit}
-        busy={busy}
-        onClose={() => setEditUnitId(null)}
-        onSubmitPatch={async (unitId, patch) => {
-          await props.onPatchUnit(unitId, patch);
-        }}
-        onSubmitDeathSaves={async (unitId, success, failure) => {
-          await onEditDeathSaves(unitId, success, failure);
-        }}
-        onSubmitPos={async (unitId, x, z) => {
-          await props.onSetUnitPos(unitId, x, z);
-        }}
-      />
     </section>
   );
 }
+

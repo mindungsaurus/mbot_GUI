@@ -62,6 +62,7 @@ export default function EditUnitModal(props: {
     failure: number
   ) => Promise<void> | void;
   onSubmitPos: (unitId: string, x: number, z: number) => Promise<void> | void;
+  onRemoveUnit: (unitId: string) => Promise<void> | void;
 }) {
   const {
     open,
@@ -71,6 +72,7 @@ export default function EditUnitModal(props: {
     onSubmitPatch,
     onSubmitDeathSaves,
     onSubmitPos,
+    onRemoveUnit,
   } = props;
 
   const [err, setErr] = useState<string | null>(null);
@@ -580,6 +582,14 @@ export default function EditUnitModal(props: {
       await onSubmitDeathSaves(u.id, nextDeathSuccess, nextDeathFailure);
     }
 
+    onClose();
+  }
+
+  async function handleRemove() {
+    if (busy) return;
+    const ok = window.confirm("Delete this unit?");
+    if (!ok) return;
+    await onRemoveUnit(u.id);
     onClose();
   }
 
@@ -1285,23 +1295,33 @@ export default function EditUnitModal(props: {
           </div>
         )}
 
-        <div className="mt-4 flex justify-end gap-2">
+        <div className="mt-4 flex items-center justify-between gap-2">
           <button
             type="button"
             disabled={busy}
-            onClick={onClose}
-            className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm text-zinc-100 hover:bg-zinc-800/60 disabled:opacity-50"
+            onClick={handleRemove}
+            className="rounded-lg border border-rose-900/60 bg-rose-950/40 px-3 py-2 text-sm text-rose-200 hover:bg-rose-900/40 disabled:opacity-50"
           >
-            Cancel
+            Delete
           </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={submit}
-            className="rounded-lg bg-emerald-700 px-3 py-2 text-sm text-white hover:bg-emerald-600 disabled:opacity-50"
-          >
-            Save
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onClose}
+              className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm text-zinc-100 hover:bg-zinc-800/60 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={submit}
+              className="rounded-lg bg-emerald-700 px-3 py-2 text-sm text-white hover:bg-emerald-600 disabled:opacity-50"
+            >
+              Save
+            </button>
+          </div>
         </div>
       </div>
     </div>

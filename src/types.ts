@@ -9,6 +9,7 @@ export interface HpPatch {
 
 export interface UnitPatch {
   name?: string;
+  side?: Side;
   ac?: NumPatch | null;
   integrity?: NumPatch | null;
   hp?: HpPatch | null;
@@ -22,6 +23,7 @@ export interface UnitPatch {
   colorCode?: number | null;
   hidden?: boolean | null;
   turnDisabled?: boolean | null;
+  bench?: "TEAM" | "ENEMY" | null;
 }
 
 export type TurnEntry =
@@ -44,6 +46,7 @@ export type Unit = {
   colorCode?: number;
   hidden?: boolean;
   turnDisabled?: boolean;
+  bench?: "TEAM" | "ENEMY";
 
   pos?: Pos;
   hp?: { cur: number; max: number; temp?: number };

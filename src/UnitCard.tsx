@@ -185,6 +185,10 @@ export default function UnitCard(props: {
   variant?: "list" | "pinned";
   hideSide?: boolean;
   hideActions?: boolean;
+  density?: "normal" | "compact";
+  draggable?: boolean;
+  onDragStart?: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragEnd?: (e: React.DragEvent<HTMLDivElement>) => void;
 
   onSelect: (e: MouseEvent) => void;
   onEdit: () => void;
@@ -202,6 +206,9 @@ export default function UnitCard(props: {
     onToggleHidden,
   } = props;
 
+  const density = props.density ?? "normal";
+  const isCompact = density === "compact";
+
   const hpMain = u.hp ? `${u.hp.cur}/${u.hp.max}` : "";
   const hpTemp = u.hp?.temp ? `+${u.hp.temp}` : "";
   const slotSummary = formatSpellSlotsSummary(u);
@@ -215,14 +222,17 @@ export default function UnitCard(props: {
   const c = unitTextColor(u);
 
   const hideActions = props.hideActions ?? false;
+  const effectiveHideActions = hideActions || isCompact;
 
   // pinned는 항상 액션 버튼 보이게 (끌려온 느낌 + UX)
-  const showActions = !hideActions && (variant === "pinned" || isSelected);
+  const showActions = !effectiveHideActions && (variant === "pinned" || isSelected);
 
-  const baseCls = [
-    "group relative w-full rounded-xl border px-3 py-3.5 text-left cursor-pointer select-none",
-    props.hideSide ? "pr-24" : "pr-14",
-  ].join(" ");
+  const baseCls = isCompact
+    ? "group relative w-full rounded-lg border px-2 py-1.5 text-left cursor-pointer select-none"
+    : [
+        "group relative w-full rounded-xl border px-3 py-3.5 text-left cursor-pointer select-none",
+        props.hideSide ? "pr-24" : "pr-14",
+      ].join(" ");
   const selCls = isSelected
     ? "border-zinc-500 bg-zinc-800"
     : "border-zinc-800 bg-zinc-900 hover:bg-zinc-800/60";
@@ -236,8 +246,107 @@ export default function UnitCard(props: {
       ? "border-emerald-500/60 bg-emerald-950/20 ring-1 ring-emerald-400/20 border-dashed"
       : "";
 
+  if (isCompact) {
+    return (
+      <div
+        draggable={props.draggable}
+        onDragStart={props.onDragStart}
+        onDragEnd={props.onDragEnd}
+        className={[baseCls, selCls, pinnedCls, busyCls, disabledBgCls].join(" ")}
+        onClick={(e) => {
+          if (busy) return;
+          onSelect(e);
+        }}
+        onDoubleClick={(e) => {
+          if (busy) return;
+          e.stopPropagation();
+          onEdit();
+        }}
+        title={variant === "pinned" ? "Pinned unit" : "Click to select"}
+      >
+        {/* Compact view for fast scan / drag & drop */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+          <span className="font-medium" style={c ? { color: c } : undefined}>
+            {u.name}
+            {u.alias ? <span className="ml-1 opacity-80">({u.alias})</span> : null}
+          </span>
+
+          {u.hp ? (
+            <span className="text-red-400">
+              HP <span className="font-semibold">{hpMain}</span>
+              {hpTemp ? (
+                <span className="font-semibold text-green-400">{hpTemp}</span>
+              ) : null}
+            </span>
+          ) : (
+            <span className="text-red-400">HP -</span>
+          )}
+
+          {typeof u.acBase === "number" ? (
+            <span className="text-yellow-300">
+              AC <span className="font-semibold">{u.acBase}</span>
+            </span>
+          ) : (
+            <span className="text-yellow-300">AC -</span>
+          )}
+
+          {(deathSuccess > 0 || deathFailure > 0) && (
+            <span className="text-zinc-400">
+              (
+              <span className="font-semibold text-green-400">{deathSuccess}</span>,{" "}
+              <span className="font-semibold text-red-400">{deathFailure}</span>
+              )
+            </span>
+          )}
+
+          {consumableSummary ? (
+            <span className="text-zinc-400">
+              {renderConsumableSummary(consumableSummary)}
+            </span>
+          ) : null}
+
+          {slotSummary ? (
+            <span className="text-zinc-400">{renderSlotSummary(slotSummary)}</span>
+          ) : null}
+
+          <span className="flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-500">
+            {tagsList.length === 0 && !hasHidden ? null : (
+              <>
+                {hasHidden && (
+                  <span
+                    className={[
+                      "rounded-md border border-red-500/40 bg-red-950/40 font-semibold text-red-300",
+                      isCompact ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-[11px]",
+                    ].join(" ")}
+                  >
+                    {"\uc228\uaca8\uc9d0"}
+                  </span>
+                )}
+                {tagsList.map((tag) => (
+                  <span
+                    key={tag}
+                    className={[
+                      "rounded-md border border-violet-500/30 bg-violet-950/30 font-semibold text-violet-300",
+                      isCompact ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-[11px]",
+                    ].join(" ")}
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </>
+            )}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+
   return (
     <div
+      draggable={props.draggable}
+      onDragStart={props.onDragStart}
+      onDragEnd={props.onDragEnd}
       className={[baseCls, selCls, pinnedCls, busyCls, disabledBgCls].join(" ")}
       onClick={(e) => {
         if (busy) return;
@@ -264,7 +373,7 @@ export default function UnitCard(props: {
       )}
 
       {/* 오른쪽 하단: 액션 버튼 */}
-      {!hideActions && (
+      {!effectiveHideActions && (
         <div className="absolute right-3 bottom-2 flex flex-col items-end gap-1">
           <div className="flex items-center gap-1">
             <button

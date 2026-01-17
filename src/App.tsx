@@ -19,13 +19,16 @@ import type {
   EncounterSummary,
   Marker,
   Pos,
+  Side,
   TurnEntry,
   Unit,
   UnitPatch,
 } from "./types";
 import Board from "./Board";
 import ControlPanel, { type ControlActionMode } from "./ControlPanel";
+import EditUnitModal from "./EditUnitModal";
 import UnitsPanel from "./UnitsPanel";
+import BenchPanel from "./BenchPanel";
 import TurnOrderBar from "./TurnOrderBar";
 import TurnOrderReorderModal from "./TurnOrderReorderModal";
 
@@ -211,7 +214,10 @@ export default function App() {
   const [err, setErr] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [reorderOpen, setReorderOpen] = useState(false);
+  const [editUnitId, setEditUnitId] = useState<string | null>(null);
   const [debugOpen, setDebugOpen] = useState(true);
+  const [hideBenchTeamOnPublish, setHideBenchTeamOnPublish] = useState(false);
+  const [hideBenchEnemyOnPublish, setHideBenchEnemyOnPublish] = useState(false);
   const channelInputRef = useRef<HTMLInputElement | null>(null);
 
   // 채널 입력/최근 채널
@@ -269,6 +275,14 @@ export default function App() {
   } | null>(null);
 
   const units: Unit[] = useMemo(() => state?.units ?? [], [state]);
+  const activeUnits: Unit[] = useMemo(
+    () => units.filter((u) => !u.bench),
+    [units]
+  );
+  const editUnit = useMemo(
+    () => (editUnitId ? units.find((u) => u.id === editUnitId) ?? null : null),
+    [editUnitId, units]
+  );
   const markers: Marker[] = useMemo(() => state?.markers ?? [], [state]);
   const logEntries = useMemo(() => {
     const logs = state?.logs ?? [];
@@ -813,7 +827,10 @@ export default function App() {
         return;
       }
       setBusy(true);
-      await publish(encounterId, channelId);
+      await publish(encounterId, channelId, {
+        hideBenchTeam: hideBenchTeamOnPublish,
+        hideBenchEnemy: hideBenchEnemyOnPublish,
+      });
       pushRecent(channelId);
     } catch (e: any) {
       setErr(String(e?.message ?? e));
@@ -1170,13 +1187,13 @@ export default function App() {
 
   // ✅ 동적 view 범위 계산
   const view = useMemo(() => {
-    return computeAutoView(units, markers, {
+    return computeAutoView(activeUnits, markers, {
       padX: 2,
       padZ: 1,
       minCols: 9,
       minRows: 3,
     });
-  }, [units, markers]);
+  }, [activeUnits, markers]);
 
   // ---------- Unit helpers ----------
   async function createUnit(payload: CreateUnitPayload) {
@@ -1197,6 +1214,48 @@ export default function App() {
     failure: number
   ) {
     await run({ type: "EDIT_DEATH_SAVES", unitId, success, failure });
+  }
+
+  async function reorderUnits(payload: {
+    unitIds: string[];
+    sideChanges?: { unitId: string; side: Side }[];
+    benchChanges?: { unitId: string; bench: "TEAM" | "ENEMY" | null }[];
+  }) {
+    const ids = Array.isArray(payload.unitIds)
+      ? payload.unitIds.filter((id) => typeof id === "string")
+      : [];
+    const sideChanges = Array.isArray(payload.sideChanges)
+      ? payload.sideChanges.filter((c) => c && typeof c.unitId === "string")
+      : [];
+    const benchChanges = Array.isArray(payload.benchChanges)
+      ? payload.benchChanges.filter((c) => c && typeof c.unitId === "string")
+      : [];
+    if (
+      ids.length === 0 &&
+      sideChanges.length === 0 &&
+      benchChanges.length === 0
+    )
+      return;
+
+    const actions: any[] = [];
+    for (const change of benchChanges) {
+      actions.push({
+        type: "SET_UNIT_BENCH",
+        unitId: change.unitId,
+        bench: change.bench,
+      });
+    }
+    for (const change of sideChanges) {
+      actions.push({
+        type: "PATCH_UNIT",
+        unitId: change.unitId,
+        patch: { side: change.side },
+      });
+    }
+    if (ids.length > 0) {
+      actions.push({ type: "SET_UNIT_LIST_ORDER", unitIds: ids });
+    }
+    await run(actions);
   }
 
   async function setUnitPos(unitId: string, x: number, z: number) {
@@ -1647,7 +1706,7 @@ export default function App() {
           </div>
 
           <Board
-            units={units}
+            units={activeUnits}
             markers={markers}
             view={view}
             selectedId={selectedId}
@@ -2108,7 +2167,7 @@ export default function App() {
 
         <TurnOrderReorderModal
           open={reorderOpen}
-          units={units}
+          units={activeUnits}
           turnOrder={(state as any)?.turnOrder ?? []}
           busy={busy}
           onClose={() => setReorderOpen(false)}
@@ -2118,6 +2177,25 @@ export default function App() {
               disabledChanges
             );
             if (ok) setReorderOpen(false);
+          }}
+        />
+
+        <EditUnitModal
+          open={!!editUnit}
+          unit={editUnit}
+          busy={busy}
+          onClose={() => setEditUnitId(null)}
+          onSubmitPatch={async (unitId, patch) => {
+            await patchUnit(unitId, patch);
+          }}
+          onSubmitDeathSaves={async (unitId, success, failure) => {
+            await editDeathSaves(unitId, success, failure);
+          }}
+          onSubmitPos={async (unitId, x, z) => {
+            await setUnitPos(unitId, x, z);
+          }}
+          onRemoveUnit={async (unitId) => {
+            await removeUnit(unitId);
           }}
         />
 
@@ -2133,81 +2211,98 @@ export default function App() {
             turnOrderLen={state?.turnOrder?.length ?? units.length}
             turnOrder={(state as any)?.turnOrder ?? []}
             onSelectUnit={selectUnit}
+            onEditUnit={(unitId) => setEditUnitId(unitId)}
             onCreateUnit={createUnit}
             onRemoveUnit={removeUnit}
-            onPatchUnit={patchUnit}
-            onEditDeathSaves={editDeathSaves}
-            onSetUnitPos={setUnitPos}
             onToggleHidden={toggleHidden}
+            onReorderUnits={reorderUnits}
             onToggleMarkerCreate={toggleMarkerCreate}
             onUpsertMarker={upsertMarkerFromPanel}
             onRemoveMarker={removeMarkerFromPanel}
           />
 
-          {/* Controls (Marker + Debug only) */}
-          <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-3">
-            <div className="mb-2 flex items-center justify-between">
-              <div className="text-sm font-semibold text-zinc-200"></div>
-              <div className="text-xs text-zinc-500">
-                {selected ? `selected: ${selected.name}` : "no unit selected"}
-                {selected?.pos
-                  ? ` (x=${selected.pos.x}, z=${selected.pos.z})`
-                  : ""}
-              </div>
-            </div>
+          {/* Bench + Logs */}
+          <div className="space-y-4">
+            <BenchPanel
+              units={units}
+              selectedId={selectedId}
+              selectedIds={selectedIds}
+              busy={busy}
+              hideBenchTeamOnPublish={hideBenchTeamOnPublish}
+              hideBenchEnemyOnPublish={hideBenchEnemyOnPublish}
+              onToggleHideBenchTeam={() =>
+                setHideBenchTeamOnPublish((prev) => !prev)
+              }
+              onToggleHideBenchEnemy={() =>
+                setHideBenchEnemyOnPublish((prev) => !prev)
+              }
+              onSelectUnit={selectUnit}
+              onEditUnit={(unitId) => setEditUnitId(unitId)}
+              onToggleHidden={toggleHidden}
+              onRemoveUnit={removeUnit}
+              onReorderUnits={reorderUnits}
+            />
 
-            <div className="mt-4">
+            <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-3">
               <div className="mb-2 flex items-center justify-between">
-                <div className="text-sm font-semibold text-zinc-200">Logs</div>
+                <div className="text-sm font-semibold text-zinc-200"></div>
                 <div className="text-xs text-zinc-500">
-                  {logEntries.length ? `${logEntries.length} entries` : "empty"}
+                  {selected ? `selected: ${selected.name}` : "no unit selected"}
+                  {selected?.pos ? ` (x=${selected.pos.x}, z=${selected.pos.z})` : ""}
                 </div>
               </div>
-              <div className="max-h-80 w-full overflow-auto rounded-xl border border-zinc-800 bg-zinc-950">
-                {logEntries.length === 0 ? (
-                  <div className="p-3 text-xs text-zinc-500">로그 없음</div>
+
+              <div className="mt-4">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-sm font-semibold text-zinc-200">Logs</div>
+                  <div className="text-xs text-zinc-500">
+                    {logEntries.length ? `${logEntries.length} entries` : "empty"}
+                  </div>
+                </div>
+                <div className="max-h-80 w-full overflow-auto rounded-xl border border-zinc-800 bg-zinc-950">
+                  {logEntries.length === 0 ? (
+                    <div className="p-3 text-xs text-zinc-500">{"\ub85c\uadf8 \uc5c6\uc74c"}</div>
+                  ) : (
+                    <div className="divide-y divide-zinc-900/70">
+                      {logEntries.map((entry, idx) => (
+                        <div
+                          key={entry?.id ?? entry?.at ?? `log-${idx}`}
+                          className="px-3 py-2 text-xs text-zinc-200"
+                        >
+                          {renderLogLine(entry?.line ?? String(entry))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-sm font-semibold text-zinc-200">State (debug)</div>
+                  <button
+                    type="button"
+                    className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:border-zinc-500 hover:text-zinc-100"
+                    onClick={() => setDebugOpen((prev) => !prev)}
+                    aria-expanded={debugOpen}
+                  >
+                    {debugOpen ? "\uc811\uae30" : "\ud3bc\uce58\uae30"}
+                  </button>
+                </div>
+                {debugOpen ? (
+                  <textarea
+                    className="h-80 w-full rounded-xl border border-zinc-800 bg-zinc-950 p-3 text-xs text-zinc-200 outline-none"
+                    readOnly
+                    value={state ? JSON.stringify(state, null, 2) : ""}
+                  />
                 ) : (
-                  <div className="divide-y divide-zinc-900/70">
-                    {logEntries.map((entry, idx) => (
-                      <div
-                        key={entry?.id ?? entry?.at ?? `log-${idx}`}
-                        className="px-3 py-2 text-xs text-zinc-200"
-                      >
-                        {renderLogLine(entry?.line ?? String(entry))}
-                      </div>
-                    ))}
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-3 text-xs text-zinc-500">
+                    {"State \uc228\uae40"}
                   </div>
                 )}
               </div>
-            </div>
-
-            <div className="mt-4">
-              <div className="mb-2 flex items-center justify-between">
-                <div className="text-sm font-semibold text-zinc-200">
-                  State (debug)
-                </div>
-                <button
-                  type="button"
-                  className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:border-zinc-500 hover:text-zinc-100"
-                  onClick={() => setDebugOpen((prev) => !prev)}
-                  aria-expanded={debugOpen}
-                >
-                  {debugOpen ? "접기" : "펼치기"}
-                </button>
-              </div>
-              {debugOpen ? (
-                <textarea
-                  className="h-80 w-full rounded-xl border border-zinc-800 bg-zinc-950 p-3 text-xs text-zinc-200 outline-none"
-                  readOnly
-                  value={state ? JSON.stringify(state, null, 2) : ""}
-                />
-              ) : (
-                <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-3 text-xs text-zinc-500">
-                  State 보기 접힘
-                </div>
-              )}
-            </div>
-          </section>
+            </section>
+          </div>
         </div>
 
         {/* ✅ Floating Control Panel (moved out of the Controls card) */}

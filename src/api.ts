@@ -119,11 +119,20 @@ export const removeMarker = (encounterId: string, markerId: string) =>
   postAction(encounterId, { type: "REMOVE_MARKER", markerId });
 
 // channelId를 body로 보내도록 변경
-export async function publish(encounterId: string, channelId: string) {
+export async function publish(
+  encounterId: string,
+  channelId: string,
+  opts?: { hideBench?: boolean; hideBenchTeam?: boolean; hideBenchEnemy?: boolean }
+) {
   const res = await fetch(`${API_BASE}/encounters/${encounterId}/publish`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...getAuthHeaders() },
-    body: JSON.stringify({ channelId }),
+    body: JSON.stringify({
+      channelId,
+      hideBench: !!opts?.hideBench,
+      hideBenchTeam: !!opts?.hideBenchTeam,
+      hideBenchEnemy: !!opts?.hideBenchEnemy,
+    }),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

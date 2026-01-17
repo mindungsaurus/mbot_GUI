@@ -8,9 +8,12 @@ import type { Unit } from "./types";
  * - 39는 "default"로 취급해서 undefined 반환(기존 색 유지)
  */
 export function getUnitAnsiColorCode(
-  u: Pick<Unit, "colorCode" | "side">
+  u: Pick<Unit, "colorCode" | "side" | "bench">
 ): number | undefined {
   if (typeof u.colorCode === "number") return u.colorCode;
+
+  if (u.bench === "TEAM") return 34;
+  if (u.bench === "ENEMY") return 31;
 
   if (u.side === "TEAM") return 34;
   if (u.side === "ENEMY") return 31;
@@ -51,7 +54,7 @@ export function ansiColorCodeToCss(code?: number): string | undefined {
 }
 
 export function unitTextColor(
-  u: Pick<Unit, "colorCode" | "side">
+  u: Pick<Unit, "colorCode" | "side" | "bench">
 ): string | undefined {
   const code = getUnitAnsiColorCode(u);
   return ansiColorCodeToCss(code);
