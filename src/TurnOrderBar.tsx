@@ -1,6 +1,6 @@
 // src/TurnOrderBar.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Marker, Unit } from "./types";
+import type { Marker, TurnEntry, TurnGroup, Unit } from "./types";
 import { unitTextColor } from "./UnitColor";
 
 // turnOrder에 label 같은 게 섞여 있어도 unitId만 최대한 뽑아내기
@@ -8,6 +8,7 @@ function extractUnitId(entry: any): string | null {
   if (!entry) return null;
   if (typeof entry === "string") return entry;
   if (typeof entry === "object") {
+    if (entry.kind === "group") return null;
     if (typeof entry.unitId === "string") return entry.unitId;
     if (typeof entry.id === "string") return entry.id;
     if (typeof entry?.unit?.id === "string") return entry.unit.id;
@@ -32,10 +33,45 @@ function markerLabel(m: Marker | undefined | null) {
   return alias || m.name || m.id;
 }
 
+function groupLabel(g: TurnGroup | undefined | null) {
+  if (!g) return "group";
+  const name = (g.name ?? "").toString().trim();
+  return name || g.id;
+}
+
+function sidePillTint(side: Unit["side"] | undefined): string {
+  if (side === "TEAM") return "bg-blue-950/25 border-blue-500/30";
+  if (side === "ENEMY") return "bg-red-950/25 border-red-500/30";
+  return "bg-zinc-900/40 border-zinc-700/50";
+}
+
+function isTurnEligible(u: Unit | undefined | null) {
+  if (!u) return false;
+  if (u.bench) return false;
+  if ((u.unitType ?? "NORMAL") !== "NORMAL") return false;
+  return true;
+}
+
+function isGroupEligible(
+  group: TurnGroup | undefined | null,
+  unitById: Map<string, Unit>
+) {
+  if (!group) return false;
+  for (const id of group.unitIds ?? []) {
+    const u = unitById.get(id);
+    if (!u) continue;
+    if (!isTurnEligible(u)) continue;
+    if (u.turnDisabled) continue;
+    return true;
+  }
+  return false;
+}
+
 export default function TurnOrderBar(props: {
   units: Unit[];
   markers: Marker[];
-  turnOrder: any[]; // backend에서 오는 turnOrder (label 섞여도 OK)
+  turnOrder: TurnEntry[]; // backend에서 오는 turnOrder (label 섞여도 OK)
+  turnGroups?: TurnGroup[];
   // 둘 중 하나만 있어도 동작. 둘 다 주면 currentUnitId 우선.
   turnOrderIndex?: number | null; // turnOrder 배열 기준 현재 위치
   currentUnitId?: string | null; // 현재 턴 유닛 id
@@ -54,6 +90,7 @@ export default function TurnOrderBar(props: {
     units,
     markers,
     turnOrder,
+    turnGroups,
     turnOrderIndex,
     currentUnitId,
     className,
@@ -82,17 +119,42 @@ export default function TurnOrderBar(props: {
     return m;
   }, [markers]);
 
+  const groupById = useMemo(() => {
+    const m = new Map<string, TurnGroup>();
+    for (const g of turnGroups ?? []) m.set(g.id, g);
+    return m;
+  }, [turnGroups]);
+
+  const groupedUnitIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const g of turnGroups ?? []) {
+      for (const unitId of g.unitIds ?? []) ids.add(unitId);
+    }
+    return ids;
+  }, [turnGroups]);
+
   // turnOrder에 marker 엔트리도 표시되도록 구성한다.
   const displayEntries = useMemo(() => {
     const out: Array<
       | { kind: "unit"; unitId: string; sourceIndex: number }
       | { kind: "marker"; markerId: string; sourceIndex: number }
+      | { kind: "group"; groupId: string; sourceIndex: number }
     > = [];
     if (Array.isArray(turnOrder) && turnOrder.length > 0) {
       for (let i = 0; i < turnOrder.length; i++) {
         const entry = turnOrder[i];
+        if (entry?.kind === "group" && typeof entry.groupId === "string") {
+          const g = groupById.get(entry.groupId);
+          if (isGroupEligible(g, unitById)) {
+            out.push({ kind: "group", groupId: entry.groupId, sourceIndex: i });
+          }
+          continue;
+        }
         if (entry?.kind === "unit" && typeof entry.unitId === "string") {
-          out.push({ kind: "unit", unitId: entry.unitId, sourceIndex: i });
+          const u = unitById.get(entry.unitId);
+          if (isTurnEligible(u) && !groupedUnitIds.has(entry.unitId)) {
+            out.push({ kind: "unit", unitId: entry.unitId, sourceIndex: i });
+          }
           continue;
         }
         if (entry?.kind === "marker" && typeof entry.markerId === "string") {
@@ -104,13 +166,21 @@ export default function TurnOrderBar(props: {
           continue;
         }
         const id = extractUnitId(entry);
-        if (id) out.push({ kind: "unit", unitId: id, sourceIndex: i });
+        if (id) {
+          const u = unitById.get(id);
+          if (isTurnEligible(u) && !groupedUnitIds.has(id)) {
+            out.push({ kind: "unit", unitId: id, sourceIndex: i });
+          }
+        }
       }
     }
 
     if (out.length === 0) {
+      let idx = 0;
       for (let i = 0; i < units.length; i++) {
-        out.push({ kind: "unit", unitId: units[i].id, sourceIndex: i });
+        const u = units[i];
+        if (!isTurnEligible(u)) continue;
+        out.push({ kind: "unit", unitId: u.id, sourceIndex: idx++ });
       }
     }
 
@@ -118,20 +188,23 @@ export default function TurnOrderBar(props: {
     const unitIdsInOrder = new Set(
       out.filter((entry) => entry.kind === "unit").map((entry) => entry.unitId)
     );
-    if (unitIdsInOrder.size < units.length) {
+    const eligibleUnits = units.filter(
+      (u) => isTurnEligible(u) && !groupedUnitIds.has(u.id)
+    );
+    if (unitIdsInOrder.size < eligibleUnits.length) {
       let extraIndex = out.length;
-      for (const u of units) {
+      for (const u of eligibleUnits) {
         if (unitIdsInOrder.has(u.id)) continue;
         out.push({ kind: "unit", unitId: u.id, sourceIndex: extraIndex++ });
       }
     }
 
     return out;
-  }, [turnOrder, units]);
+  }, [turnOrder, units, unitById, groupById, groupedUnitIds]);
 
   const n = displayEntries.length;
 
-  const baseIdFromTurnIndex = useMemo(() => {
+  const baseEntryFromTurnIndex = useMemo(() => {
     if (!Array.isArray(turnOrder) || turnOrder.length === 0) return null;
     const idx =
       typeof turnOrderIndex === "number" && Number.isFinite(turnOrderIndex)
@@ -139,14 +212,22 @@ export default function TurnOrderBar(props: {
         : 0;
 
     for (let k = 0; k < turnOrder.length; k++) {
-      const e = turnOrder[mod(idx + k, turnOrder.length)];
-      const id = extractUnitId(e);
-      if (!id) continue;
-      if (unitById.get(id)?.turnDisabled) continue;
-      return id;
+      const entry = turnOrder[mod(idx + k, turnOrder.length)];
+      if (!entry || typeof entry !== "object") continue;
+      if (entry.kind === "unit") {
+        const u = unitById.get(entry.unitId);
+        if (!isTurnEligible(u)) continue;
+        if (u?.turnDisabled) continue;
+        return entry;
+      }
+      if (entry.kind === "group") {
+        const g = groupById.get(entry.groupId);
+        if (!isGroupEligible(g, unitById)) continue;
+        return entry;
+      }
     }
     return null;
-  }, [turnOrder, turnOrderIndex, unitById]);
+  }, [turnOrder, turnOrderIndex, unitById, groupById]);
 
   const tempStack = useMemo(() => {
     const arr = Array.isArray(tempTurnStack) ? tempTurnStack : [];
@@ -162,29 +243,27 @@ export default function TurnOrderBar(props: {
   const resumeUnitId = isTempTurn
     ? tempStack.length >= 2
       ? tempStack[tempStack.length - 2]
-      : baseIdFromTurnIndex
+      : baseEntryFromTurnIndex?.kind === "unit"
+        ? baseEntryFromTurnIndex.unitId
+        : null
     : null;
 
-  const resolvedCurrentId = useMemo(() => {
+  const resolvedCurrentEntry = useMemo(() => {
     if (!isBattleStarted) return null;
-    if (currentUnitId) return currentUnitId;
+    if (currentUnitId) return { kind: "unit", unitId: currentUnitId } as const;
+    return baseEntryFromTurnIndex;
+  }, [currentUnitId, isBattleStarted, baseEntryFromTurnIndex]);
 
-    if (!Array.isArray(turnOrder) || turnOrder.length === 0) return null;
-    const idx =
-      typeof turnOrderIndex === "number" && Number.isFinite(turnOrderIndex)
-        ? mod(turnOrderIndex, turnOrder.length)
-        : 0;
-
-    // idx에서부터 앞으로 훑어서 첫 유닛 엔트리를 current로 삼음(라벨 섞인 케이스 대비)
-    for (let k = 0; k < turnOrder.length; k++) {
-      const e = turnOrder[mod(idx + k, turnOrder.length)];
-      const id = extractUnitId(e);
-      if (!id) continue;
-      if (unitById.get(id)?.turnDisabled) continue;
-      return id;
+  const resolvedCurrentKey = useMemo(() => {
+    if (!resolvedCurrentEntry) return null;
+    if (resolvedCurrentEntry.kind === "unit") {
+      return `unit:${resolvedCurrentEntry.unitId}`;
+    }
+    if (resolvedCurrentEntry.kind === "group") {
+      return `group:${resolvedCurrentEntry.groupId}`;
     }
     return null;
-  }, [currentUnitId, turnOrder, turnOrderIndex, isBattleStarted, unitById]);
+  }, [resolvedCurrentEntry]);
 
   const displayIndexFromTurnIndex = useMemo(() => {
     if (!Array.isArray(turnOrder) || turnOrder.length === 0) return null;
@@ -202,12 +281,18 @@ export default function TurnOrderBar(props: {
   const currentIndex = useMemo(() => {
     if (n === 0) return 0;
     if (displayIndexFromTurnIndex != null) return displayIndexFromTurnIndex;
-    if (!resolvedCurrentId) return 0;
-    const idx = displayEntries.findIndex(
-      (entry) => entry.kind === "unit" && entry.unitId === resolvedCurrentId
-    );
+    if (!resolvedCurrentKey) return 0;
+    const idx = displayEntries.findIndex((entry) => {
+      if (entry.kind === "unit") {
+        return resolvedCurrentKey === `unit:${entry.unitId}`;
+      }
+      if (entry.kind === "group") {
+        return resolvedCurrentKey === `group:${entry.groupId}`;
+      }
+      return false;
+    });
     return idx >= 0 ? idx : 0;
-  }, [displayEntries, displayIndexFromTurnIndex, resolvedCurrentId, n]);
+  }, [displayEntries, displayIndexFromTurnIndex, resolvedCurrentKey, n]);
 
   const MAX_VISIBLE = 11; // 중앙 고정 때문에 홀수 권장 (12개 “정도”면 11이 가장 자연스러움)
 
@@ -340,12 +425,23 @@ export default function TurnOrderBar(props: {
     return p >= 0 ? p : leftCount;
   }, [displayIndices, currentIndex, leftCount]);
 
-  const currentUnit = resolvedCurrentId
-    ? unitById.get(resolvedCurrentId)
+  const currentUnit =
+    resolvedCurrentEntry?.kind === "unit"
+      ? unitById.get(resolvedCurrentEntry.unitId)
+      : null;
+  const currentGroup =
+    resolvedCurrentEntry?.kind === "group"
+      ? groupById.get(resolvedCurrentEntry.groupId)
+      : null;
+  const currentGroupLeadId = currentGroup?.unitIds?.[0];
+  const currentGroupLead = currentGroupLeadId
+    ? unitById.get(currentGroupLeadId)
     : null;
   const currentHeaderColor = currentUnit
     ? unitTextColor(currentUnit)
-    : undefined;
+    : currentGroupLead
+      ? unitTextColor(currentGroupLead)
+      : undefined;
 
   const tempUnit = tempTurnUnitId ? unitById.get(tempTurnUnitId) : null;
   const resumeUnit = resumeUnitId ? unitById.get(resumeUnitId) : null;
@@ -496,9 +592,19 @@ export default function TurnOrderBar(props: {
                     ? { color: currentHeaderColor }
                     : undefined
                 }
-                title={currentUnit?.name ?? ""}
+                title={
+                  currentUnit?.name ??
+                  currentGroup?.name ??
+                  ""
+                }
               >
-                {isBattleStarted ? turnLabel(currentUnit) : "-"}
+                {isBattleStarted
+                  ? currentUnit
+                    ? turnLabel(currentUnit)
+                    : currentGroup
+                      ? groupLabel(currentGroup)
+                      : "-"
+                  : "-"}
               </span>
             </span>
           </div>
@@ -524,15 +630,43 @@ export default function TurnOrderBar(props: {
               const entry = displayEntries[idx];
               const isUnit = entry?.kind === "unit";
               const isMarker = entry?.kind === "marker";
+              const isGroup = entry?.kind === "group";
               const u = isUnit ? unitById.get(entry.unitId) : null;
+              const g = isGroup ? groupById.get(entry.groupId) : null;
               const m =
                 !isUnit && entry?.kind === "marker"
                   ? markerById.get(entry.markerId)
                   : null;
               const isDisabled = isUnit && !!u?.turnDisabled;
-              const isCurrent = isBattleStarted && isUnit && idx === currentIndex;
-              const currentColor =
-                isCurrent && u ? unitTextColor(u) : undefined;
+              const isCurrent = isBattleStarted && idx === currentIndex;
+              const groupLeadId = isGroup ? g?.unitIds?.[0] : null;
+              const groupLead = groupLeadId ? unitById.get(groupLeadId) : null;
+              const groupColor = groupLead ? unitTextColor(groupLead) : undefined;
+              const currentSide = isUnit
+                ? u?.side
+                : isGroup
+                  ? groupLead?.side
+                  : undefined;
+              const currentColor = isCurrent
+                ? isUnit
+                  ? u
+                    ? unitTextColor(u)
+                    : undefined
+                  : isGroup
+                    ? groupColor
+                    : undefined
+                : undefined;
+              const labelColor = isCurrent ? currentColor : undefined;
+              const pillTint = isUnit
+                ? sidePillTint(u?.side)
+                : isGroup
+                  ? sidePillTint(groupLead?.side)
+                  : "";
+              const currentAccent = isCurrent
+                ? currentSide === "TEAM"
+                  ? "border-lime-400/80 bg-lime-950/20 shadow-[0_0_0_2px_rgba(163,230,53,0.35)]"
+                  : "border-lime-300/80 bg-lime-950/15 ring-1 ring-lime-300/45 shadow-[0_0_0_2px_rgba(163,230,53,0.25)]"
+                : "";
               const markerAlias = (m?.alias ?? "").trim();
               const markerTitle = m
                 ? markerAlias
@@ -541,7 +675,11 @@ export default function TurnOrderBar(props: {
                 : entry?.kind === "marker"
                   ? entry.markerId
                   : "";
-              const label = isUnit ? turnLabel(u) : markerLabel(m);
+              const label = isUnit
+                ? turnLabel(u)
+                : isGroup
+                  ? groupLabel(g)
+                  : markerLabel(m);
 
               const dist = Math.abs(i - focusPos);
               const fade =
@@ -576,12 +714,10 @@ export default function TurnOrderBar(props: {
                       "rounded-lg border text-center",
                       isMarker || isDisabled
                         ? "border-amber-800/50 bg-amber-950/20"
-                        : "bg-zinc-950/30 border-zinc-800",
+                        : pillTint || "bg-zinc-950/30 border-zinc-800",
                       "px-2 py-1",
                       "truncate",
-                      isCurrent
-                        ? "border-emerald-400/70 bg-emerald-950/30 shadow-[0_0_0_1px_rgba(16,185,129,0.25)]"
-                        : "",
+                      currentAccent,
                     ].join(" ")}
                     style={{ width: CARD_W }}
                   >
@@ -593,7 +729,13 @@ export default function TurnOrderBar(props: {
                       }
                     >
                       <span
-                        title={isUnit ? u?.name ?? "" : markerTitle}
+                        title={
+                          isUnit
+                            ? u?.name ?? ""
+                            : isGroup
+                              ? g?.name ?? ""
+                              : markerTitle
+                        }
                         className={[
                           "block truncate",
                           isMarker || isDisabled
@@ -603,9 +745,7 @@ export default function TurnOrderBar(props: {
                               : "text-zinc-400",
                         ].join(" ")}
                         // ✅ 현재 턴만 colorCode(또는 side 기본색)로
-                        style={
-                          currentColor ? { color: currentColor } : undefined
-                        }
+                        style={labelColor ? { color: labelColor } : undefined}
                       >
                         {label}
                       </span>

@@ -1,6 +1,6 @@
 // src/EditUnitModal.tsx
 import { useEffect, useMemo, useState } from "react";
-import type { Unit, UnitPatch } from "./types";
+import type { Unit, UnitKind, UnitPatch } from "./types";
 
 function parseIntOrNull(s: string): number | null {
   const t = (s ?? "").trim();
@@ -52,6 +52,7 @@ function normalizeCount(v: unknown, fallback = 0, min = 0) {
 export default function EditUnitModal(props: {
   open: boolean;
   unit: Unit | null;
+  units: Unit[];
   busy: boolean;
   onClose: () => void;
 
@@ -67,6 +68,7 @@ export default function EditUnitModal(props: {
   const {
     open,
     unit,
+    units,
     busy,
     onClose,
     onSubmitPatch,
@@ -78,6 +80,9 @@ export default function EditUnitModal(props: {
   const [err, setErr] = useState<string | null>(null);
 
   const [name, setName] = useState("");
+  const [alias, setAlias] = useState("");
+  const [unitType, setUnitType] = useState<UnitKind>("NORMAL");
+  const [masterUnitId, setMasterUnitId] = useState("");
   const [note, setNote] = useState("");
 
   const [colorCode, setColorCode] = useState(""); // "" => auto(remove explicit)
@@ -117,6 +122,9 @@ export default function EditUnitModal(props: {
     setActiveTab("INFO");
 
     setName(unit.name ?? "");
+    setAlias((unit.alias ?? "").toString());
+    setUnitType((unit.unitType ?? "NORMAL") as UnitKind);
+    setMasterUnitId((unit.masterUnitId ?? "").toString());
     setNote((unit as any).note ?? "");
 
     setColorCode(
@@ -355,6 +363,40 @@ export default function EditUnitModal(props: {
       return;
     }
     if (nextName !== u.name) patch.name = nextName;
+
+    const nextAlias = alias.trim();
+    const prevAlias = (u.alias ?? "").toString().trim();
+    if (!nextAlias) {
+      if (prevAlias) patch.alias = null;
+    } else if (nextAlias !== prevAlias) {
+      patch.alias = nextAlias;
+    }
+
+    const prevType = (u.unitType ?? "NORMAL") as UnitKind;
+    const nextType = unitType;
+    if (nextType !== prevType) patch.unitType = nextType;
+
+    const prevMaster = (u.masterUnitId ?? "").toString().trim();
+    if (nextType === "SERVANT") {
+      const masterId = masterUnitId.trim();
+      if (!masterId) {
+        setErr("서번트는 사역자를 선택해야 해.");
+        return;
+      }
+      if (masterId === u.id) {
+        setErr("사역자는 자기 자신일 수 없어.");
+        return;
+      }
+      const master = units.find((item) => item.id === masterId);
+      const masterType = master?.unitType ?? "NORMAL";
+      if (!master || masterType !== "NORMAL") {
+        setErr("사역자는 일반 유닛만 선택할 수 있어.");
+        return;
+      }
+      if (masterId !== prevMaster) patch.masterUnitId = masterId;
+    } else if (prevMaster) {
+      patch.masterUnitId = null;
+    }
 
     // note: "" => null(delete)
     const nextNote = note.trim();
@@ -609,12 +651,7 @@ export default function EditUnitModal(props: {
               {aliasText ? (
                 <>
                   {" "}
-                  • alias: <span className="text-zinc-300">
-                    {aliasText}
-                  </span>{" "}
-                  <span className="text-zinc-500">
-                    (alias는 현재 PATCH로 수정 불가)
-                  </span>
+                  ? alias: <span className="text-zinc-300">{aliasText}</span>
                 </>
               ) : null}
             </div>
@@ -682,6 +719,68 @@ export default function EditUnitModal(props: {
               className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
             />
           </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-zinc-400">
+              Alias (optional)
+            </label>
+            <input
+              value={alias}
+              onChange={(e) => setAlias(e.target.value)}
+              disabled={busy}
+              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-zinc-400">Type</label>
+            <select
+              value={unitType}
+              onChange={(e) => {
+                const next = e.target.value as UnitKind;
+                setUnitType(next);
+                if (next !== "SERVANT") setMasterUnitId("");
+              }}
+              disabled={busy}
+              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
+            >
+              <option value="NORMAL">일반 유닛</option>
+              <option value="SERVANT">서번트</option>
+              <option value="BUILDING">건물</option>
+            </select>
+          </div>
+
+          {unitType === "SERVANT" && (
+            <div>
+              <label className="mb-1 block text-xs text-zinc-400">
+                사역자
+              </label>
+              <select
+                value={masterUnitId}
+                onChange={(e) => setMasterUnitId(e.target.value)}
+                disabled={busy}
+                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
+              >
+                <option value="">선택</option>
+                {units
+                  .filter((item) => {
+                    if (item.id === u.id) return false;
+                    return (item.unitType ?? "NORMAL") === "NORMAL";
+                  })
+                  .map((item) => {
+                    const aliasText = (item.alias ?? "").trim();
+                    const label = aliasText
+                      ? `${item.name} (${aliasText})`
+                      : item.name;
+                    return (
+                      <option key={item.id} value={item.id}>
+                        {label}
+                      </option>
+                    );
+                  })}
+              </select>
+            </div>
+          )}
 
           <div>
             <label className="mb-1 block text-xs text-zinc-400">

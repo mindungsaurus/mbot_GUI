@@ -6,7 +6,13 @@ import type {
   Side,
   TurnEntry,
   Unit,
+  UnitKind,
+  UnitPatch,
+  UnitPreset,
+  UnitPresetFolder,
 } from "./types";
+import { listUnitPresets } from "./api";
+import { ansiColorCodeToCss } from "./UnitColor";
 import UnitCard from "./UnitCard";
 
 type CreateUnitForm = Omit<
@@ -37,6 +43,47 @@ function moveItem<T>(arr: T[], from: number, to: number): T[] {
   const [item] = next.splice(from, 1);
   next.splice(to, 0, item);
   return next;
+}
+
+function formatSpellSlots(slots?: Record<string, number>) {
+  if (!slots) return "";
+  const levels = Object.keys(slots)
+    .map((key) => Math.trunc(Number(key)))
+    .filter((lvl) => Number.isFinite(lvl) && lvl >= 1 && lvl <= 9)
+    .sort((a, b) => a - b);
+  if (levels.length === 0) return "";
+  const maxLevel = levels[levels.length - 1];
+  const parts: string[] = [];
+  for (let lvl = 1; lvl <= maxLevel; lvl++) {
+    const raw = (slots as any)[lvl] ?? (slots as any)[String(lvl)] ?? 0;
+    parts.push(String(Math.max(0, Math.floor(Number(raw)))));
+  }
+  return `[${parts.join("/")}]`;
+}
+
+function formatConsumables(consumables?: Record<string, number>) {
+  if (!consumables) return "";
+  const entries = Object.entries(consumables)
+    .map(([name, count]) => [String(name).trim(), Math.floor(Number(count))] as const)
+    .filter(([name]) => name.length > 0);
+  if (entries.length === 0) return "";
+  return entries.map(([name, count]) => `${name} ${Math.max(0, count)}`).join(", ");
+}
+
+function formatAnsiColorName(code?: number) {
+  if (typeof code !== "number") return "자동";
+  if (code === 39) return "기본값";
+  const map: Record<number, string> = {
+    30: "회색",
+    31: "빨강",
+    32: "초록",
+    33: "노랑",
+    34: "파랑",
+    35: "마젠타",
+    36: "청록",
+    37: "흰색",
+  };
+  return map[code] ?? `코드 ${code}`;
 }
 
 function PlusIcon(props: { className?: string }) {
@@ -250,6 +297,7 @@ export default function UnitsPanel(props: {
   onSelectUnit: (id: string, opts?: { additive?: boolean }) => void;
   onEditUnit: (unitId: string) => void;
   onCreateUnit: (payload: CreateUnitPayload) => Promise<void> | void;
+  onCreateUnitFromPreset: (payload: CreateUnitPayload, patch?: UnitPatch | null, deathSaves?: { success: number; failure: number }) => Promise<void> | void;
   onRemoveUnit: (unitId: string) => Promise<void> | void;
   onToggleHidden: (unitId: string) => Promise<void> | void;
   onReorderUnits: (payload: {
@@ -273,7 +321,8 @@ export default function UnitsPanel(props: {
   onSelectUnit,
   onEditUnit,
   onCreateUnit,
-    onRemoveUnit,
+  onCreateUnitFromPreset,
+  onRemoveUnit,
     onUpsertMarker,
   onRemoveMarker,
   onToggleHidden,
@@ -283,6 +332,19 @@ export default function UnitsPanel(props: {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [localErr, setLocalErr] = useState<string | null>(null);
+  const [presetOpen, setPresetOpen] = useState(false);
+  const [presetErr, setPresetErr] = useState<string | null>(null);
+  const [presetLoading, setPresetLoading] = useState(false);
+  const [presetFolders, setPresetFolders] = useState<UnitPresetFolder[]>([]);
+  const [presetList, setPresetList] = useState<UnitPreset[]>([]);
+  const [presetFolderFilter, setPresetFolderFilter] = useState<string>("ALL");
+  const [presetQuery, setPresetQuery] = useState("");
+  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
+  const [presetPos, setPresetPos] = useState<{ x: number; z: number }>({
+    x: 0,
+    z: 0,
+  });
+  const [presetMasterId, setPresetMasterId] = useState("");
 
   const [panelMode, setPanelMode] = useState<"units" | "markers">("units");
   const isMarkerMode = panelMode === "markers";
@@ -292,23 +354,83 @@ export default function UnitsPanel(props: {
   const [overUnitId, setOverUnitId] = useState<string | null>(null);
   const [reorderPending, setReorderPending] = useState(false);
   const unitListRef = useRef<HTMLDivElement | null>(null);
+  const unitListSpacing = compactMode ? "space-y-1" : "space-y-2";
+
+  const defaultPos = useMemo(() => {
+    return selected?.pos ?? { x: 0, z: 0 };
+  }, [selected?.pos]);
+  const selectedPreset = useMemo(
+    () => presetList.find((p) => p.id === selectedPresetId) ?? null,
+    [presetList, selectedPresetId]
+  );
+  const presetFolderTree = useMemo(() => {
+    const byParent = new Map<string, UnitPresetFolder[]>();
+    for (const folder of presetFolders) {
+      const parent = folder.parentId ?? "__root__";
+      const list = byParent.get(parent) ?? [];
+      list.push(folder);
+      byParent.set(parent, list);
+    }
+    for (const list of byParent.values()) {
+      list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    }
+    const out: Array<{ folder: UnitPresetFolder; depth: number }> = [];
+    const walk = (parentId: string, depth: number) => {
+      const list = byParent.get(parentId) ?? [];
+      for (const folder of list) {
+        out.push({ folder, depth });
+        walk(folder.id, depth + 1);
+      }
+    };
+    walk("__root__", 0);
+    return out;
+  }, [presetFolders]);
+  const filteredPresets = useMemo(() => {
+    const query = presetQuery.trim().toLowerCase();
+    let list = presetList;
+    if (presetFolderFilter === "NONE") {
+      list = list.filter((preset) => !preset.folderId);
+    } else if (presetFolderFilter !== "ALL") {
+      list = list.filter((preset) => (preset.folderId ?? "") === presetFolderFilter);
+    }
+    if (query) {
+      list = list.filter((preset) => {
+        const name = (preset.name ?? "").toLowerCase();
+        const unitName = (preset.data?.name ?? "").toLowerCase();
+        return name.includes(query) || unitName.includes(query);
+      });
+    }
+    return [...list].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  }, [presetList, presetFolderFilter, presetQuery]);
+  const normalUnits = useMemo(
+    () => units.filter((u) => (u.unitType ?? "NORMAL") === "NORMAL"),
+    [units]
+  );
 
   useEffect(() => {
     if (isMarkerMode && createOpen) setCreateOpen(false);
   }, [isMarkerMode, createOpen]);
 
   useEffect(() => {
+    if (!presetOpen) return;
+    setPresetPos({ x: defaultPos.x, z: defaultPos.z });
+    loadPresetList().catch((e) => setPresetErr(String(e?.message ?? e)));
+  }, [presetOpen, defaultPos.x, defaultPos.z]);
+
+  useEffect(() => {
+    if (!presetOpen) return;
+    if (selectedPreset?.data?.unitType === "SERVANT") {
+      setPresetMasterId("");
+    } else {
+      setPresetMasterId("");
+    }
+  }, [presetOpen, selectedPresetId, selected?.id, selected?.unitType, selectedPreset]);
+
+  useEffect(() => {
     if (busy || dragUnitId || reorderPending) return;
     const ids = units.map((u) => u.id);
     setUnitOrder(ids);
   }, [units]);
-
-  const unitListSpacing = compactMode ? "space-y-1" : "space-y-2";
-
-
-  const defaultPos = useMemo(() => {
-    return selected?.pos ?? { x: 0, z: 0 };
-  }, [selected?.pos]);
 
   const markerOrderById = useMemo(() => {
     const map = new Map<string, number>();
@@ -327,6 +449,8 @@ export default function UnitsPanel(props: {
     name: `unit_${units.length + 1}`,
     alias: "",
     side: "TEAM",
+    unitType: "NORMAL",
+    masterUnitId: "",
     hpMax: 20,
     acBase: 10,
     x: defaultPos.x,
@@ -343,6 +467,8 @@ export default function UnitsPanel(props: {
       name: `unit_${units.length + 1}`,
       alias: "",
       side: "TEAM",
+      unitType: "NORMAL",
+      masterUnitId: "",
       hpMax: 20,
       acBase: 10,
       x: defaultPos.x,
@@ -355,6 +481,43 @@ export default function UnitsPanel(props: {
   function closeCreate() {
     setLocalErr(null);
     setCreateOpen(false);
+  }
+
+  async function loadPresetList() {
+    setPresetLoading(true);
+    try {
+      setPresetErr(null);
+      const res = (await listUnitPresets()) as {
+        folders: UnitPresetFolder[];
+        presets: UnitPreset[];
+      };
+      const nextFolders = Array.isArray(res.folders) ? res.folders : [];
+      const nextPresets = Array.isArray(res.presets) ? res.presets : [];
+      setPresetFolders(nextFolders);
+      setPresetList(nextPresets);
+      if (!selectedPresetId && nextPresets.length > 0) {
+        setSelectedPresetId(nextPresets[0].id);
+      }
+    } catch (e: any) {
+      setPresetErr(String(e?.message ?? e));
+    } finally {
+      setPresetLoading(false);
+    }
+  }
+
+  function openPresetPicker() {
+    if (busy || isMarkerMode) return;
+    setPresetErr(null);
+    setPresetFolderFilter("ALL");
+    setPresetQuery("");
+    setSelectedPresetId(null);
+    setPresetOpen(true);
+    setCreateOpen(false);
+  }
+
+  function closePresetPicker() {
+    setPresetErr(null);
+    setPresetOpen(false);
   }
 
   async function submitCreate(e: React.FormEvent) {
@@ -382,6 +545,21 @@ export default function UnitsPanel(props: {
     const idxRaw = clampInt(form.turnOrderIndex, turnOrderLen);
     const turnOrderIndex = Math.max(0, Math.min(turnOrderLen, idxRaw));
 
+    const unitType = (form.unitType ?? "NORMAL") as UnitKind;
+    const masterUnitId = (form.masterUnitId ?? "").trim();
+    if (unitType === "SERVANT") {
+      if (!masterUnitId) {
+        setLocalErr("서번트는 사역자를 선택해야 해.");
+        return;
+      }
+      const master = units.find((u) => u.id === masterUnitId);
+      const masterType = master?.unitType ?? "NORMAL";
+      if (!master || masterType !== "NORMAL") {
+        setLocalErr("사역자는 일반 유닛만 선택할 수 있어.");
+        return;
+      }
+    }
+
     // ✅ colorCode: ""이면 자동(미전송), 값 있으면 ANSI 범위 검증
     let colorCode: number | undefined = undefined;
     const ccRaw = (form.colorCode ?? "").trim();
@@ -400,6 +578,8 @@ export default function UnitsPanel(props: {
       ...(unitId ? { unitId } : {}),
       name,
       side: form.side,
+      unitType,
+      ...(unitType === "SERVANT" ? { masterUnitId } : {}),
       ...(alias ? { alias } : {}),
       hpMax,
       acBase,
@@ -410,6 +590,112 @@ export default function UnitsPanel(props: {
     });
 
     closeCreate();
+  }
+
+  async function submitPresetCreate() {
+    if (!selectedPreset) {
+      setPresetErr("프리셋을 선택해줘.");
+      return;
+    }
+    const data = selectedPreset.data ?? {};
+    const unitType = (data.unitType ?? "NORMAL") as UnitKind;
+    const masterUnitId = presetMasterId.trim();
+    if (unitType === "SERVANT") {
+      if (!masterUnitId) {
+        setPresetErr("서번트는 사역자를 지정해야 해.");
+        return;
+      }
+      const master = units.find((u) => u.id === masterUnitId);
+      const masterType = master?.unitType ?? "NORMAL";
+      if (!master || masterType !== "NORMAL") {
+        setPresetErr("사역자는 일반 유닛만 선택할 수 있어.");
+        return;
+      }
+    }
+
+    const unitId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `preset_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+
+    const hpMax = Math.max(0, Math.floor(Number(data.hp?.max ?? 0)));
+    const acBase = Math.max(0, Math.floor(Number(data.acBase ?? 0)));
+    const x = clampInt(presetPos.x, 0);
+    const z = clampInt(presetPos.z, 0);
+
+    const payload: CreateUnitPayload = {
+      unitId,
+      name: (data.name ?? selectedPreset.name ?? "유닛").trim(),
+      side: (data.side ?? "TEAM") as Side,
+      unitType,
+      ...(unitType === "SERVANT" ? { masterUnitId } : {}),
+      ...(data.alias ? { alias: data.alias } : {}),
+      hpMax,
+      acBase,
+      x,
+      z,
+      ...(typeof data.colorCode === "number" ? { colorCode: data.colorCode } : {}),
+      turnOrderIndex: turnOrderLen,
+    };
+
+    const patch: UnitPatch = {};
+    if (data.hp && typeof data.hp.max === "number") {
+      const max = Math.max(0, Math.floor(Number(data.hp.max)));
+      const cur = Math.max(0, Math.floor(Number(data.hp.cur ?? max)));
+      patch.hp = {
+        cur,
+        max,
+        ...(typeof data.hp.temp === "number" ? { temp: data.hp.temp } : {}),
+      };
+    }
+    if (typeof data.integrityBase === "number") {
+      patch.integrity = Math.max(0, Math.floor(Number(data.integrityBase)));
+    }
+    if (Array.isArray(data.tags)) {
+      patch.tags = { set: data.tags };
+    }
+    if (data.tagStates && Object.keys(data.tagStates).length > 0) {
+      const nextTagStates: Record<string, any> = {};
+      for (const [key, st] of Object.entries(data.tagStates)) {
+        if (!st) continue;
+        nextTagStates[key] = {
+          stacks: Math.max(1, Math.floor(Number(st.stacks ?? 1))),
+          decOnTurnStart: !!st.decOnTurnStart,
+          decOnTurnEnd: !!st.decOnTurnEnd,
+        };
+      }
+      if (Object.keys(nextTagStates).length > 0) patch.tagStates = nextTagStates;
+    }
+    if (data.spellSlots && Object.keys(data.spellSlots).length > 0) {
+      patch.spellSlots = data.spellSlots as Record<number, number>;
+    }
+    if (data.consumables && Object.keys(data.consumables).length > 0) {
+      patch.consumables = data.consumables as Record<string, number>;
+    }
+    if (typeof data.note === "string") patch.note = data.note;
+    if (typeof data.colorCode === "number") patch.colorCode = data.colorCode;
+    if (typeof data.hidden === "boolean") patch.hidden = data.hidden;
+    if (typeof data.turnDisabled === "boolean") {
+      patch.turnDisabled = data.turnDisabled;
+    }
+
+    const deathSaves =
+      data.deathSaves &&
+      (Number(data.deathSaves.success) > 0 ||
+        Number(data.deathSaves.failure) > 0)
+        ? {
+            success: Math.max(0, Math.floor(Number(data.deathSaves.success ?? 0))),
+            failure: Math.max(0, Math.floor(Number(data.deathSaves.failure ?? 0))),
+          }
+        : undefined;
+
+    await onCreateUnitFromPreset(
+      payload,
+      Object.keys(patch).length > 0 ? patch : null,
+      deathSaves
+    );
+
+    closePresetPicker();
   }
 
   function handlePlusClick() {
@@ -775,6 +1061,12 @@ export default function UnitsPanel(props: {
               additive: e.shiftKey || e.ctrlKey || e.metaKey,
             })
           }
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (busy) return;
+            onToggleHidden(u.id);
+          }}
           onEdit={() => onEditUnit(u.id)}
           onRemove={() => handleRemove(u)}
           onToggleHidden={() => onToggleHidden(u.id)}
@@ -804,28 +1096,40 @@ export default function UnitsPanel(props: {
           )}
         </div>
 
-        {/* + icon button (스크린샷의 빨간 영역) */}
-        <button
-          type="button"
-          onClick={handlePlusClick}
-          disabled={busy}
-          title={
-            createOpen
+        <div className="flex items-center gap-2">
+          {!isMarkerMode && (
+            <button
+              type="button"
+              onClick={openPresetPicker}
+              disabled={busy}
+              className="rounded-lg border border-amber-700/60 bg-amber-950/30 px-2 py-1 text-[11px] font-semibold text-amber-200 hover:bg-amber-900/40 disabled:opacity-50"
+            >
+              유닛 프리셋 불러오기
+            </button>
+          )}
+          {/* + icon button (스크린샷의 빨간 영역) */}
+          <button
+            type="button"
+            onClick={handlePlusClick}
+            disabled={busy}
+            title={
+              createOpen
               ? isMarkerMode
                 ? "Close Create Marker"
                 : "Close Create Unit"
               : isMarkerMode
-                ? "Create Marker"
-                : "Create Unit"
-          }
-          className={[
-            "inline-flex items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950/30 text-zinc-200",
-            "hover:bg-zinc-800/60 disabled:opacity-50",
-            "!p-1.5", // 전역 button CSS가 있으면 대비용(!important)
-          ].join(" ")}
-        >
-          <PlusIcon className="h-4 w-4" />
-        </button>
+              ? "Create Marker"
+              : "Create Unit"
+            }
+            className={[
+              "inline-flex items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950/30 text-zinc-200",
+              "hover:bg-zinc-800/60 disabled:opacity-50",
+              "!p-1.5", // 전역 button CSS가 있으면 대비용(!important)
+            ].join(" ")}
+          >
+            <PlusIcon className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       {/* Create Unit 폼 */}
@@ -928,6 +1232,56 @@ export default function UnitsPanel(props: {
             </div>
 
             <div>
+              <label className="mb-1 block text-xs text-zinc-400">Type</label>
+              <select
+                value={form.unitType}
+                onChange={(e) =>
+                  setForm((p) => ({
+                    ...p,
+                    unitType: e.target.value as UnitKind,
+                    masterUnitId:
+                      e.target.value === "SERVANT" ? p.masterUnitId : "",
+                  }))
+                }
+                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
+                disabled={busy}
+              >
+                <option value="NORMAL">일반 유닛</option>
+                <option value="SERVANT">서번트</option>
+                <option value="BUILDING">건물</option>
+              </select>
+            </div>
+
+            {form.unitType === "SERVANT" && (
+              <div>
+                <label className="mb-1 block text-xs text-zinc-400">
+                  사역자
+                </label>
+                <select
+                  value={form.masterUnitId}
+                  onChange={(e) =>
+                    setForm((p) => ({ ...p, masterUnitId: e.target.value }))
+                  }
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
+                  disabled={busy}
+                >
+                  <option value="">선택</option>
+                  {units
+                    .filter((u) => (u.unitType ?? "NORMAL") === "NORMAL")
+                    .map((u) => {
+                      const alias = (u.alias ?? "").trim();
+                      const label = alias ? `${u.name} (${alias})` : u.name;
+                      return (
+                        <option key={u.id} value={u.id}>
+                          {label}
+                        </option>
+                      );
+                    })}
+                </select>
+              </div>
+            )}
+
+            <div>
               <label className="mb-1 block text-xs text-zinc-400">
                 Alias <span className="text-zinc-500">(optional)</span>
               </label>
@@ -951,7 +1305,7 @@ export default function UnitsPanel(props: {
                 }
                 inputMode="numeric"
                 className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
-                disabled={busy}
+                disabled={busy || form.unitType !== "NORMAL"}
               />
             </div>
 
@@ -1059,6 +1413,375 @@ export default function UnitsPanel(props: {
         </form>
       )}
 
+      {presetOpen && !isMarkerMode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-5xl rounded-2xl border border-zinc-800 bg-zinc-950 p-4">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-semibold text-zinc-100">
+                  유닛 프리셋 불러오기
+                </div>
+                <div className="text-xs text-zinc-500">
+                  프리셋을 선택하고 초기 위치를 설정하세요.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={closePresetPicker}
+                className="rounded-lg border border-zinc-800 bg-zinc-950/30 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/60"
+              >
+                닫기
+              </button>
+            </div>
+
+            {presetErr && (
+              <div className="mb-3 whitespace-pre-line rounded-lg border border-red-900 bg-red-950/40 p-3 text-xs text-red-200">
+                {presetErr}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-[220px_minmax(0,1fr)_260px]">
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
+                <div className="text-xs font-semibold text-zinc-200">폴더</div>
+                <div className="mt-2 max-h-60 space-y-1 overflow-auto">
+                  <button
+                    type="button"
+                    className={[
+                      "w-full rounded-md border px-2 py-1 text-left text-xs",
+                      presetFolderFilter === "ALL"
+                        ? "border-amber-700/70 bg-amber-950/30 text-amber-100"
+                        : "border-zinc-800 bg-zinc-950/30 text-zinc-400 hover:text-zinc-200",
+                    ].join(" ")}
+                    onClick={() => setPresetFolderFilter("ALL")}
+                    disabled={presetLoading}
+                  >
+                    전체
+                  </button>
+                  <button
+                    type="button"
+                    className={[
+                      "w-full rounded-md border px-2 py-1 text-left text-xs",
+                      presetFolderFilter === "NONE"
+                        ? "border-amber-700/70 bg-amber-950/30 text-amber-100"
+                        : "border-zinc-800 bg-zinc-950/30 text-zinc-400 hover:text-zinc-200",
+                    ].join(" ")}
+                    onClick={() => setPresetFolderFilter("NONE")}
+                    disabled={presetLoading}
+                  >
+                    폴더 없음
+                  </button>
+                  {presetFolderTree.map(({ folder, depth }) => (
+                    <button
+                      key={folder.id}
+                      type="button"
+                      className={[
+                        "w-full rounded-md border px-2 py-1 text-left text-xs",
+                        presetFolderFilter === folder.id
+                          ? "border-amber-700/70 bg-amber-950/30 text-amber-100"
+                          : "border-zinc-800 bg-zinc-950/30 text-zinc-400 hover:text-zinc-200",
+                      ].join(" ")}
+                      style={{ paddingLeft: `${8 + depth * 12}px` }}
+                      onClick={() => setPresetFolderFilter(folder.id)}
+                      disabled={presetLoading}
+                    >
+                      {folder.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-xs font-semibold text-zinc-200">
+                    프리셋
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => loadPresetList()}
+                    disabled={presetLoading}
+                    className="rounded-md border border-zinc-800 px-2 py-1 text-[11px] text-zinc-200 hover:bg-zinc-800/60 disabled:opacity-50"
+                  >
+                    새로고침
+                  </button>
+                </div>
+                <input
+                  value={presetQuery}
+                  onChange={(e) => setPresetQuery(e.target.value)}
+                  placeholder="프리셋 검색"
+                  className="mb-2 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-zinc-600"
+                />
+                <div className="max-h-60 space-y-1 overflow-auto">
+                  {filteredPresets.length === 0 ? (
+                    <div className="rounded-md border border-zinc-800 bg-zinc-950/30 p-2 text-xs text-zinc-500">
+                      표시할 프리셋이 없습니다.
+                    </div>
+                  ) : (
+                    filteredPresets.map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => setSelectedPresetId(preset.id)}
+                        className={[
+                          "w-full rounded-md border px-2 py-1 text-left text-xs",
+                          preset.id === selectedPresetId
+                            ? "border-amber-700/70 bg-amber-950/30 text-amber-100"
+                            : "border-zinc-800 bg-zinc-950/30 text-zinc-300 hover:bg-zinc-800/60",
+                        ].join(" ")}
+                      >
+                        <div className="font-semibold">{preset.name}</div>
+                        <div
+                          className="text-[10px]"
+                          style={
+                            typeof preset.data?.colorCode === "number"
+                              ? { color: ansiColorCodeToCss(preset.data.colorCode) }
+                              : undefined
+                          }
+                        >
+                          {preset.data?.name ?? "유닛"}
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
+                <div className="text-xs font-semibold text-zinc-200">요약</div>
+                {!selectedPreset ? (
+                  <div className="mt-2 text-xs text-zinc-500">
+                    프리셋을 선택하세요.
+                  </div>
+                ) : (
+                  <div className="mt-2 space-y-2 text-xs text-zinc-200">
+                    <div>
+                      <span className="text-zinc-500">프리셋</span>
+                      <span className="ml-2 font-semibold">
+                        {selectedPreset.name}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">유닛 이름</span>
+                      <span
+                        className="ml-2"
+                        style={
+                          typeof selectedPreset.data?.colorCode === "number"
+                            ? {
+                                color: ansiColorCodeToCss(
+                                  selectedPreset.data.colorCode
+                                ),
+                              }
+                            : undefined
+                        }
+                      >
+                        {selectedPreset.data?.name ?? "유닛"}
+                      </span>
+                    </div>
+                    {selectedPreset.data?.alias ? (
+                      <div>
+                        <span className="text-zinc-500">별명</span>
+                        <span className="ml-2">{selectedPreset.data.alias}</span>
+                      </div>
+                    ) : null}
+                    <div>
+                      <span className="text-zinc-500">진영</span>
+                      <span className="ml-2">
+                        {selectedPreset.data?.side ?? "TEAM"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">유닛 타입</span>
+                      <span className="ml-2">
+                        {selectedPreset.data?.unitType ?? "NORMAL"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">HP</span>
+                      <span className="ml-2">
+                        {selectedPreset.data?.hp
+                          ? `${selectedPreset.data.hp.cur ?? 0}/${selectedPreset.data.hp.max ?? 0}` +
+                            (typeof selectedPreset.data.hp.temp === "number"
+                              ? ` (+${selectedPreset.data.hp.temp})`
+                              : "")
+                          : "없음"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">AC</span>
+                      <span className="ml-2">
+                        {typeof selectedPreset.data?.acBase === "number"
+                          ? selectedPreset.data.acBase
+                          : "-"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">무결성</span>
+                      <span className="ml-2">
+                        {typeof selectedPreset.data?.integrityBase === "number"
+                          ? selectedPreset.data.integrityBase
+                          : "-"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">사망 내성</span>
+                      <span className="ml-2">
+                        {selectedPreset.data?.deathSaves &&
+                        (selectedPreset.data.deathSaves.success ||
+                          selectedPreset.data.deathSaves.failure)
+                          ? `(${selectedPreset.data.deathSaves.success ?? 0}, ${selectedPreset.data.deathSaves.failure ?? 0})`
+                          : "없음"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">태그</span>
+                      <span className="ml-2">
+                        {Array.isArray(selectedPreset.data?.tags) &&
+                        selectedPreset.data?.tags?.length
+                          ? selectedPreset.data.tags.join(", ")
+                          : "없음"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">스택 태그</span>
+                      <span className="ml-2">
+                        {selectedPreset.data?.tagStates &&
+                        Object.keys(selectedPreset.data.tagStates).length > 0
+                          ? Object.keys(selectedPreset.data.tagStates).join(", ")
+                          : "없음"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">주문 슬롯</span>
+                      <span className="ml-2">
+                        {formatSpellSlots(selectedPreset.data?.spellSlots) ||
+                          "없음"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">고유 소모값</span>
+                      <span className="ml-2">
+                        {formatConsumables(selectedPreset.data?.consumables) ||
+                          "없음"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">컬러 코드</span>
+                      <span className="ml-2">
+                        {formatAnsiColorName(selectedPreset.data?.colorCode)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">숨겨짐</span>
+                      <span className="ml-2">
+                        {selectedPreset.data?.hidden ? "예" : "아니오"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">턴 비활성화</span>
+                      <span className="ml-2">
+                        {selectedPreset.data?.turnDisabled ? "예" : "아니오"}
+                      </span>
+                    </div>
+                    {selectedPreset.data?.note ? (
+                      <div>
+                        <span className="text-zinc-500">노트</span>
+                        <div className="mt-1 whitespace-pre-wrap text-[11px] text-zinc-300">
+                          {selectedPreset.data.note}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
+                <div className="text-xs font-semibold text-zinc-200">
+                  초기 위치
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <label className="text-[11px] text-zinc-400">
+                    x
+                    <input
+                      type="number"
+                      value={presetPos.x}
+                      onChange={(e) =>
+                        setPresetPos((prev) => ({
+                          ...prev,
+                          x: clampInt(e.target.value, 0),
+                        }))
+                      }
+                      className="mt-1 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs outline-none focus:border-zinc-600"
+                    />
+                  </label>
+                  <label className="text-[11px] text-zinc-400">
+                    z
+                    <input
+                      type="number"
+                      value={presetPos.z}
+                      onChange={(e) =>
+                        setPresetPos((prev) => ({
+                          ...prev,
+                          z: clampInt(e.target.value, 0),
+                        }))
+                      }
+                      className="mt-1 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs outline-none focus:border-zinc-600"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3 md:col-span-2">
+                <div className="text-xs font-semibold text-zinc-200">
+                  서번트 사역자 지정
+                </div>
+                {selectedPreset?.data?.unitType === "SERVANT" ? (
+                  <div className="mt-2">
+                    <select
+                      value={presetMasterId}
+                      onChange={(e) => setPresetMasterId(e.target.value)}
+                      className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-zinc-600"
+                    >
+                      <option value="">사역자 선택</option>
+                      {normalUnits.map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.name}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="mt-1 text-[11px] text-zinc-500">
+                      서번트는 반드시 일반 유닛을 사역자로 지정해야 해요.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-zinc-500">
+                    서번트 프리셋이 아닙니다.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={closePresetPicker}
+                className="rounded-lg border border-zinc-800 bg-zinc-950/30 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/60"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={submitPresetCreate}
+                disabled={presetLoading || !selectedPreset}
+                className="rounded-lg border border-amber-700/60 bg-amber-950/30 px-3 py-1.5 text-xs text-amber-200 hover:bg-amber-900/40 disabled:opacity-50"
+              >
+                불러오기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Unit list */}
       <div
         ref={unitListRef}
@@ -1074,6 +1797,12 @@ export default function UnitsPanel(props: {
             variant="pinned"
             density={compactMode ? "compact" : "normal"}
             onSelect={() => onSelectUnit(pinnedUnit.id, { additive: false })}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (busy) return;
+              onToggleHidden(pinnedUnit.id);
+            }}
             onEdit={() => onEditUnit(pinnedUnit.id)}
             onRemove={() => handleRemove(pinnedUnit)}
             onToggleHidden={() => onToggleHidden(pinnedUnit.id)}

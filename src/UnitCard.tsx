@@ -1,4 +1,4 @@
-// src/components/UnitCard.tsx
+﻿// src/components/UnitCard.tsx
 import type { MouseEvent, ReactNode } from "react";
 import type { Unit } from "./types";
 import { unitTextColor } from "./UnitColor";
@@ -104,7 +104,6 @@ function formatDisplayTags(u: Unit): string {
 }
 
 function formatSpellSlotsSummary(u: Unit): string {
-  // 슬롯은 1..최고레벨까지 이어서 보여주고, 누락 레벨은 0으로 채움
   const slots = u.spellSlots ?? {};
   const levels = Object.keys(slots)
     .map((k) => Math.trunc(Number(k)))
@@ -123,7 +122,6 @@ function formatSpellSlotsSummary(u: Unit): string {
 }
 
 function formatConsumablesSummary(u: Unit): string {
-  // 이름/수량 쌍을 [이름 수량] 형태로 모아 보여줌
   const entries = Object.entries(u.consumables ?? {})
     .map(([raw, count]) => [raw.trim(), count] as const)
     .filter(([name]) => name.length > 0);
@@ -138,7 +136,6 @@ function formatConsumablesSummary(u: Unit): string {
 
 function renderSlotSummary(summary: string) {
   if (!summary) return null;
-  // 숫자만 강조하고 구분자는 기존 색을 유지
   const tokens = summary.match(/\d+|\D+/g) ?? [];
   return tokens.map((token, i) =>
     /^\d+$/.test(token) ? (
@@ -153,7 +150,6 @@ function renderSlotSummary(summary: string) {
 
 function renderConsumableSummary(summary: string): ReactNode {
   if (!summary) return null;
-  // [이름 수량]에서 대괄호는 기본색, 내부 텍스트만 강조
   const out: ReactNode[] = [];
   const re = /\[(.*?)\]/g;
   let last = 0;
@@ -191,6 +187,7 @@ export default function UnitCard(props: {
   onDragEnd?: (e: React.DragEvent<HTMLDivElement>) => void;
 
   onSelect: (e: MouseEvent) => void;
+  onContextMenu?: (e: MouseEvent) => void;
   onEdit: () => void;
   onRemove: () => void;
   onToggleHidden: () => void;
@@ -214,17 +211,16 @@ export default function UnitCard(props: {
   const slotSummary = formatSpellSlotsSummary(u);
   const consumableSummary = formatConsumablesSummary(u);
   const tagsText = formatDisplayTags(u);
-  // "tag1, tag2" 형태를 칩 렌더링용 배열로 변환
   const tagsList = tagsText === "-" ? [] : tagsText.split(", ");
   const hasHidden = !!u.hidden;
   const deathSuccess = Math.max(0, Math.trunc(u.deathSaves?.success ?? 0));
   const deathFailure = Math.max(0, Math.trunc(u.deathSaves?.failure ?? 0));
+  const unitType = u.unitType ?? "NORMAL";
   const c = unitTextColor(u);
 
   const hideActions = props.hideActions ?? false;
   const effectiveHideActions = hideActions || isCompact;
 
-  // pinned는 항상 액션 버튼 보이게 (끌려온 느낌 + UX)
   const showActions = !effectiveHideActions && (variant === "pinned" || isSelected);
 
   const baseCls = isCompact
@@ -240,6 +236,12 @@ export default function UnitCard(props: {
   const disabledBgCls = u.turnDisabled
     ? "!bg-amber-950/30 hover:!bg-amber-900/35 !border-amber-600/70"
     : "";
+  const typeBgCls =
+    !u.turnDisabled && unitType === "SERVANT"
+      ? "!bg-violet-950/30 !border-violet-400/60"
+      : !u.turnDisabled && unitType === "BUILDING"
+        ? "!bg-lime-950/20 !border-lime-400/60"
+        : "";
 
   const pinnedCls =
     variant === "pinned"
@@ -252,17 +254,25 @@ export default function UnitCard(props: {
         draggable={props.draggable}
         onDragStart={props.onDragStart}
         onDragEnd={props.onDragEnd}
-        className={[baseCls, selCls, pinnedCls, busyCls, disabledBgCls].join(" ")}
+        className={[
+          baseCls,
+          selCls,
+          pinnedCls,
+          busyCls,
+          disabledBgCls,
+          typeBgCls,
+        ].join(" ")}
         onClick={(e) => {
           if (busy) return;
           onSelect(e);
         }}
+        onContextMenu={props.onContextMenu}
         onDoubleClick={(e) => {
           if (busy) return;
           e.stopPropagation();
           onEdit();
         }}
-        title={variant === "pinned" ? "Pinned unit" : "Click to select"}
+      title={variant === "pinned" ? "\uc120\ud0dd\ub41c \uc720\ub2db(\ubcf5\uc81c \uce74\ub4dc)" : "\ud074\ub9ad: \uc120\ud0dd"}
       >
         {/* Compact view for fast scan / drag & drop */}
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
@@ -347,21 +357,34 @@ export default function UnitCard(props: {
       draggable={props.draggable}
       onDragStart={props.onDragStart}
       onDragEnd={props.onDragEnd}
-      className={[baseCls, selCls, pinnedCls, busyCls, disabledBgCls].join(" ")}
+      className={[
+        baseCls,
+        selCls,
+        pinnedCls,
+        busyCls,
+        disabledBgCls,
+        typeBgCls,
+      ].join(" ")}
       onClick={(e) => {
         if (busy) return;
         onSelect(e);
       }}
-      title={variant === "pinned" ? "선택된 유닛(복제 카드)" : "클릭: 선택"}
+      onContextMenu={props.onContextMenu}
+      onDoubleClick={(e) => {
+        if (busy) return;
+        e.stopPropagation();
+        onEdit();
+      }}
+      title={variant === "pinned" ? "\uc120\ud0dd\ub41c \uc720\ub2db(\ubcf5\uc81c \uce74\ub4dc)" : "\ud074\ub9ad: \uc120\ud0dd"}
     >
-      {/* pinned 배지: '끌고 온 티' */}
+      {/* pinned badge */}
       {variant === "pinned" && (
         <div className="mb-1 flex items-center gap-2">
           <span className="rounded-md border border-emerald-700/60 bg-emerald-950/40 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">
             PINNED
           </span>
           <span className="text-[10px] text-zinc-500">
-            원본 카드는 아래 목록에 그대로 있음
+            {"\uc6d0\ubcf8 \uce74\ub4dc\ub294 \uc544\ub798 \ubaa9\ub85d\uc5d0 \uadf8\ub300\ub85c \uc788\uc74c"}
           </span>
         </div>
       )}
@@ -372,7 +395,7 @@ export default function UnitCard(props: {
         </div>
       )}
 
-      {/* 오른쪽 하단: 액션 버튼 */}
+      {/* details */}
       {!effectiveHideActions && (
         <div className="absolute right-3 bottom-2 flex flex-col items-end gap-1">
           <div className="flex items-center gap-1">
@@ -441,7 +464,7 @@ export default function UnitCard(props: {
         </div>
       )}
 
-      {/* 이름/별명 */}
+      {/* details */}
       <div className="flex items-start justify-between gap-2">
         <div
           className="min-w-0 font-medium leading-tight"
@@ -474,7 +497,7 @@ export default function UnitCard(props: {
         </div>
       </div>
 
-      {/* 상세 */}
+      {/* details */}
             <div className="mt-1 text-xs text-zinc-400">
         {/* HP/AC highlight for quick scan */}
         {u.hp ? (
@@ -487,7 +510,7 @@ export default function UnitCard(props: {
         ) : (
           <span className="text-red-400">HP -</span>
         )}{" "}
-        <span className="mx-2">•</span>
+        <span className="mx-2">/</span>
         {typeof u.acBase === "number" ? (
           <span className="text-yellow-300">
             AC <span className="font-semibold">{u.acBase}</span>
@@ -495,22 +518,21 @@ export default function UnitCard(props: {
         ) : (
           <span className="text-yellow-300">AC -</span>
         )}
-        <span className="mx-2">•</span>
+        <span className="mx-2">/</span>
         <span className="text-zinc-500">
           pos: {u.pos ? `(${u.pos.x},${u.pos.z})` : "-"}
         </span>
       </div>
 
-      {/* list에서는 tags 유지, pinned는 생략(덩치 줄여서 '복제 카드' 느낌 강화) */}
+      {/* list view tags */}
       <div className="mt-1 text-xs text-zinc-500">
         {tagsList.length === 0 && !hasHidden ? (
-          <span>적용중인 상태 없음</span>
+          <span>{"\uc801\uc6a9\uc911\uc778 \uc0c1\ud0dc \uc5c6\uc74c"}</span>
         ) : (
           <div className="flex flex-wrap gap-1.5">
-            {/* 태그는 칩 형태로 노출해 가독성을 확보 */}
             {hasHidden && (
               <span className="rounded-md border border-red-500/40 bg-red-950/40 px-2 py-0.5 text-[11px] font-semibold text-red-300">
-                숨겨짐
+                {"\uc228\uaca8\uc9d0"}
               </span>
             )}
             {tagsList.map((tag) => (

@@ -21,6 +21,7 @@ import type {
   Pos,
   Side,
   TurnEntry,
+  TurnGroup,
   Unit,
   UnitPatch,
 } from "./types";
@@ -31,6 +32,7 @@ import UnitsPanel from "./UnitsPanel";
 import BenchPanel from "./BenchPanel";
 import TurnOrderBar from "./TurnOrderBar";
 import TurnOrderReorderModal from "./TurnOrderReorderModal";
+import UnitPresetManager from "./UnitPresetManager";
 
 const LS_DEFAULT_CHANNEL = "operator.defaultChannelId";
 const LS_RECENT_CHANNELS = "operator.recentChannelIds";
@@ -103,6 +105,7 @@ function computeAutoView(
   return { minX: -radius, maxX: radius, minZ: viewMinZ, maxZ: viewMaxZ };
 }
 
+/*
 type MoveTurnEntryAction = {
   type: "MOVE_TURN_ENTRY";
   fromIndex: number;
@@ -188,6 +191,7 @@ function buildMoveTurnEntryActions(
   return { actions };
 }
 
+*/
 export default function App() {
   const [state, setState] = useState<EncounterState | null>(null);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
@@ -206,6 +210,7 @@ export default function App() {
     () => localStorage.getItem(LS_ENCOUNTER_ID) ?? ""
   );
   const [sessionSelected, setSessionSelected] = useState(false);
+  const [presetView, setPresetView] = useState(false);
   const [encounters, setEncounters] = useState<EncounterSummary[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null); // primary(대표) 선택
@@ -348,9 +353,11 @@ export default function App() {
   useEffect(() => {
     if (!authUser) {
       setSessionSelected(false);
+      setPresetView(false);
       return;
     }
     setSessionSelected(false);
+    setPresetView(false);
   }, [authUser?.id]);
 
   useEffect(() => {
@@ -617,6 +624,7 @@ export default function App() {
       setEncounterId("");
       setState(null);
       setSessionSelected(false);
+      setPresetView(false);
     }
   }
 
@@ -1154,29 +1162,28 @@ export default function App() {
   }
 
   async function applyTurnOrderReorder(
-    unitIds: string[],
+    turnOrder: TurnEntry[],
+    turnGroups: TurnGroup[],
     disabledChanges: { unitId: string; turnDisabled: boolean }[]
   ) {
-    const order = Array.isArray(state?.turnOrder) ? state.turnOrder : [];
     const patchActions = (disabledChanges ?? []).map((change) => ({
       type: "PATCH_UNIT",
       unitId: change.unitId,
       patch: { turnDisabled: change.turnDisabled },
     }));
-    if (order.length === 0) {
-      if (patchActions.length === 0) return false;
-      await run(patchActions);
-      return true;
-    }
 
-    const { actions, error } = buildMoveTurnEntryActions(order, unitIds);
-    if (error) {
-      setErr(error);
-      return false;
+    const actions: any[] = [];
+    if (Array.isArray(turnOrder)) {
+      actions.push({
+        type: "SET_TURN_ORDER",
+        turnOrder,
+        turnGroups: Array.isArray(turnGroups) ? turnGroups : [],
+      });
     }
-    const combined = [...actions, ...patchActions];
-    if (combined.length === 0) return true;
-    await run(combined);
+    actions.push(...patchActions);
+
+    if (actions.length === 0) return false;
+    await run(actions.length === 1 ? actions[0] : actions);
     return true;
   }
 
@@ -1198,6 +1205,32 @@ export default function App() {
   // ---------- Unit helpers ----------
   async function createUnit(payload: CreateUnitPayload) {
     await run({ type: "CREATE_UNIT", ...payload });
+  }
+
+  async function createUnitFromPreset(
+    payload: CreateUnitPayload,
+    patch?: UnitPatch | null,
+    deathSaves?: { success: number; failure: number }
+  ) {
+    if (!payload.unitId) {
+      throw new Error("preset create requires unitId");
+    }
+    const actions: any[] = [{ type: "CREATE_UNIT", ...payload }];
+    if (patch && Object.keys(patch).length > 0) {
+      actions.push({ type: "PATCH_UNIT", unitId: payload.unitId, patch });
+    }
+    if (
+      deathSaves &&
+      (deathSaves.success > 0 || deathSaves.failure > 0)
+    ) {
+      actions.push({
+        type: "EDIT_DEATH_SAVES",
+        unitId: payload.unitId,
+        success: deathSaves.success,
+        failure: deathSaves.failure,
+      });
+    }
+    await run(actions.length === 1 ? actions[0] : actions);
   }
 
   async function removeUnit(unitId: string) {
@@ -1295,7 +1328,7 @@ export default function App() {
     await run({ type: "GRANT_TEMP_TURN", unitId: selectedId });
   }
 
-  // Screen flow: login -> session list -> operator UI.
+  // Screen flow: login -> session list / presets -> operator UI.
   if (!authUser) {
     return (
       <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -1449,6 +1482,15 @@ export default function App() {
     );
   }
 
+  if (presetView) {
+    return (
+      <UnitPresetManager
+        authUser={authUser}
+        onBack={() => setPresetView(false)}
+      />
+    );
+  }
+
   if (!sessionSelected || !encounterId) {
     return (
       <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -1483,6 +1525,14 @@ export default function App() {
                 Session list
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="rounded-lg border border-emerald-700/60 bg-emerald-950/30 px-3 py-1.5 text-xs text-emerald-200 hover:bg-emerald-900/40"
+                  onClick={() => setPresetView(true)}
+                  disabled={busy}
+                >
+                  유닛 프리셋 관리
+                </button>
                 <button
                   type="button"
                   className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/60"
@@ -1685,6 +1735,7 @@ export default function App() {
             units={units}
             markers={markers}
             turnOrder={(state as any)?.turnOrder ?? []}
+            turnGroups={(state as any)?.turnGroups ?? []}
             turnOrderIndex={(state as any)?.turnIndex ?? 0}
             round={(state as any)?.round ?? 1}
             battleStarted={battleStarted}
@@ -2169,11 +2220,13 @@ export default function App() {
           open={reorderOpen}
           units={activeUnits}
           turnOrder={(state as any)?.turnOrder ?? []}
+          turnGroups={(state as any)?.turnGroups ?? []}
           busy={busy}
           onClose={() => setReorderOpen(false)}
-          onApply={async (unitIds, disabledChanges) => {
+          onApply={async (nextOrder, nextGroups, disabledChanges) => {
             const ok = await applyTurnOrderReorder(
-              unitIds,
+              nextOrder,
+              nextGroups,
               disabledChanges
             );
             if (ok) setReorderOpen(false);
@@ -2183,6 +2236,7 @@ export default function App() {
         <EditUnitModal
           open={!!editUnit}
           unit={editUnit}
+          units={units}
           busy={busy}
           onClose={() => setEditUnitId(null)}
           onSubmitPatch={async (unitId, patch) => {
@@ -2213,6 +2267,7 @@ export default function App() {
             onSelectUnit={selectUnit}
             onEditUnit={(unitId) => setEditUnitId(unitId)}
             onCreateUnit={createUnit}
+            onCreateUnitFromPreset={createUnitFromPreset}
             onRemoveUnit={removeUnit}
             onToggleHidden={toggleHidden}
             onReorderUnits={reorderUnits}

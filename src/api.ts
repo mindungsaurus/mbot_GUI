@@ -89,16 +89,102 @@ export async function authLogout() {
   return res.json();
 }
 
+export async function listUnitPresets() {
+  const res = await fetch(`${API_BASE}/unit-presets`, {
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createUnitPresetFolder(body: {
+  name?: string;
+  order?: number;
+  parentId?: string | null;
+}) {
+  const res = await fetch(`${API_BASE}/unit-presets/folders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateUnitPresetFolder(
+  id: string,
+  body: { name?: string; order?: number | null; parentId?: string | null }
+) {
+  const res = await fetch(`${API_BASE}/unit-presets/folders/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteUnitPresetFolder(id: string) {
+  const res = await fetch(`${API_BASE}/unit-presets/folders/${id}`, {
+    method: "DELETE",
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createUnitPreset(body: {
+  name?: string;
+  folderId?: string | null;
+  order?: number;
+  data?: any;
+}) {
+  const res = await fetch(`${API_BASE}/unit-presets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateUnitPreset(
+  id: string,
+  body: {
+    name?: string;
+    folderId?: string | null;
+    order?: number | null;
+    data?: any;
+  }
+) {
+  const res = await fetch(`${API_BASE}/unit-presets/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteUnitPreset(id: string) {
+  const res = await fetch(`${API_BASE}/unit-presets/${id}`, {
+    method: "DELETE",
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 // 이동/배치
-export const moveUnit = (
+export const moveUnit = (encounterId: string, unitId: string, dx = 0, dz = 0) =>
+  postAction(encounterId, { type: "MOVE_UNIT", unitId, dx, dz });
+
+export const setUnitPos = (
   encounterId: string,
   unitId: string,
-  dx = 0,
-  dz = 0
-) => postAction(encounterId, { type: "MOVE_UNIT", unitId, dx, dz });
-
-export const setUnitPos = (encounterId: string, unitId: string, x: number, z: number) =>
-  postAction(encounterId, { type: "SET_UNIT_POS", unitId, x, z });
+  x: number,
+  z: number,
+) => postAction(encounterId, { type: "SET_UNIT_POS", unitId, x, z });
 
 // 마커
 export const upsertMarker = (payload: {
@@ -122,7 +208,11 @@ export const removeMarker = (encounterId: string, markerId: string) =>
 export async function publish(
   encounterId: string,
   channelId: string,
-  opts?: { hideBench?: boolean; hideBenchTeam?: boolean; hideBenchEnemy?: boolean }
+  opts?: {
+    hideBench?: boolean;
+    hideBenchTeam?: boolean;
+    hideBenchEnemy?: boolean;
+  },
 ) {
   const res = await fetch(`${API_BASE}/encounters/${encounterId}/publish`, {
     method: "POST",

@@ -10,6 +10,9 @@ export interface HpPatch {
 export interface UnitPatch {
   name?: string;
   side?: Side;
+  alias?: string | null;
+  unitType?: UnitKind;
+  masterUnitId?: string | null;
   ac?: NumPatch | null;
   integrity?: NumPatch | null;
   hp?: HpPatch | null;
@@ -29,9 +32,17 @@ export interface UnitPatch {
 export type TurnEntry =
   | { kind: "unit"; unitId: string }
   | { kind: "label"; text: string }
-  | { kind: "marker"; markerId: string };
+  | { kind: "marker"; markerId: string }
+  | { kind: "group"; groupId: string };
+
+export type TurnGroup = {
+  id: string;
+  name: string;
+  unitIds: string[];
+};
 
 export type Side = "TEAM" | "ENEMY" | "NEUTRAL";
+export type UnitKind = "NORMAL" | "SERVANT" | "BUILDING";
 
 export type Pos = { x: number; z: number };
 
@@ -47,6 +58,8 @@ export type Unit = {
   hidden?: boolean;
   turnDisabled?: boolean;
   bench?: "TEAM" | "ENEMY";
+  unitType?: UnitKind;
+  masterUnitId?: string;
 
   pos?: Pos;
   hp?: { cur: number; max: number; temp?: number };
@@ -102,6 +115,7 @@ export type EncounterState = {
   markers?: Marker[];
 
   turnOrder?: TurnEntry[];
+  turnGroups?: TurnGroup[];
   turnIndex?: number;
   battleStarted?: boolean;
 
@@ -122,6 +136,28 @@ export type AuthUser = {
   username: string;
 };
 
+export type UnitPresetData = Omit<Unit, "id">;
+
+export type UnitPresetFolder = {
+  id: string;
+  name: string;
+  order: number;
+  parentId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type UnitPreset = {
+  id: string;
+  name: string;
+  ownerId?: string;
+  folderId?: string | null;
+  order?: number;
+  data: UnitPresetData;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 /**
  * ✅ UI에서 쓰는 CREATE_UNIT payload (backend CREATE_UNIT과 맞춤)
  * - unitId/alias/colorCode optional
@@ -133,6 +169,8 @@ export type CreateUnitPayload = {
   name: string;
   alias?: string;
   side: Side;
+  unitType?: UnitKind;
+  masterUnitId?: string;
   hpMax: number;
   acBase: number;
   x: number;
