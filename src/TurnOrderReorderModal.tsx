@@ -225,7 +225,8 @@ export default function TurnOrderReorderModal(props: {
     if (order.some((e) => e.kind === "group" && e.groupId === groupId)) {
       return order;
     }
-    return [...order, { kind: "group", groupId }];
+    const entry: TurnEntry = { kind: "group", groupId };
+    return [...order, entry];
   }
 
   function handleDragStartEntry(
