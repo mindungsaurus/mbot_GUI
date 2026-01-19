@@ -322,6 +322,15 @@ export default function App() {
     x: number;
     y: number;
   } | null>(null);
+  const [memoCopyToast, setMemoCopyToast] = useState(false);
+  const memoCopyTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (memoCopyTimerRef.current) {
+        window.clearTimeout(memoCopyTimerRef.current);
+      }
+    };
+  }, []);
   const [debugOpen, setDebugOpen] = useState(true);
   const [hideBenchTeamOnPublish, setHideBenchTeamOnPublish] = useState(false);
   const [hideBenchEnemyOnPublish, setHideBenchEnemyOnPublish] = useState(false);
@@ -1597,6 +1606,17 @@ export default function App() {
     setMemoViewId(unitId);
   }
 
+  function showMemoCopyToast() {
+    if (memoCopyTimerRef.current) {
+      window.clearTimeout(memoCopyTimerRef.current);
+    }
+    setMemoCopyToast(true);
+    memoCopyTimerRef.current = window.setTimeout(() => {
+      setMemoCopyToast(false);
+      memoCopyTimerRef.current = null;
+    }, 1400);
+  }
+
   function openBoardMenu(e: ReactMouseEvent, unitId: string) {
     e.preventDefault();
     e.stopPropagation();
@@ -2398,13 +2418,33 @@ export default function App() {
                       : memoViewUnit.name}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setMemoViewId(null)}
-                  className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-200 hover:bg-zinc-800/60"
-                >
-                  Close
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const text = memoViewUnit.note ?? "";
+                      if (!text) return;
+                      try {
+                        if (navigator.clipboard?.writeText) {
+                          await navigator.clipboard.writeText(text);
+                        }
+                      } finally {
+                        showMemoCopyToast();
+                      }
+                    }}
+                    className="rounded-lg border border-amber-700/60 bg-amber-950/40 px-3 py-2 text-xs text-amber-200 hover:bg-amber-900/60"
+                  >
+                    {memoCopyToast ? "✓ 복사됨" : "복사하기"}
+                  
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMemoViewId(null)}
+                    className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-200 hover:bg-zinc-800/60"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
               <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
                 <div className="text-xs text-zinc-400">메모</div>
