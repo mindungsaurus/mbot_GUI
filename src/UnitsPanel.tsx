@@ -17,7 +17,7 @@ import UnitCard from "./UnitCard";
 
 type CreateUnitForm = Omit<
   CreateUnitPayload,
-  "unitId" | "alias" | "colorCode"
+  "unitId" | "alias" | "colorCode" | "hpFormula"
 > & {
   unitId: string; // input용
   alias: string; // input용
@@ -84,6 +84,18 @@ function formatAnsiColorName(code?: number) {
     37: "흰색",
   };
   return map[code] ?? `코드 ${code}`;
+}
+
+function extractHpFormulaParams(expr?: string) {
+  if (!expr) return [];
+  const out = new Set<string>();
+  const regex = /\{([^}]+)\}/g;
+  let match: RegExpExecArray | null = null;
+  while ((match = regex.exec(expr))) {
+    const name = String(match[1] ?? "").trim();
+    if (name) out.add(name);
+  }
+  return Array.from(out);
 }
 
 function PlusIcon(props: { className?: string }) {
@@ -353,6 +365,11 @@ export default function UnitsPanel(props: {
   const [dragUnitId, setDragUnitId] = useState<string | null>(null);
   const [overUnitId, setOverUnitId] = useState<string | null>(null);
   const [reorderPending, setReorderPending] = useState(false);
+  const [unitMenu, setUnitMenu] = useState<{
+    id: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const unitListRef = useRef<HTMLDivElement | null>(null);
   const unitListSpacing = compactMode ? "space-y-1" : "space-y-2";
 
@@ -425,6 +442,7 @@ export default function UnitsPanel(props: {
       setPresetMasterId("");
     }
   }, [presetOpen, selectedPresetId, selected?.id, selected?.unitType, selectedPreset]);
+
 
   useEffect(() => {
     if (busy || dragUnitId || reorderPending) return;
@@ -622,6 +640,43 @@ export default function UnitsPanel(props: {
     const acBase = Math.max(0, Math.floor(Number(data.acBase ?? 0)));
     const x = clampInt(presetPos.x, 0);
     const z = clampInt(presetPos.z, 0);
+    const hpFormulaExpr =
+      typeof data.hpFormula?.expr === "string"
+        ? data.hpFormula.expr.trim()
+        : "";
+    let hpFormula: CreateUnitPayload["hpFormula"] | undefined = undefined;
+    if (hpFormulaExpr) {
+      const rawParams = data.hpFormula?.params ?? {};
+      const paramValues: Record<string, number> = {};
+      for (const [rawName, rawValue] of Object.entries(rawParams)) {
+        const name = String(rawName ?? "").trim();
+        if (!name) continue;
+        const parsed = Number(rawValue);
+        if (!Number.isFinite(parsed)) {
+          setPresetErr(`HP 공식 파라미터 "${name}" 값이 숫자가 아니야.`);
+          return;
+        }
+        paramValues[name] = parsed;
+      }
+      const requiredParams = extractHpFormulaParams(hpFormulaExpr);
+      const missing = requiredParams.filter(
+        (name) => paramValues[name] === undefined
+      );
+      if (missing.length > 0) {
+        setPresetErr(`HP 공식 파라미터가 누락됐어: ${missing.join(", ")}`);
+        return;
+      }
+      hpFormula = {
+        expr: hpFormulaExpr,
+        ...(Object.keys(paramValues).length > 0 ? { params: paramValues } : {}),
+        ...(typeof data.hpFormula?.min === "number"
+          ? { min: data.hpFormula.min }
+          : {}),
+        ...(typeof data.hpFormula?.max === "number"
+          ? { max: data.hpFormula.max }
+          : {}),
+      };
+    }
 
     const payload: CreateUnitPayload = {
       unitId,
@@ -631,6 +686,7 @@ export default function UnitsPanel(props: {
       ...(unitType === "SERVANT" ? { masterUnitId } : {}),
       ...(data.alias ? { alias: data.alias } : {}),
       hpMax,
+      ...(hpFormula ? { hpFormula } : {}),
       acBase,
       x,
       z,
@@ -639,14 +695,18 @@ export default function UnitsPanel(props: {
     };
 
     const patch: UnitPatch = {};
-    if (data.hp && typeof data.hp.max === "number") {
+    const tempValue =
+      typeof data.hp?.temp === "number" ? Number(data.hp.temp) : undefined;
+    if (!hpFormulaExpr && data.hp && typeof data.hp.max === "number") {
       const max = Math.max(0, Math.floor(Number(data.hp.max)));
       const cur = Math.max(0, Math.floor(Number(data.hp.cur ?? max)));
       patch.hp = {
         cur,
         max,
-        ...(typeof data.hp.temp === "number" ? { temp: data.hp.temp } : {}),
+        ...(typeof tempValue === "number" ? { temp: tempValue } : {}),
       };
+    } else if (typeof tempValue === "number") {
+      patch.hp = { temp: tempValue };
     }
     if (typeof data.integrityBase === "number") {
       patch.integrity = Math.max(0, Math.floor(Number(data.integrityBase)));
@@ -721,6 +781,13 @@ export default function UnitsPanel(props: {
     for (const u of units) map.set(u.id, u);
     return map;
   }, [units]);
+
+  function openUnitMenu(e: React.MouseEvent, unitId: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (busy) return;
+    setUnitMenu({ id: unitId, x: e.clientX, y: e.clientY });
+  }
   const baseOrder = useMemo(() => {
     return unitOrder.length ? unitOrder : units.map((u) => u.id);
   }, [unitOrder, units]);
@@ -1061,12 +1128,7 @@ export default function UnitsPanel(props: {
               additive: e.shiftKey || e.ctrlKey || e.metaKey,
             })
           }
-          onContextMenu={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (busy) return;
-            onToggleHidden(u.id);
-          }}
+          onContextMenu={(e) => openUnitMenu(e, u.id)}
           onEdit={() => onEditUnit(u.id)}
           onRemove={() => handleRemove(u)}
           onToggleHidden={() => onToggleHidden(u.id)}
@@ -1597,12 +1659,28 @@ export default function UnitsPanel(props: {
                     <div>
                       <span className="text-zinc-500">HP</span>
                       <span className="ml-2">
-                        {selectedPreset.data?.hp
-                          ? `${selectedPreset.data.hp.cur ?? 0}/${selectedPreset.data.hp.max ?? 0}` +
-                            (typeof selectedPreset.data.hp.temp === "number"
-                              ? ` (+${selectedPreset.data.hp.temp})`
+                        {selectedPreset.data?.hpFormula?.expr
+                          ? `공식: ${selectedPreset.data.hpFormula.expr}` +
+                            (typeof selectedPreset.data.hpFormula.min ===
+                              "number" ||
+                            typeof selectedPreset.data.hpFormula.max === "number"
+                              ? ` (${[
+                                  typeof selectedPreset.data.hpFormula.min ===
+                                  "number"
+                                    ? selectedPreset.data.hpFormula.min
+                                    : "-",
+                                  typeof selectedPreset.data.hpFormula.max ===
+                                  "number"
+                                    ? selectedPreset.data.hpFormula.max
+                                    : "-",
+                                ].join("~")})`
                               : "")
-                          : "없음"}
+                          : selectedPreset.data?.hp
+                            ? `${selectedPreset.data.hp.cur ?? 0}/${selectedPreset.data.hp.max ?? 0}` +
+                              (typeof selectedPreset.data.hp.temp === "number"
+                                ? ` (+${selectedPreset.data.hp.temp})`
+                                : "")
+                            : "없음"}
                       </span>
                     </div>
                     <div>
@@ -1797,12 +1875,7 @@ export default function UnitsPanel(props: {
             variant="pinned"
             density={compactMode ? "compact" : "normal"}
             onSelect={() => onSelectUnit(pinnedUnit.id, { additive: false })}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (busy) return;
-              onToggleHidden(pinnedUnit.id);
-            }}
+            onContextMenu={(e) => openUnitMenu(e, pinnedUnit.id)}
             onEdit={() => onEditUnit(pinnedUnit.id)}
             onRemove={() => handleRemove(pinnedUnit)}
             onToggleHidden={() => onToggleHidden(pinnedUnit.id)}
@@ -1919,6 +1992,56 @@ export default function UnitsPanel(props: {
             ))
           )}
         </div>
+      )}
+
+      {unitMenu && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setUnitMenu(null)}
+          />
+          <div
+            className="fixed z-50 w-44 rounded-md border border-zinc-800 bg-zinc-950 p-1 text-xs text-zinc-200 shadow-xl"
+            style={{ left: unitMenu.x, top: unitMenu.y }}
+          >
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-zinc-800/70"
+              onClick={() => {
+                const target = unitById.get(unitMenu.id);
+                setUnitMenu(null);
+                if (!target || busy) return;
+                onToggleHidden(target.id);
+              }}
+            >
+              숨겨짐 토글
+            </button>
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-zinc-800/70"
+              onClick={() => {
+                const target = unitById.get(unitMenu.id);
+                setUnitMenu(null);
+                if (!target || busy) return;
+                onEditUnit(target.id);
+              }}
+            >
+              유닛 편집
+            </button>
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-rose-200 hover:bg-rose-900/30"
+              onClick={() => {
+                const target = unitById.get(unitMenu.id);
+                setUnitMenu(null);
+                if (!target || busy) return;
+                handleRemove(target);
+              }}
+            >
+              유닛 삭제
+            </button>
+          </div>
+        </>
       )}
 
     </section>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   AuthUser,
   Side,
@@ -17,6 +17,7 @@ import {
   listUnitPresets,
   updateUnitPreset,
   updateUnitPresetFolder,
+  validateHpFormula,
 } from "./api";
 
 type EditTab = "INFO" | "STATUS" | "CONSUME" | "DEATH";
@@ -28,6 +29,7 @@ type DraftTagState = {
 };
 
 type ConsumableDraft = { name: string; count: number };
+type HpParamDraft = { id: string; name: string; value: string };
 
 function FolderGlyph() {
   return (
@@ -66,6 +68,54 @@ function normalizeCount(v: unknown, fallback = 0, min = 0) {
   const n = Math.trunc(Number(v));
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, n);
+}
+
+function extractHpFormulaParams(expr?: string) {
+  if (!expr) return [];
+  const out = new Set<string>();
+  const regex = /\{([^}]+)\}/g;
+  let match: RegExpExecArray | null = null;
+  while ((match = regex.exec(expr))) {
+    const name = String(match[1] ?? "").trim();
+    if (name) out.add(name);
+  }
+  return Array.from(out);
+}
+
+function renderHpFormulaHighlight(expr: string) {
+  if (!expr) return null;
+  const nodes: JSX.Element[] = [];
+  const regex = /\{[^}]*\}/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null = null;
+  while ((match = regex.exec(expr))) {
+    if (match.index > cursor) {
+      const plain = expr.slice(cursor, match.index);
+      nodes.push(
+        <span key={`plain-${cursor}`} className="text-zinc-200">
+          {plain}
+        </span>
+      );
+    }
+    const token = match[0];
+    const inner = token.slice(1, -1);
+    nodes.push(
+      <span key={`param-${match.index}`}>
+        <span className="text-sky-300">{"{"}</span>
+        <span className="text-yellow-300">{inner}</span>
+        <span className="text-sky-300">{"}"}</span>
+      </span>
+    );
+    cursor = match.index + token.length;
+  }
+  if (cursor < expr.length) {
+    nodes.push(
+      <span key={`plain-${cursor}`} className="text-zinc-200">
+        {expr.slice(cursor)}
+      </span>
+    );
+  }
+  return nodes;
 }
 
 function buildEmptyPreset(): UnitPresetData {
@@ -140,6 +190,15 @@ export default function UnitPresetManager(props: {
   const [hpCur, setHpCur] = useState("");
   const [hpMax, setHpMax] = useState("");
   const [hpTemp, setHpTemp] = useState("");
+  const [hpFormulaEnabled, setHpFormulaEnabled] = useState(false);
+  const [hpFormulaExpr, setHpFormulaExpr] = useState("");
+  const [hpFormulaMin, setHpFormulaMin] = useState("");
+  const [hpFormulaMax, setHpFormulaMax] = useState("");
+  const [hpParamModalOpen, setHpParamModalOpen] = useState(false);
+  const [hpParamDrafts, setHpParamDrafts] = useState<HpParamDraft[]>([]);
+  const [newHpParamName, setNewHpParamName] = useState("");
+  const [newHpParamValue, setNewHpParamValue] = useState("");
+  const hpFormulaRef = useRef<HTMLTextAreaElement | null>(null);
 
 
   const [manualTags, setManualTags] = useState<string[]>([]);
@@ -297,10 +356,47 @@ export default function UnitPresetManager(props: {
     );
 
     const hp = data.hp;
-    setHasHp(!!hp);
+    const hpFormula = (data as any).hpFormula;
+    const formulaExpr =
+      hpFormula && typeof hpFormula.expr === "string"
+        ? hpFormula.expr.trim()
+        : "";
+    const formulaEnabled = !!formulaExpr;
+
+    setHasHp(!!hp || formulaEnabled);
     setHpCur(hp ? String(hp.cur ?? 0) : "");
     setHpMax(hp ? String(hp.max ?? 0) : "");
     setHpTemp(hp && typeof hp.temp === "number" ? String(hp.temp) : "");
+
+    if (formulaEnabled) {
+      setHpFormulaEnabled(true);
+      setHpFormulaExpr(formulaExpr);
+      setHpFormulaMin(
+        typeof hpFormula.min === "number" ? String(hpFormula.min) : ""
+      );
+      setHpFormulaMax(
+        typeof hpFormula.max === "number" ? String(hpFormula.max) : ""
+      );
+    } else {
+      setHpFormulaEnabled(false);
+      setHpFormulaExpr("");
+      setHpFormulaMin("");
+      setHpFormulaMax("");
+    }
+
+    const paramEntries = Object.entries(
+      (hpFormula?.params as Record<string, number> | undefined) ?? {}
+    );
+    setHpParamDrafts(
+      paramEntries.map(([key, value]) => ({
+        id: `${key}-${Math.random().toString(36).slice(2, 8)}`,
+        name: key,
+        value: Number.isFinite(value) ? String(value) : "",
+      }))
+    );
+    setNewHpParamName("");
+    setNewHpParamValue("");
+    setHpParamModalOpen(false);
 
 
     const rawTags = Array.isArray(data.tags) ? data.tags : [];
@@ -352,6 +448,13 @@ export default function UnitPresetManager(props: {
     setNewConsumableName("");
     setNewConsumableCount(1);
   }, [selectedPresetId]);
+
+  useEffect(() => {
+    if (!hpFormulaRef.current) return;
+    const el = hpFormulaRef.current;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [hpFormulaExpr, hpFormulaEnabled, selectedPresetId]);
 
   async function loadPresets(preferId?: string) {
     setBusy(true);
@@ -661,14 +764,76 @@ export default function UnitPresetManager(props: {
       const name = normalizeTagName(entry.name);
       if (!name) continue;
       if (desiredConsumables[name] !== undefined) {
-        setErr("Consumable names must be unique.");
+        setErr("고유 소모값 이름은 중복될 수 없어.");
         return;
       }
       desiredConsumables[name] = normalizeCount(entry.count, 0);
     }
 
+    const formulaExpr = hpFormulaExpr.trim();
+    if (hpFormulaEnabled && !formulaExpr) {
+      setErr("HP 공식이 비어 있어요.");
+      return;
+    }
+    const formulaMinRaw = hpFormulaMin.trim();
+    const formulaMaxRaw = hpFormulaMax.trim();
+    const formulaMin = formulaMinRaw.length ? Number(formulaMinRaw) : undefined;
+    const formulaMax = formulaMaxRaw.length ? Number(formulaMaxRaw) : undefined;
+    if (formulaMinRaw.length && !Number.isFinite(formulaMin)) {
+      setErr("HP 공식 최소값은 숫자여야 해요.");
+      return;
+    }
+    if (formulaMaxRaw.length && !Number.isFinite(formulaMax)) {
+      setErr("HP 공식 최대값은 숫자여야 해요.");
+      return;
+    }
+    if (
+      Number.isFinite(formulaMin) &&
+      Number.isFinite(formulaMax) &&
+      (formulaMin as number) > (formulaMax as number)
+    ) {
+      setErr("HP 공식 최소값은 최대값보다 클 수 없어요.");
+      return;
+    }
+
+    const nextHpParams: Record<string, number> = {};
+    for (const entry of hpParamDrafts) {
+      const name = normalizeTagName(entry.name);
+      if (!name) continue;
+      if (nextHpParams[name] !== undefined) {
+        setErr("HP 공식 파라미터 이름은 중복될 수 없어요.");
+        return;
+      }
+      const raw = entry.value.trim();
+      if (!raw) {
+        if (hpFormulaEnabled) {
+          setErr(`HP 공식 파라미터 "${name}" 값을 입력해줘.`);
+          return;
+        }
+        continue;
+      }
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) {
+        setErr(`HP 공식 파라미터 "${name}" 값이 숫자가 아니야.`);
+        return;
+      }
+      nextHpParams[name] = parsed;
+    }
+
+    const useFormula = hpFormulaEnabled && !!formulaExpr;
+    if (useFormula) {
+      const requiredParams = extractHpFormulaParams(formulaExpr);
+      const missing = requiredParams.filter(
+        (name) => nextHpParams[name] === undefined
+      );
+      if (missing.length > 0) {
+        setErr(`HP 공식 파라미터가 누락됐어요: ${missing.join(", ")}`);
+        return;
+      }
+    }
+
     const nextPresetName = presetName.trim() || "이름 없는 프리셋";
-    const nextUnitName = name.trim() || "유닛";
+    const nextUnitName = name.trim() || "이름 없는 유닛";
 
     const nextData: UnitPresetData = {
       name: nextUnitName,
@@ -688,6 +853,16 @@ export default function UnitPresetManager(props: {
             cur: normalizeCount(hpCur, 0),
             max: normalizeCount(hpMax, 0),
             temp: hpTemp.trim() ? normalizeCount(hpTemp, 0) : undefined,
+          }
+        : undefined,
+      hpFormula: useFormula
+        ? {
+            expr: formulaExpr,
+            ...(Object.keys(nextHpParams).length > 0
+              ? { params: nextHpParams }
+              : {}),
+            ...(Number.isFinite(formulaMin) ? { min: formulaMin } : {}),
+            ...(Number.isFinite(formulaMax) ? { max: formulaMax } : {}),
           }
         : undefined,
       tags: desiredManual,
@@ -710,6 +885,16 @@ export default function UnitPresetManager(props: {
     setBusy(true);
     try {
       setErr(null);
+      if (useFormula) {
+        await validateHpFormula({
+          expr: formulaExpr,
+          ...(Object.keys(nextHpParams).length > 0
+            ? { params: nextHpParams }
+            : {}),
+          ...(Number.isFinite(formulaMin) ? { min: formulaMin } : {}),
+          ...(Number.isFinite(formulaMax) ? { max: formulaMax } : {}),
+        });
+      }
       const updated = (await updateUnitPreset(selectedPreset.id, {
         name: nextPresetName,
         folderId: presetFolderId,
@@ -1358,40 +1543,138 @@ export default function UnitPresetManager(props: {
                       />
                     </div>
 
-                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/30 p-3">
-                      <div className="mb-2 text-xs font-semibold text-rose-300">
-                        HP
-                      </div>
+                    <div className="md:col-span-2 grid grid-cols-1 gap-3 md:grid-cols-[2fr_1fr]">
+                      <div className="rounded-xl border border-zinc-800 bg-zinc-950/30 p-3">
+                        <div className="mb-2 text-xs font-semibold text-rose-300">
+                          HP
+                        </div>
                       <label className="mb-2 flex items-center gap-2 text-xs text-zinc-400">
                         <input
                           type="checkbox"
                           checked={hasHp}
-                          onChange={(e) => setHasHp(e.target.checked)}
+                          onChange={(e) => {
+                            const next = e.target.checked;
+                            setHasHp(next);
+                            if (!next) setHpFormulaEnabled(false);
+                          }}
                           disabled={busy}
                         />
                         HP 사용
                       </label>
+                      <label className="mb-2 flex items-center gap-2 text-xs text-zinc-400">
+                        <input
+                          type="checkbox"
+                          checked={hpFormulaEnabled}
+                          onChange={(e) => {
+                            const next = e.target.checked;
+                            setHpFormulaEnabled(next);
+                            if (next && !hasHp) setHasHp(true);
+                          }}
+                          disabled={busy || !hasHp}
+                        />
+                        공식형 HP 사용
+                      </label>
+                      {hpFormulaEnabled && hasHp && (
+                        <div className="mb-2 rounded-lg border border-zinc-800/70 bg-zinc-950/60 p-2">
+                          <label className="text-[11px] text-zinc-400">
+                            HP 공식
+                          </label>
+                          <div className="relative mt-1">
+                            <div className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words rounded-md px-2 py-1 text-sm leading-6 text-zinc-200">
+                              {renderHpFormulaHighlight(hpFormulaExpr)}
+                            </div>
+                            <textarea
+                              ref={hpFormulaRef}
+                              rows={2}
+                              value={hpFormulaExpr}
+                              onChange={(e) => setHpFormulaExpr(e.target.value)}
+                              onInput={(e) => {
+                                const el = e.currentTarget;
+                                el.style.height = "auto";
+                                el.style.height = `${el.scrollHeight}px`;
+                              }}
+                              disabled={busy}
+                              placeholder="예: (4D4 * {건강 보정} + 20) * {난이도 보정}"
+                              style={{ minHeight: "2.75rem" }}
+                              className="relative w-full resize-none overflow-hidden rounded-md border border-zinc-800 bg-transparent px-2 py-1 text-sm leading-6 text-transparent caret-amber-200 outline-none focus:border-zinc-600 placeholder:text-zinc-600"
+                            />
+                          </div>
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            <label className="text-[11px] text-rose-300">
+                              최소값
+                              <input
+                                type="number"
+                                value={hpFormulaMin}
+                                onChange={(e) => setHpFormulaMin(e.target.value)}
+                                disabled={busy}
+                                className="mt-1 w-full rounded-md border border-rose-900/40 bg-zinc-950 px-2 py-1 text-xs text-rose-200 outline-none focus:border-rose-700/60"
+                              />
+                            </label>
+                            <label className="text-[11px] text-rose-300">
+                              최대값
+                              <input
+                                type="number"
+                                value={hpFormulaMax}
+                                onChange={(e) => setHpFormulaMax(e.target.value)}
+                                disabled={busy}
+                                className="mt-1 w-full rounded-md border border-rose-900/40 bg-zinc-950 px-2 py-1 text-xs text-rose-200 outline-none focus:border-rose-700/60"
+                              />
+                            </label>
+                          </div>
+                          <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-zinc-500">
+                            <span>공식 파라미터는 별도 모달에서 관리해요.</span>
+                            <button
+                              type="button"
+                              onClick={() => setHpParamModalOpen(true)}
+                              disabled={busy}
+                              className="rounded-md border border-zinc-700 px-2 py-1 text-[11px] text-zinc-200 hover:bg-zinc-800/60"
+                            >
+                              매개변수 관리
+                            </button>
+                          </div>
+                        </div>
+                      )}
                       <div className="grid grid-cols-3 gap-2">
-                        <label className="text-[11px] text-rose-300">
+                        <label
+                          className={[
+                            "text-[11px]",
+                            hpFormulaEnabled ? "text-zinc-500" : "text-rose-300",
+                          ].join(" ")}
+                        >
                           현재
                           <input
                             type="number"
                             min={0}
                             value={hpCur}
                             onChange={(e) => setHpCur(e.target.value)}
-                            disabled={busy || !hasHp}
-                            className="mt-1 w-full rounded-lg border border-rose-900/40 bg-zinc-950 px-2 py-1 text-xs text-rose-200 outline-none focus:border-rose-700/60"
+                            disabled={busy || !hasHp || hpFormulaEnabled}
+                            className={[
+                              "mt-1 w-full rounded-lg bg-zinc-950 px-2 py-1 text-xs outline-none",
+                              hpFormulaEnabled
+                                ? "border border-zinc-800/60 text-zinc-500"
+                                : "border border-rose-900/40 text-rose-200 focus:border-rose-700/60",
+                            ].join(" ")}
                           />
                         </label>
-                        <label className="text-[11px] text-rose-300">
+                        <label
+                          className={[
+                            "text-[11px]",
+                            hpFormulaEnabled ? "text-zinc-500" : "text-rose-300",
+                          ].join(" ")}
+                        >
                           최대
                           <input
                             type="number"
                             min={0}
                             value={hpMax}
                             onChange={(e) => setHpMax(e.target.value)}
-                            disabled={busy || !hasHp}
-                            className="mt-1 w-full rounded-lg border border-rose-900/40 bg-zinc-950 px-2 py-1 text-xs text-rose-200 outline-none focus:border-rose-700/60"
+                            disabled={busy || !hasHp || hpFormulaEnabled}
+                            className={[
+                              "mt-1 w-full rounded-lg bg-zinc-950 px-2 py-1 text-xs outline-none",
+                              hpFormulaEnabled
+                                ? "border border-zinc-800/60 text-zinc-500"
+                                : "border border-rose-900/40 text-rose-200 focus:border-rose-700/60",
+                            ].join(" ")}
                           />
                         </label>
                         <label className="text-[11px] text-emerald-300">
@@ -1406,39 +1689,40 @@ export default function UnitPresetManager(props: {
                           />
                         </label>
                       </div>
+                      </div>
+
+                      <div className="rounded-xl border border-zinc-800 bg-zinc-950/30 p-3">
+                        <div className="mb-2 text-xs font-semibold text-zinc-200">
+                          기본 능력치
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-zinc-400">
+                            <span className="text-yellow-300">AC</span>
+                            <input
+                              type="number"
+                              min={0}
+                              value={acBase}
+                              onChange={(e) => setAcBase(e.target.value)}
+                              disabled={busy}
+                              className="mt-1 w-full rounded-lg border border-yellow-900/40 bg-zinc-950 px-2 py-1 text-xs text-yellow-200 outline-none focus:border-yellow-700/60"
+                            />
+                          </label>
+                          <label className="text-[11px] text-purple-300">
+                            무결성
+                            <input
+                              type="number"
+                              min={0}
+                              value={integrityBase}
+                              onChange={(e) => setIntegrityBase(e.target.value)}
+                              disabled={busy}
+                              className="mt-1 w-full rounded-lg border border-purple-900/40 bg-zinc-950 px-2 py-1 text-xs text-purple-200 outline-none focus:border-purple-700/60"
+                            />
+                          </label>
+                        </div>
+                      </div>
                     </div>
 
-                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/30 p-3">
-                      <div className="mb-2 text-xs font-semibold text-zinc-200">
-                        기본 능력치
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <label className="text-[11px] text-zinc-400">
-                          <span className="text-yellow-300">AC</span>
-                          <input
-                            type="number"
-                            min={0}
-                            value={acBase}
-                            onChange={(e) => setAcBase(e.target.value)}
-                            disabled={busy}
-                            className="mt-1 w-full rounded-lg border border-yellow-900/40 bg-zinc-950 px-2 py-1 text-xs text-yellow-200 outline-none focus:border-yellow-700/60"
-                          />
-                        </label>
-                        <label className="text-[11px] text-purple-300">
-                        무결성
-                          <input
-                            type="number"
-                            min={0}
-                            value={integrityBase}
-                            onChange={(e) => setIntegrityBase(e.target.value)}
-                            disabled={busy}
-                            className="mt-1 w-full rounded-lg border border-purple-900/40 bg-zinc-950 px-2 py-1 text-xs text-purple-200 outline-none focus:border-purple-700/60"
-                          />
-                        </label>
-                      </div>
-                    </div>
-
-                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/30 p-3">
+                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/30 p-3 md:col-span-2">
                       <div className="mb-2 text-xs font-semibold text-zinc-200">
                         상태 플래그
                       </div>
@@ -1885,6 +2169,184 @@ export default function UnitPresetManager(props: {
           </section>
         </div>
       </div>
+      {hpParamModalOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/60"
+            onClick={() => setHpParamModalOpen(false)}
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="w-full max-w-lg rounded-xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="text-sm font-semibold text-zinc-200">
+                  HP 공식 파라미터
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setHpParamModalOpen(false)}
+                  className="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800/60"
+                >
+                  닫기
+                </button>
+              </div>
+              {hpFormulaExpr.trim() ? (
+                <div className="mb-3 flex flex-wrap items-start gap-2 text-[11px]">
+                  <div className="min-w-[220px] flex-1 text-zinc-500">
+                    <span>공식: </span>
+                    <span className="whitespace-pre-wrap break-words">
+                      {renderHpFormulaHighlight(hpFormulaExpr.trim())}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const names = extractHpFormulaParams(
+                        hpFormulaExpr.trim()
+                      );
+                      if (names.length === 0) {
+                        setHpParamDrafts([]);
+                        return;
+                      }
+                      setHpParamDrafts((prev) => {
+                        const byName = new Map(
+                          prev.map((item) => [
+                            normalizeTagName(item.name),
+                            item,
+                          ])
+                        );
+                        return names.map((name, idx) => {
+                          const existing = byName.get(name);
+                          return {
+                            id:
+                              existing?.id ??
+                              `param_${Date.now()}_${idx}`,
+                            name,
+                            value: existing?.value ?? "",
+                          };
+                        });
+                      });
+                    }}
+                    disabled={busy}
+                    className="shrink-0 whitespace-nowrap rounded-md border border-amber-700/60 bg-amber-950/40 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-900/40"
+                  >
+                    공식 기준 자동 정리
+                  </button>
+                </div>
+              ) : (
+                <div className="mb-3 text-[11px] text-zinc-500">
+                  HP 공식이 비어 있습니다.
+                </div>
+              )}
+
+              <div className="space-y-2">
+                {hpParamDrafts.length === 0 ? (
+                  <div className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-500">
+                    등록된 매개변수가 없습니다.
+                  </div>
+                ) : (
+                  hpParamDrafts.map((param) => (
+                    <div
+                      key={param.id}
+                      className="grid grid-cols-[1fr_120px_auto] gap-2"
+                    >
+                      <input
+                        value={param.name}
+                        onChange={(e) =>
+                          setHpParamDrafts((prev) =>
+                            prev.map((item) =>
+                              item.id === param.id
+                                ? { ...item, name: e.target.value }
+                                : item
+                            )
+                          )
+                        }
+                        placeholder="이름"
+                        className="rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-zinc-600"
+                      />
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={param.value}
+                        onChange={(e) =>
+                          setHpParamDrafts((prev) =>
+                            prev.map((item) =>
+                              item.id === param.id
+                                ? { ...item, value: e.target.value }
+                                : item
+                            )
+                          )
+                        }
+                        placeholder="값"
+                        className="rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-zinc-600"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setHpParamDrafts((prev) =>
+                            prev.filter((item) => item.id !== param.id)
+                          )
+                        }
+                        className="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800/60"
+                      >
+                        삭제
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
+                <div className="mb-2 text-xs font-semibold text-zinc-200">
+                  새 매개변수 추가
+                </div>
+                <div className="grid grid-cols-[1fr_120px_auto] gap-2">
+                  <input
+                    value={newHpParamName}
+                    onChange={(e) => setNewHpParamName(e.target.value)}
+                    placeholder="이름"
+                    className="rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-zinc-600"
+                  />
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={newHpParamValue}
+                    onChange={(e) => setNewHpParamValue(e.target.value)}
+                    placeholder="값"
+                    className="rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-zinc-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const name = normalizeTagName(newHpParamName);
+                      if (!name) return;
+                      setHpParamDrafts((prev) => [
+                        ...prev,
+                        {
+                          id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                          name,
+                          value: newHpParamValue.trim(),
+                        },
+                      ]);
+                      setNewHpParamName("");
+                      setNewHpParamValue("");
+                    }}
+                    className="rounded-md border border-amber-700/60 bg-amber-950/30 px-2 py-1 text-xs text-amber-200 hover:bg-amber-900/40"
+                  >
+                    추가
+                  </button>
+                </div>
+                {hpFormulaExpr.trim() ? (
+                  <div className="mt-2 text-[11px] text-zinc-500">
+                    공식에 포함된 변수:{" "}
+                    {extractHpFormulaParams(hpFormulaExpr.trim()).join(", ") ||
+                      "없음"}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
       {folderMenu && activeMenuFolder && (
         <>
           <div

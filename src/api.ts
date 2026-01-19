@@ -175,6 +175,21 @@ export async function deleteUnitPreset(id: string) {
   return res.json();
 }
 
+export async function validateHpFormula(body: {
+  expr: string;
+  params?: Record<string, number>;
+  min?: number;
+  max?: number;
+}) {
+  const res = await fetch(`${API_BASE}/unit-presets/validate-hp-formula`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 // 이동/배치
 export const moveUnit = (encounterId: string, unitId: string, dx = 0, dz = 0) =>
   postAction(encounterId, { type: "MOVE_UNIT", unitId, dx, dz });

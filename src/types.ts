@@ -136,7 +136,16 @@ export type AuthUser = {
   username: string;
 };
 
-export type UnitPresetData = Omit<Unit, "id">;
+export type HpFormula = {
+  expr: string;
+  params?: Record<string, number>;
+  min?: number;
+  max?: number;
+};
+
+export type UnitPresetData = Omit<Unit, "id"> & {
+  hpFormula?: HpFormula;
+};
 
 export type UnitPresetFolder = {
   id: string;
@@ -171,6 +180,12 @@ export type CreateUnitPayload = {
   side: Side;
   unitType?: UnitKind;
   masterUnitId?: string;
+  hpFormula?: {
+    expr: string;
+    params?: Record<string, number>;
+    min?: number;
+    max?: number;
+  };
   hpMax: number;
   acBase: number;
   x: number;
