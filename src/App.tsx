@@ -1,5 +1,11 @@
 // src/App.tsx
-import { useEffect, useMemo, useState, useRef, type MouseEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  useRef,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import {
   authLogin,
   authLogout,
@@ -867,7 +873,7 @@ export default function App() {
   useEffect(() => {
     if (!markerEmojiOpen) return;
     // Close emoji popover when clicking outside the alias input area.
-    const handleClick = (event: MouseEvent) => {
+    const handleClick = (event: globalThis.MouseEvent) => {
       const target = event.target as Node | null;
       if (!target) return;
       if (markerEmojiRef.current?.contains(target)) return;
@@ -1591,7 +1597,7 @@ export default function App() {
     setMemoViewId(unitId);
   }
 
-  function openBoardMenu(e: MouseEvent, unitId: string) {
+  function openBoardMenu(e: ReactMouseEvent, unitId: string) {
     e.preventDefault();
     e.stopPropagation();
     setBoardMenu({ id: unitId, x: e.clientX, y: e.clientY });
