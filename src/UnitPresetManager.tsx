@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type {
   AuthUser,
   Side,
@@ -84,7 +85,7 @@ function extractHpFormulaParams(expr?: string) {
 
 function renderHpFormulaHighlight(expr: string) {
   if (!expr) return null;
-  const nodes: JSX.Element[] = [];
+  const nodes: ReactNode[] = [];
   const regex = /\{[^}]*\}/g;
   let cursor = 0;
   let match: RegExpExecArray | null = null;
