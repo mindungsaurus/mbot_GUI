@@ -1,5 +1,5 @@
 ﻿// src/Board.tsx
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, type MouseEvent } from "react";
 import type { Marker, Pos, Unit } from "./types";
 import { unitTextColor } from "./UnitColor";
 
@@ -15,6 +15,7 @@ export default function Board(props: {
   selectedIds: string[];
   selectedId: string | null; // primary
   onSelectUnit: (id: string, opts?: { additive?: boolean }) => void;
+  onOpenUnitMenu?: (e: MouseEvent, unitId: string) => void;
   view: View;
   maxHeightPx?: number;
   markerSelectActive?: boolean;
@@ -29,6 +30,7 @@ export default function Board(props: {
     selectedIds,
     selectedId,
     onSelectUnit,
+    onOpenUnitMenu,
     view,
     maxHeightPx = 520,
     markerSelectActive = false,
@@ -310,6 +312,12 @@ export default function Board(props: {
                                       additive:
                                         e.shiftKey || e.ctrlKey || e.metaKey,
                                     });
+                                  }}
+                                  onContextMenu={(e) => {
+                                    if (!onOpenUnitMenu) return;
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    onOpenUnitMenu(e, u.id);
                                   }}
                                   className={[
                                     "block w-full truncate rounded-md border px-1.5 py-0.5 text-left",

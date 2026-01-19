@@ -1,5 +1,5 @@
 // src/App.tsx
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useEffect, useMemo, useState, useRef, type MouseEvent } from "react";
 import {
   authLogin,
   authLogout,
@@ -33,11 +33,101 @@ import BenchPanel from "./BenchPanel";
 import TurnOrderBar from "./TurnOrderBar";
 import TurnOrderReorderModal from "./TurnOrderReorderModal";
 import UnitPresetManager from "./UnitPresetManager";
+import { ansiColorCodeToCss } from "./UnitColor";
 
 const LS_DEFAULT_CHANNEL = "operator.defaultChannelId";
 const LS_RECENT_CHANNELS = "operator.recentChannelIds";
 const LS_AUTH_TOKEN = "operator.auth.token";
 const LS_ENCOUNTER_ID = "operator.encounterId";
+
+type AnsiSegment = {
+  text: string;
+  color?: string;
+  bold?: boolean;
+};
+
+function normalizeAnsiMemo(raw: string | null | undefined) {
+  let text = String(raw ?? "");
+  const fenced =
+    text.match(/```ansi\s*([\s\S]*?)```/i) || text.match(/```\s*([\s\S]*?)```/);
+  if (fenced) text = fenced[1];
+  const esc = "\x1b[";
+  text = text.split("\\u001b[").join(esc);
+  text = text.split("\\x1b[").join(esc);
+  return text;
+}
+
+function parseAnsiSegments(input: string): AnsiSegment[] {
+  const segments: AnsiSegment[] = [];
+  const re = /\u001b\[([0-9;]*)m/g;
+  let last = 0;
+  let bold = false;
+  let color: string | undefined = undefined;
+  let match: RegExpExecArray | null = null;
+
+  while ((match = re.exec(input))) {
+    if (match.index > last) {
+      segments.push({ text: input.slice(last, match.index), color, bold });
+    }
+
+    const raw = match[1] ?? "";
+    const codes = raw
+      .split(";")
+      .filter((part) => part.length > 0)
+      .map((part) => Number(part));
+
+    const seq = codes.length > 0 ? codes : [0];
+    for (const code of seq) {
+      if (!Number.isFinite(code)) continue;
+      if (code === 0) {
+        bold = false;
+        color = undefined;
+        continue;
+      }
+      if (code === 1) {
+        bold = true;
+        continue;
+      }
+      if (code === 22) {
+        bold = false;
+        continue;
+      }
+      if (code === 39) {
+        color = undefined;
+        continue;
+      }
+      if (code === 38) {
+        color = ansiColorCodeToCss(30);
+        continue;
+      }
+      const next = ansiColorCodeToCss(code);
+      if (next) color = next;
+    }
+
+    last = re.lastIndex;
+  }
+
+  if (last < input.length) {
+    segments.push({ text: input.slice(last), color, bold });
+  }
+
+  return segments;
+}
+
+function renderAnsiMemo(text: string) {
+  const segments = parseAnsiSegments(text);
+  return segments.map((seg, idx) => (
+    <span
+      key={`${idx}-${seg.text.length}`}
+      style={{
+        color: seg.color,
+        fontWeight: seg.bold ? 700 : 400,
+      }}
+    >
+      {seg.text}
+    </span>
+  ));
+}
 
 function sanitizeChannelId(input: string): string {
   return (input ?? "").replace(/\D/g, "");
@@ -220,6 +310,12 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [reorderOpen, setReorderOpen] = useState(false);
   const [editUnitId, setEditUnitId] = useState<string | null>(null);
+  const [memoViewId, setMemoViewId] = useState<string | null>(null);
+  const [boardMenu, setBoardMenu] = useState<{
+    id: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const [debugOpen, setDebugOpen] = useState(true);
   const [hideBenchTeamOnPublish, setHideBenchTeamOnPublish] = useState(false);
   const [hideBenchEnemyOnPublish, setHideBenchEnemyOnPublish] = useState(false);
@@ -288,6 +384,15 @@ export default function App() {
     () => (editUnitId ? units.find((u) => u.id === editUnitId) ?? null : null),
     [editUnitId, units]
   );
+  const memoViewUnit = useMemo(
+    () => (memoViewId ? units.find((u) => u.id === memoViewId) ?? null : null),
+    [memoViewId, units]
+  );
+  const memoViewContent = useMemo(() => {
+    if (!memoViewUnit?.note?.trim()) return null;
+    const normalized = normalizeAnsiMemo(memoViewUnit.note);
+    return renderAnsiMemo(normalized);
+  }, [memoViewUnit?.note]);
   const markers: Marker[] = useMemo(() => state?.markers ?? [], [state]);
   const logEntries = useMemo(() => {
     const logs = state?.logs ?? [];
@@ -1482,6 +1587,16 @@ export default function App() {
     );
   }
 
+  function openMemoView(unitId: string) {
+    setMemoViewId(unitId);
+  }
+
+  function openBoardMenu(e: MouseEvent, unitId: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    setBoardMenu({ id: unitId, x: e.clientX, y: e.clientY });
+  }
+
   if (presetView) {
     return (
       <UnitPresetManager
@@ -1763,6 +1878,7 @@ export default function App() {
             selectedId={selectedId}
             selectedIds={selectedIds}
             onSelectUnit={selectUnit}
+            onOpenUnitMenu={openBoardMenu}
             markerSelectActive={markerCreateOpen}
             selectedMarkerCells={markerSelectedCells}
             onSelectCell={handleMarkerCellSelect}
@@ -2253,6 +2369,112 @@ export default function App() {
           }}
         />
 
+        {memoViewUnit && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Memo view modal"
+          >
+            <div
+              className="absolute inset-0 bg-black/60"
+              onClick={() => setMemoViewId(null)}
+            />
+            <div className="relative z-10 w-[min(640px,92vw)] rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-base font-semibold text-zinc-100">
+                    메모 확인
+                  </div>
+                  <div className="mt-1 text-xs text-zinc-500">
+                    {memoViewUnit.alias
+                      ? `${memoViewUnit.name} (${memoViewUnit.alias})`
+                      : memoViewUnit.name}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMemoViewId(null)}
+                  className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-200 hover:bg-zinc-800/60"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
+                <div className="text-xs text-zinc-400">메모</div>
+                <div
+                  className="mt-2 max-h-[50vh] overflow-y-auto whitespace-pre-wrap font-mono text-[12px] leading-5 text-zinc-200"
+                  style={{ fontSynthesis: "weight" }}
+                >
+                  {memoViewContent ?? "메모 없음"}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {boardMenu && (
+          <>
+            <div
+              className="fixed inset-0 z-40"
+              onClick={() => setBoardMenu(null)}
+            />
+            <div
+              className="fixed z-50 w-44 rounded-md border border-zinc-800 bg-zinc-950 p-1 text-xs text-zinc-200 shadow-xl"
+              style={{ left: boardMenu.x, top: boardMenu.y }}
+            >
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-zinc-800/70"
+                onClick={() => {
+                  const target = units.find((u) => u.id === boardMenu.id);
+                  setBoardMenu(null);
+                  if (!target || busy) return;
+                  openMemoView(target.id);
+                }}
+              >
+                메모 확인
+              </button>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-zinc-800/70"
+                onClick={() => {
+                  const target = units.find((u) => u.id === boardMenu.id);
+                  setBoardMenu(null);
+                  if (!target || busy) return;
+                  toggleHidden(target.id);
+                }}
+              >
+                숨겨짐 토글
+              </button>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-zinc-800/70"
+                onClick={() => {
+                  const target = units.find((u) => u.id === boardMenu.id);
+                  setBoardMenu(null);
+                  if (!target || busy) return;
+                  setEditUnitId(target.id);
+                }}
+              >
+                유닛 편집
+              </button>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-rose-200 hover:bg-rose-900/30"
+                onClick={() => {
+                  const target = units.find((u) => u.id === boardMenu.id);
+                  setBoardMenu(null);
+                  if (!target || busy) return;
+                  removeUnit(target.id);
+                }}
+              >
+                유닛 삭제
+              </button>
+            </div>
+          </>
+        )}
+
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {/* Units */}
           <UnitsPanel
@@ -2270,6 +2492,7 @@ export default function App() {
             onCreateUnitFromPreset={createUnitFromPreset}
             onRemoveUnit={removeUnit}
             onToggleHidden={toggleHidden}
+            onViewMemo={openMemoView}
             onReorderUnits={reorderUnits}
             onToggleMarkerCreate={toggleMarkerCreate}
             onUpsertMarker={upsertMarkerFromPanel}

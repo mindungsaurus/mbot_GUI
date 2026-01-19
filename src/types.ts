@@ -180,6 +180,7 @@ export type CreateUnitPayload = {
   side: Side;
   unitType?: UnitKind;
   masterUnitId?: string;
+  note?: string;
   hpFormula?: {
     expr: string;
     params?: Record<string, number>;

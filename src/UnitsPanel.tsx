@@ -312,6 +312,7 @@ export default function UnitsPanel(props: {
   onCreateUnitFromPreset: (payload: CreateUnitPayload, patch?: UnitPatch | null, deathSaves?: { success: number; failure: number }) => Promise<void> | void;
   onRemoveUnit: (unitId: string) => Promise<void> | void;
   onToggleHidden: (unitId: string) => Promise<void> | void;
+  onViewMemo?: (unitId: string) => void;
   onReorderUnits: (payload: {
     unitIds: string[];
     sideChanges?: { unitId: string; side: Side }[];
@@ -338,6 +339,7 @@ export default function UnitsPanel(props: {
     onUpsertMarker,
   onRemoveMarker,
   onToggleHidden,
+  onViewMemo,
   onReorderUnits,
     onToggleMarkerCreate,
   } = props;
@@ -616,6 +618,15 @@ export default function UnitsPanel(props: {
       return;
     }
     const data = selectedPreset.data ?? {};
+    const rawPresetNote =
+      typeof data.note === "string"
+        ? data.note
+        : typeof (data as any).memo === "string"
+          ? (data as any).memo
+          : typeof (selectedPreset as any).note === "string"
+            ? (selectedPreset as any).note
+            : "";
+    const presetNote = rawPresetNote.trim();
     const unitType = (data.unitType ?? "NORMAL") as UnitKind;
     const masterUnitId = presetMasterId.trim();
     if (unitType === "SERVANT") {
@@ -685,6 +696,7 @@ export default function UnitsPanel(props: {
       unitType,
       ...(unitType === "SERVANT" ? { masterUnitId } : {}),
       ...(data.alias ? { alias: data.alias } : {}),
+      ...(presetNote ? { note: presetNote } : {}),
       hpMax,
       ...(hpFormula ? { hpFormula } : {}),
       acBase,
@@ -732,7 +744,7 @@ export default function UnitsPanel(props: {
     if (data.consumables && Object.keys(data.consumables).length > 0) {
       patch.consumables = data.consumables as Record<string, number>;
     }
-    if (typeof data.note === "string") patch.note = data.note;
+    if (presetNote) patch.note = presetNote;
     if (typeof data.colorCode === "number") patch.colorCode = data.colorCode;
     if (typeof data.hidden === "boolean") patch.hidden = data.hidden;
     if (typeof data.turnDisabled === "boolean") {
@@ -1759,14 +1771,6 @@ export default function UnitsPanel(props: {
                         {selectedPreset.data?.turnDisabled ? "예" : "아니오"}
                       </span>
                     </div>
-                    {selectedPreset.data?.note ? (
-                      <div>
-                        <span className="text-zinc-500">노트</span>
-                        <div className="mt-1 whitespace-pre-wrap text-[11px] text-zinc-300">
-                          {selectedPreset.data.note}
-                        </div>
-                      </div>
-                    ) : null}
                   </div>
                 )}
               </div>
@@ -2004,6 +2008,18 @@ export default function UnitsPanel(props: {
             className="fixed z-50 w-44 rounded-md border border-zinc-800 bg-zinc-950 p-1 text-xs text-zinc-200 shadow-xl"
             style={{ left: unitMenu.x, top: unitMenu.y }}
           >
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-zinc-800/70"
+              onClick={() => {
+                const target = unitById.get(unitMenu.id);
+                setUnitMenu(null);
+                if (!target || busy) return;
+                onViewMemo?.(target.id);
+              }}
+            >
+              메모 확인
+            </button>
             <button
               type="button"
               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-zinc-800/70"

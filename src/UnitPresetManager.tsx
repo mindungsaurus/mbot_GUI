@@ -1419,7 +1419,8 @@ export default function UnitPresetManager(props: {
                 </div>
 
                 {activeTab === "INFO" && (
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     <div>
                       <label className="mb-1 block text-xs text-zinc-400">
                         유닛 이름
@@ -1531,20 +1532,9 @@ export default function UnitPresetManager(props: {
                         </option>
                       </select>
                     </div>
-                    <div className="md:col-span-2">
-                      <label className="mb-1 block text-xs text-zinc-400">
-                        노트
-                      </label>
-                      <textarea
-                        value={note}
-                        onChange={(e) => setNote(e.target.value)}
-                        disabled={busy}
-                        rows={3}
-                        className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
-                      />
-                    </div>
+                    
 
-                    <div className="md:col-span-2 grid grid-cols-1 gap-3 md:grid-cols-[2fr_1fr]">
+                    <div className="md:col-span-2 grid grid-cols-1 gap-3 md:grid-cols-[2.2fr_0.8fr]">
                       <div className="rounded-xl border border-zinc-800 bg-zinc-950/30 p-3">
                         <div className="mb-2 text-xs font-semibold text-rose-300">
                           HP
@@ -1581,7 +1571,7 @@ export default function UnitPresetManager(props: {
                             HP 공식
                           </label>
                           <div className="relative mt-1">
-                            <div className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words rounded-md px-2 py-1 text-sm leading-6 text-zinc-200">
+                            <div className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words rounded-md px-2 py-1 text-base leading-7 text-zinc-200">
                               {renderHpFormulaHighlight(hpFormulaExpr)}
                             </div>
                             <textarea
@@ -1596,8 +1586,8 @@ export default function UnitPresetManager(props: {
                               }}
                               disabled={busy}
                               placeholder="예: (4D4 * {건강 보정} + 20) * {난이도 보정}"
-                              style={{ minHeight: "2.75rem" }}
-                              className="relative w-full resize-none overflow-hidden rounded-md border border-zinc-800 bg-transparent px-2 py-1 text-sm leading-6 text-transparent caret-amber-200 outline-none focus:border-zinc-600 placeholder:text-zinc-600"
+                              style={{ minHeight: "3.5rem" }}
+                              className="relative w-full resize-none overflow-hidden rounded-md border border-zinc-800 bg-transparent px-2 py-1 text-base leading-7 text-transparent caret-amber-200 outline-none focus:border-zinc-600 placeholder:text-zinc-600"
                             />
                           </div>
                           <div className="mt-2 grid grid-cols-2 gap-2">
@@ -1747,6 +1737,21 @@ export default function UnitPresetManager(props: {
                       </label>
                     </div>
                   </div>
+                  <div className="md:col-span-2">
+                    <label className="mb-1 block text-xs text-zinc-400">메모</label>
+                    <textarea
+                      value={note}
+                      onChange={(e) => setNote(e.target.value)}
+                      disabled={busy}
+                      rows={12}
+                      spellCheck={false}
+                      autoCorrect="off"
+                      autoCapitalize="off"
+                      className="min-h-[220px] w-full resize-y rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm leading-6 outline-none focus:border-zinc-600"
+                    />
+                  </div>
+                </div>
+
                 )}
 
                 {activeTab === "STATUS" && (
