@@ -743,6 +743,17 @@ export default function App() {
     : selectedId
       ? 1
       : 0;
+  const panelHotkeysEnabled =
+    !busy &&
+    !markerCreateOpen &&
+    !tagGrantOpen &&
+    !settingsOpen &&
+    !reorderOpen &&
+    !slotUseNotice &&
+    !registerOpen &&
+    !sideMemoOpen &&
+    !editUnitId &&
+    !memoViewId;
   const tagGrantFolderTree = useMemo(() => {
     const byParent = new Map<string | null, TagPresetFolder[]>();
     for (const folder of tagGrantPresetFolders) {
@@ -3523,6 +3534,7 @@ export default function App() {
           // NOTE: NEXT_TURN은 selectedId 없어도 동작해야 하므로
           // ControlPanel 내부에서 mode === NEXT_TURN이면 canControlAction 체크를 무시하도록 해둔 상태를 전제로 함.
           canControlAction={selectedIds.length > 0}
+          hotkeysEnabled={panelHotkeysEnabled}
           amount={amount}
           setAmount={setAmount}
           onMove={moveByPad}

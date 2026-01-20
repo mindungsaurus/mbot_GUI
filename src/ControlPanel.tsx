@@ -86,10 +86,20 @@ function defaultPos(): Pos {
   return { x: Math.max(16, w - 360), y: Math.max(16, h - 320) };
 }
 
+function isEditableTarget(target: EventTarget | null) {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  const tag = el.tagName?.toUpperCase();
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (el.isContentEditable) return true;
+  return false;
+}
+
 export default function ControlPanel(props: {
   disabled?: boolean;
   canControlMove?: boolean; // selected 유닛이 있을 때 true
   canControlAction?: boolean; // damage/heal 적용 가능한지(유닛 선택 등)
+  hotkeysEnabled?: boolean;
   amount: number;
   setAmount: (v: number) => void;
   onMove: (dx: number, dz: number) => void;
@@ -116,6 +126,7 @@ export default function ControlPanel(props: {
     disabled,
     canControlMove = true,
     canControlAction = true,
+    hotkeysEnabled = true,
     amount,
     setAmount,
     onMove,
@@ -275,6 +286,31 @@ export default function ControlPanel(props: {
           ? canControlAction && !tagReduceDisabled && !!tagReduceName
         : canControlAction;
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!hotkeysEnabled || disabled || collapsed) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!hotkeysEnabled || disabled || collapsed) return;
+      if (isEditableTarget(e.target)) {
+        const el = e.target as HTMLElement | null;
+        const isModeSelect =
+          el?.tagName?.toUpperCase() === "SELECT" &&
+          el?.dataset?.controlMode === "true";
+        if (!isModeSelect) return;
+      }
+      if (e.metaKey || e.ctrlKey) return;
+      if (!e.altKey) return;
+      if (e.key !== "q" && e.key !== "Q") return;
+      e.preventDefault();
+      if (!canApplyAction) return;
+      onAction(mode);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [hotkeysEnabled, disabled, collapsed, canApplyAction, onAction, mode]);
+
   const amountUnusedMode =
     mode === "NEXT_TURN" ||
     mode === "ADD_TAG" ||
@@ -397,6 +433,7 @@ export default function ControlPanel(props: {
                 value={mode}
                 onChange={(e) => setMode(e.target.value as ControlActionMode)}
                 disabled={disabled}
+                data-control-mode="true"
                 className="h-9 rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-xs font-semibold text-zinc-100 outline-none focus:border-zinc-600"
                 title="Action mode"
               >
