@@ -83,6 +83,72 @@ function extractHpFormulaParams(expr?: string) {
   return Array.from(out);
 }
 
+function buildHpParamMap(expr: string, drafts: HpParamDraft[]) {
+  const required = extractHpFormulaParams(expr);
+  const params: Record<string, number> = {};
+  for (const entry of drafts) {
+    const name = String(entry.name ?? "").trim();
+    if (!name) continue;
+    const raw = String(entry.value ?? "").trim();
+    if (raw === "") continue;
+    const num = Number(raw);
+    if (!Number.isFinite(num)) return null;
+    params[name] = num;
+  }
+  const missing = required.filter((name) => params[name] === undefined);
+  if (missing.length > 0) return null;
+  return params;
+}
+
+function replaceFormulaParams(expr: string, params: Record<string, number>) {
+  return expr.replace(/\{([^}]+)\}/g, (_raw, keyRaw) => {
+    const key = String(keyRaw ?? "").trim();
+    const value = params[key];
+    return Number.isFinite(value) ? String(value) : "0";
+  });
+}
+
+function replaceDice(expr: string, kind: "min" | "max") {
+  return expr.replace(/(\d*)[dD](\d+)/g, (_raw, countRaw, sidesRaw) => {
+    const count = countRaw ? Number(countRaw) : 1;
+    const sides = Number(sidesRaw);
+    if (!Number.isFinite(count) || !Number.isFinite(sides)) return "0";
+    const value = kind === "min" ? count * 1 : count * sides;
+    return String(value);
+  });
+}
+
+function evalFormulaExpression(expr: string): number | null {
+  const prepared = expr
+    .replace(/\s+/g, "")
+    .replace(/\bmin\s*\(/gi, "Math.min(")
+    .replace(/\bmax\s*\(/gi, "Math.max(");
+  if (!/^[0-9+\-*/().,Mathinax]+$/.test(prepared)) return null;
+  try {
+    const value = Function(`"use strict";return (${prepared});`)();
+    return Number.isFinite(value) ? Number(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+function estimateFormulaRange(expr: string, params: Record<string, number>) {
+  const resolved = replaceFormulaParams(expr, params);
+  const minExpr = replaceDice(resolved, "min");
+  const maxExpr = replaceDice(resolved, "max");
+  const minValue = evalFormulaExpression(minExpr);
+  const maxValue = evalFormulaExpression(maxExpr);
+  if (minValue == null || maxValue == null) return null;
+  const min = Math.min(minValue, maxValue);
+  const max = Math.max(minValue, maxValue);
+  return { min: Math.round(min), max: Math.round(max) };
+}
+
+function formatRangeLabel(range?: { min: number; max: number } | null) {
+  if (!range) return "-";
+  return `${range.min}~${range.max}`;
+}
+
 function renderHpFormulaHighlight(expr: string) {
   if (!expr) return null;
   const nodes: ReactNode[] = [];
@@ -236,6 +302,26 @@ export default function UnitPresetManager(props: {
   const colorCodeTextColor = colorCode.trim()
     ? ansiColorCodeToCss(Number(colorCode))
     : undefined;
+
+  const formulaRange = useMemo(() => {
+    if (!hpFormulaEnabled) return null;
+    const expr = hpFormulaExpr.trim();
+    if (!expr) return null;
+    const params = buildHpParamMap(expr, hpParamDrafts);
+    if (!params) return null;
+    return estimateFormulaRange(expr, params);
+  }, [hpFormulaEnabled, hpFormulaExpr, hpParamDrafts]);
+  const formulaClampLabel = useMemo(() => {
+    const minRaw = hpFormulaMin.trim();
+    const maxRaw = hpFormulaMax.trim();
+    const min = minRaw.length ? Number(minRaw) : undefined;
+    const max = maxRaw.length ? Number(maxRaw) : undefined;
+    if (!Number.isFinite(min) && !Number.isFinite(max)) return null;
+    return [
+      Number.isFinite(min) ? min : "-",
+      Number.isFinite(max) ? max : "-",
+    ].join("~");
+  }, [hpFormulaMin, hpFormulaMax]);
 
   const visiblePresets = useMemo(() => {
     const query = presetQuery.trim().toLowerCase();
@@ -1565,12 +1651,12 @@ export default function UnitPresetManager(props: {
                         />
                         공식형 HP 사용
                       </label>
-                      {hpFormulaEnabled && hasHp && (
-                        <div className="mb-2 rounded-lg border border-zinc-800/70 bg-zinc-950/60 p-2">
-                          <label className="text-[11px] text-zinc-400">
-                            HP 공식
-                          </label>
-                          <div className="relative mt-1">
+                        {hpFormulaEnabled && hasHp && (
+                          <div className="mb-2 rounded-lg border border-zinc-800/70 bg-zinc-950/60 p-2">
+                            <label className="text-[11px] text-zinc-400">
+                              HP 공식
+                            </label>
+                            <div className="relative mt-1">
                             <div className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words rounded-md px-2 py-1 text-base leading-7 text-zinc-200">
                               {renderHpFormulaHighlight(hpFormulaExpr)}
                             </div>
@@ -1590,33 +1676,39 @@ export default function UnitPresetManager(props: {
                               className="relative w-full resize-none overflow-hidden rounded-md border border-zinc-800 bg-transparent px-2 py-1 text-base leading-7 text-transparent caret-amber-200 outline-none focus:border-zinc-600 placeholder:text-zinc-600"
                             />
                           </div>
-                          <div className="mt-2 grid grid-cols-2 gap-2">
-                            <label className="text-[11px] text-rose-300">
-                              최소값
-                              <input
-                                type="number"
-                                value={hpFormulaMin}
-                                onChange={(e) => setHpFormulaMin(e.target.value)}
-                                disabled={busy}
-                                className="mt-1 w-full rounded-md border border-rose-900/40 bg-zinc-950 px-2 py-1 text-xs text-rose-200 outline-none focus:border-rose-700/60"
-                              />
-                            </label>
-                            <label className="text-[11px] text-rose-300">
-                              최대값
-                              <input
-                                type="number"
-                                value={hpFormulaMax}
-                                onChange={(e) => setHpFormulaMax(e.target.value)}
-                                disabled={busy}
-                                className="mt-1 w-full rounded-md border border-rose-900/40 bg-zinc-950 px-2 py-1 text-xs text-rose-200 outline-none focus:border-rose-700/60"
-                              />
-                            </label>
-                          </div>
-                          <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-zinc-500">
-                            <span>공식 파라미터는 별도 모달에서 관리해요.</span>
-                            <button
-                              type="button"
-                              onClick={() => setHpParamModalOpen(true)}
+                            <div className="mt-2 grid grid-cols-2 gap-2">
+                              <label className="text-[11px] text-rose-300">
+                                최소값
+                                <input
+                                  type="number"
+                                  value={hpFormulaMin}
+                                  onChange={(e) => setHpFormulaMin(e.target.value)}
+                                  disabled={busy}
+                                  className="mt-1 w-full rounded-md border border-rose-900/40 bg-zinc-950 px-2 py-1 text-xs text-rose-200 outline-none focus:border-rose-700/60"
+                                />
+                              </label>
+                              <label className="text-[11px] text-rose-300">
+                                최대값
+                                <input
+                                  type="number"
+                                  value={hpFormulaMax}
+                                  onChange={(e) => setHpFormulaMax(e.target.value)}
+                                  disabled={busy}
+                                  className="mt-1 w-full rounded-md border border-rose-900/40 bg-zinc-950 px-2 py-1 text-xs text-rose-200 outline-none focus:border-rose-700/60"
+                                />
+                              </label>
+                            </div>
+                            <div className="mt-2 space-y-1 text-[11px] text-zinc-500">
+                              <div>범위: {formatRangeLabel(formulaRange)}</div>
+                              {formulaClampLabel ? (
+                                <div>최소/최대: {formulaClampLabel}</div>
+                              ) : null}
+                            </div>
+                            <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-zinc-500">
+                              <span>공식 파라미터는 별도 모달에서 관리해요.</span>
+                              <button
+                                type="button"
+                                onClick={() => setHpParamModalOpen(true)}
                               disabled={busy}
                               className="rounded-md border border-zinc-700 px-2 py-1 text-[11px] text-zinc-200 hover:bg-zinc-800/60"
                             >

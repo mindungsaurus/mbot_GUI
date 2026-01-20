@@ -501,6 +501,8 @@ export default function App() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null); // primary(대표) 선택
   const [amount, setAmount] = useState<number>(5);
+  const [panelSlotLevel, setPanelSlotLevel] = useState<number>(1);
+  const [panelSlotDelta, setPanelSlotDelta] = useState<"spend" | "recover">("spend");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -638,6 +640,37 @@ export default function App() {
         : null,
     [state?.units, selectedId]
   );
+  const [panelConsumableName, setPanelConsumableName] = useState("");
+  const [panelConsumableDelta, setPanelConsumableDelta] = useState<"dec" | "inc">(
+    "dec"
+  );
+  const panelConsumableOptions = useMemo(() => {
+    const entries = Object.entries(selected?.consumables ?? {}).filter(
+      ([, value]) => typeof value === "number"
+    );
+    return entries.map(([name, value]) => ({
+      name,
+      value: value ?? 0,
+    }));
+  }, [selected?.consumables]);
+  const panelConsumableRemaining = useMemo(() => {
+    if (!panelConsumableName) return null;
+    const value = selected?.consumables?.[panelConsumableName];
+    return typeof value === "number" ? value : null;
+  }, [panelConsumableName, selected?.consumables]);
+  const panelConsumableDisabled =
+    !selectedId || panelConsumableOptions.length === 0;
+
+  useEffect(() => {
+    if (!selectedId || panelConsumableOptions.length === 0) {
+      if (panelConsumableName !== "") setPanelConsumableName("");
+      return;
+    }
+    const exists = panelConsumableOptions.some(
+      (entry) => entry.name === panelConsumableName
+    );
+    if (!exists) setPanelConsumableName(panelConsumableOptions[0].name);
+  }, [selectedId, panelConsumableOptions, panelConsumableName]);
 
   const canControlMove = selectedIds.length > 0 || !!selectedId;
   const tagGrantTargetCount = selectedIds.length
@@ -1242,10 +1275,14 @@ export default function App() {
     );
   }
 
-  async function applySpellSlotDelta(kind: "spend" | "recover") {
-    const rawLevel = Math.trunc(Number(amount));
-    const level = Number.isFinite(rawLevel)
-      ? Math.max(1, Math.min(9, rawLevel))
+  async function applySpellSlotDelta(
+    kind: "spend" | "recover",
+    level: number,
+    count: number
+  ) {
+    const safeLevel = Math.max(1, Math.min(9, Math.trunc(Number(level))));
+    const safeCount = Number.isFinite(count)
+      ? Math.max(1, Math.trunc(count))
       : 1;
 
     const targets = selectedIds.length
@@ -1269,29 +1306,35 @@ export default function App() {
 
       const label = unit.alias ? `${unit.name} (${unit.alias})` : unit.name;
       const slots = unit.spellSlots ?? {};
-      const raw = (slots as any)[level] ?? (slots as any)[String(level)];
+      const raw =
+        (slots as any)[safeLevel] ?? (slots as any)[String(safeLevel)];
 
       if (raw === undefined) {
         results.push({ label, status: "missing" });
         continue;
       }
 
-      const count = Math.max(0, Math.trunc(Number(raw)));
-      if (kind === "spend" && count <= 0) {
+      const currentCount = Math.max(0, Math.trunc(Number(raw)));
+      if (kind === "spend" && currentCount < safeCount) {
         results.push({ label, status: "empty" });
         continue;
       }
 
-      const nextCount = kind === "spend" ? Math.max(0, count - 1) : count + 1;
+      const nextCount =
+        kind === "spend"
+          ? Math.max(0, currentCount - safeCount)
+          : currentCount + safeCount;
       const beforeSummary = formatSpellSlotsSummary(slots);
-      const nextSlots = { ...slots, [level]: nextCount };
+      const nextSlots = { ...slots, [safeLevel]: nextCount };
       const afterSummary = formatSpellSlotsSummary(nextSlots);
 
-      actions.push({
-        type: kind === "spend" ? "SPEND_SPELL_SLOT" : "RECOVER_SPELL_SLOT",
-        unitId,
-        level,
-      });
+      for (let i = 0; i < safeCount; i += 1) {
+        actions.push({
+          type: kind === "spend" ? "SPEND_SPELL_SLOT" : "RECOVER_SPELL_SLOT",
+          unitId,
+          level: safeLevel,
+        });
+      }
       results.push({
         label,
         status: "applied",
@@ -1301,7 +1344,7 @@ export default function App() {
     }
 
     if (actions.length > 0) await run(actions);
-    setSlotUseNotice({ level, kind, rows: results });
+    setSlotUseNotice({ level: safeLevel, kind, rows: results });
   }
 
   function openTagGrantModal() {
@@ -1444,13 +1487,28 @@ export default function App() {
       return;
     }
 
-    if (mode === "SPEND_SLOT") {
-      await applySpellSlotDelta("spend");
+    if (mode === "SPELL_SLOT") {
+      await applySpellSlotDelta(panelSlotDelta, panelSlotLevel, amount);
       return;
     }
 
-    if (mode === "RECOVER_SLOT") {
-      await applySpellSlotDelta("recover");
+    if (mode === "CONSUMABLE") {
+      const unitId = selectedId;
+      if (!unitId) return;
+      const unit = units.find((u) => u.id === unitId);
+      if (!unit) return;
+      const name = panelConsumableName;
+      if (!name) return;
+      const current = unit.consumables?.[name];
+      if (typeof current !== "number") return;
+      if (!Number.isFinite(amount) || amount === 0) return;
+      const delta = panelConsumableDelta === "inc" ? amount : -amount;
+      const nextValue = Math.max(0, current + delta);
+      await run({
+        type: "PATCH_UNIT",
+        unitId,
+        patch: { consumables: { [name]: nextValue } },
+      });
       return;
     }
 
@@ -3067,6 +3125,17 @@ export default function App() {
           setAmount={setAmount}
           onMove={moveByPad}
           onAction={applyPanelAction}
+          slotLevel={panelSlotLevel}
+          setSlotLevel={setPanelSlotLevel}
+          slotDelta={panelSlotDelta}
+          setSlotDelta={setPanelSlotDelta}
+          consumableOptions={panelConsumableOptions}
+          consumableName={panelConsumableName}
+          setConsumableName={setPanelConsumableName}
+          consumableDelta={panelConsumableDelta}
+          setConsumableDelta={setPanelConsumableDelta}
+          consumableRemaining={panelConsumableRemaining}
+          consumableDisabled={panelConsumableDisabled}
         />
       </div>
     </div>

@@ -7,10 +7,10 @@ export type ControlActionMode =
   | "NEXT_TURN"
   | "TEMP_HP"
   | "ADD_TAG"
-  | "SPEND_SLOT"
-  | "RECOVER_SLOT"
+  | "SPELL_SLOT"
   | "ADD_DEATH_FAIL"
-  | "TOGGLE_HIDDEN";
+  | "TOGGLE_HIDDEN"
+  | "CONSUMABLE";
 
 const LS_PANEL_POS = "operator.controlPanel.pos";
 const LS_PANEL_MODE = "operator.controlPanel.mode";
@@ -48,10 +48,10 @@ function loadMode(): ControlActionMode | null {
       raw === "NEXT_TURN" ||
       raw === "TEMP_HP" ||
       raw === "ADD_TAG" ||
-      raw === "SPEND_SLOT" ||
-      raw === "RECOVER_SLOT" ||
+      raw === "SPELL_SLOT" ||
       raw === "ADD_DEATH_FAIL" ||
-      raw === "TOGGLE_HIDDEN"
+      raw === "TOGGLE_HIDDEN" ||
+      raw === "CONSUMABLE"
     )
       return raw;
     return null;
@@ -92,6 +92,17 @@ export default function ControlPanel(props: {
   setAmount: (v: number) => void;
   onMove: (dx: number, dz: number) => void;
   onAction: (mode: ControlActionMode) => void;
+  slotLevel: number;
+  setSlotLevel: (level: number) => void;
+  slotDelta: "spend" | "recover";
+  setSlotDelta: (delta: "spend" | "recover") => void;
+  consumableOptions: Array<{ name: string; value: number }>;
+  consumableName: string;
+  setConsumableName: (name: string) => void;
+  consumableDelta: "dec" | "inc";
+  setConsumableDelta: (delta: "dec" | "inc") => void;
+  consumableRemaining?: number | null;
+  consumableDisabled?: boolean;
 }) {
   const {
     disabled,
@@ -101,6 +112,17 @@ export default function ControlPanel(props: {
     setAmount,
     onMove,
     onAction,
+    slotLevel,
+    setSlotLevel,
+    slotDelta,
+    setSlotDelta,
+    consumableOptions,
+    consumableName,
+    setConsumableName,
+    consumableDelta,
+    setConsumableDelta,
+    consumableRemaining,
+    consumableDisabled = false,
   } = props;
 
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -117,6 +139,7 @@ export default function ControlPanel(props: {
     () => loadMode() ?? "NEXT_TURN"
   );
   const [collapsed, setCollapsed] = useState<boolean>(() => loadCollapsed());
+  const [amountInput, setAmountInput] = useState<string>(() => String(amount));
 
   const modeLabel = useMemo(() => {
     switch (mode) {
@@ -128,14 +151,14 @@ export default function ControlPanel(props: {
         return "Temp HP";
       case "ADD_TAG":
         return "Add Tag";
-      case "SPEND_SLOT":
-        return "Spend Slot";
-      case "RECOVER_SLOT":
-        return "Recover Slot";
+      case "SPELL_SLOT":
+        return "Spell Slot";
       case "ADD_DEATH_FAIL":
         return "Death Save";
       case "TOGGLE_HIDDEN":
         return "Hide";
+      case "CONSUMABLE":
+        return "Consumable";
       case "NEXT_TURN":
         return "Next Turn";
     }
@@ -145,11 +168,14 @@ export default function ControlPanel(props: {
   useEffect(() => saveCollapsed(collapsed), [collapsed]);
 
   useEffect(() => {
-    if (mode === "SPEND_SLOT" || mode === "RECOVER_SLOT") {
-      const next = clamp(amount, 1, 9);
+    if (mode === "SPELL_SLOT") {
+      const next = Math.max(1, amount);
       if (next !== amount) setAmount(next);
     }
   }, [mode, amount, setAmount]);
+  useEffect(() => {
+    setAmountInput(String(amount));
+  }, [amount]);
 
   // 창 크기 바뀌면 화면 밖으로 나가지 않게 보정
   useEffect(() => {
@@ -224,6 +250,13 @@ export default function ControlPanel(props: {
     "h-14 w-14 rounded-full border border-zinc-600/70 bg-zinc-950/30 " +
     "hover:bg-zinc-900/50 active:bg-zinc-900/70 disabled:opacity-50 disabled:cursor-not-allowed";
 
+  const canApplyAction =
+    mode === "NEXT_TURN"
+      ? true
+      : mode === "CONSUMABLE"
+        ? canControlAction && !consumableDisabled && !!consumableName
+        : canControlAction;
+
   return (
     <div
       ref={panelRef}
@@ -294,7 +327,7 @@ export default function ControlPanel(props: {
               type="button"
               className={centerBtn + " text-xs font-semibold text-zinc-100"}
               onClick={() => onAction(mode)}
-              disabled={disabled || (mode !== "NEXT_TURN" && !canControlAction)}
+              disabled={disabled || !canApplyAction}
               aria-label={`Apply ${mode}`}
               title={`Apply: ${modeLabel}`}
             >
@@ -342,10 +375,10 @@ export default function ControlPanel(props: {
                 <option value="NEXT_TURN">다음 턴</option>
                 <option value="TEMP_HP">임체 부여</option>
                 <option value="ADD_TAG">상태 부여</option>
-                <option value="SPEND_SLOT">주문 슬롯 사용</option>
-                <option value="RECOVER_SLOT">주문 슬롯 회복</option>
+                <option value="SPELL_SLOT">주문 슬롯</option>
                 <option value="ADD_DEATH_FAIL">사망 내성 증가</option>
                 <option value="TOGGLE_HIDDEN">숨겨짐 토글</option>
+                <option value="CONSUMABLE">고유 소모값</option>
               </select>
             </div>
 
@@ -356,8 +389,8 @@ export default function ControlPanel(props: {
                 className={btnBase + " h-9 w-9"}
                 onClick={() => {
                   const next =
-                    mode === "SPEND_SLOT" || mode === "RECOVER_SLOT"
-                      ? clamp(amount - 1, 1, 9)
+                    mode === "SPELL_SLOT"
+                      ? Math.max(1, amount - 1)
                       : Math.max(0, amount - 1);
                   setAmount(next);
                 }}
@@ -373,20 +406,28 @@ export default function ControlPanel(props: {
                 -
               </button>
               <input
-                type="number"
-                value={amount}
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={amountInput}
                 onChange={(e) => {
-                  const raw = Math.trunc(Number(e.target.value));
-                  const base = Number.isFinite(raw)
-                    ? raw
-                    : mode === "SPEND_SLOT" || mode === "RECOVER_SLOT"
-                      ? 1
-                      : 0;
+                  const raw = e.target.value;
+                  const filtered = raw.replace(/[^\d]/g, "");
+                  setAmountInput(filtered);
+                  if (filtered.trim() === "") return;
+                  const parsed = Math.trunc(Number(filtered));
+                  if (!Number.isFinite(parsed)) return;
                   const next =
-                    mode === "SPEND_SLOT" || mode === "RECOVER_SLOT"
-                      ? clamp(base, 1, 9)
-                      : Math.max(0, base);
+                    mode === "SPELL_SLOT"
+                      ? Math.max(1, parsed)
+                      : Math.max(0, parsed);
                   setAmount(next);
+                }}
+                onBlur={() => {
+                  if (amountInput.trim() !== "") return;
+                  const next = mode === "SPELL_SLOT" ? 1 : 0;
+                  setAmount(next);
+                  setAmountInput(String(next));
                 }}
                 className="h-9 w-16 rounded-xl border border-zinc-800 bg-zinc-950 px-2 text-sm text-zinc-100 outline-none focus:border-zinc-600"
                 disabled={
@@ -396,9 +437,6 @@ export default function ControlPanel(props: {
                   mode === "ADD_DEATH_FAIL" ||
                   mode === "TOGGLE_HIDDEN"
                 }
-                min={mode === "SPEND_SLOT" || mode === "RECOVER_SLOT" ? 1 : 0}
-                max={mode === "SPEND_SLOT" || mode === "RECOVER_SLOT" ? 9 : undefined}
-                step={1}
                 title="amount"
               />
               <button
@@ -406,8 +444,8 @@ export default function ControlPanel(props: {
                 className={btnBase + " h-9 w-9"}
                 onClick={() => {
                   const next =
-                    mode === "SPEND_SLOT" || mode === "RECOVER_SLOT"
-                      ? clamp(amount + 1, 1, 9)
+                    mode === "SPELL_SLOT"
+                      ? Math.max(1, amount + 1)
                       : amount + 1;
                   setAmount(next);
                 }}
@@ -425,9 +463,85 @@ export default function ControlPanel(props: {
             </div>
           </div>
 
-          <div className="mt-3 text-[11px] text-zinc-500">
-            • 가운데 버튼: 선택된 액션 실행 • NEXT는 유닛 선택 없어도 동작
-          </div>
+          {mode === "SPELL_SLOT" && (
+            <div className="mt-3 flex items-center gap-2">
+              <select
+                value={slotLevel}
+                onChange={(e) => setSlotLevel(Number(e.target.value))}
+                disabled={disabled || !canControlAction}
+                className="h-9 flex-1 rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-xs font-semibold text-zinc-100 outline-none focus:border-zinc-600 disabled:border-zinc-800/60 disabled:bg-zinc-900/40 disabled:text-zinc-500"
+              >
+                {Array.from({ length: 9 }, (_, i) => i + 1).map((level) => (
+                  <option key={level} value={level}>
+                    {level}레벨 슬롯
+                  </option>
+                ))}
+              </select>
+              <select
+                value={slotDelta}
+                onChange={(e) =>
+                  setSlotDelta(e.target.value as "spend" | "recover")
+                }
+                disabled={disabled || !canControlAction}
+                className="h-9 w-24 rounded-xl border border-zinc-800 bg-zinc-950 px-2 text-xs font-semibold text-zinc-100 outline-none focus:border-zinc-600 disabled:border-zinc-800/60 disabled:bg-zinc-900/40 disabled:text-zinc-500"
+              >
+                <option value="spend">감소</option>
+                <option value="recover">증가</option>
+              </select>
+            </div>
+          )}
+
+          {mode === "CONSUMABLE" && (
+            <div className="mt-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <select
+                  value={consumableName}
+                  onChange={(e) => setConsumableName(e.target.value)}
+                  disabled={disabled || consumableDisabled}
+                  className={[
+                    "h-9 flex-1 rounded-xl border bg-zinc-950 px-3 text-xs font-semibold text-zinc-100 outline-none focus:border-zinc-600",
+                    "border-zinc-800",
+                    "disabled:border-zinc-800/60 disabled:bg-zinc-900/40 disabled:text-zinc-500",
+                  ].join(" ")}
+                >
+                  {consumableOptions.length === 0 ? (
+                    <option value="">없음</option>
+                  ) : (
+                    consumableOptions.map((entry) => (
+                      <option key={entry.name} value={entry.name}>
+                        {entry.name}
+                      </option>
+                    ))
+                  )}
+                </select>
+                <select
+                  value={consumableDelta}
+                  onChange={(e) =>
+                    setConsumableDelta(e.target.value as "dec" | "inc")
+                  }
+                  disabled={disabled || consumableDisabled}
+                  className={[
+                    "h-9 w-24 rounded-xl border bg-zinc-950 px-2 text-xs font-semibold text-zinc-100 outline-none focus:border-zinc-600",
+                    "border-zinc-800",
+                    "disabled:border-zinc-800/60 disabled:bg-zinc-900/40 disabled:text-zinc-500",
+                  ].join(" ")}
+                >
+                  <option value="dec">감소</option>
+                  <option value="inc">증가</option>
+                </select>
+              </div>
+              <div className="text-[11px] text-amber-300">
+                {consumableName && consumableRemaining != null ? (
+                  <>
+                    {consumableName} 잔여:{" "}
+                    <span className="font-semibold">{consumableRemaining}</span>
+                  </>
+                ) : (
+                  "없음"
+                )}
+              </div>
+            </div>
+          )}
           </div>
         ) : (
           <div className="px-4 py-3 text-xs text-zinc-500">

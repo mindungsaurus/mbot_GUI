@@ -98,6 +98,89 @@ function extractHpFormulaParams(expr?: string) {
   return Array.from(out);
 }
 
+function buildFormulaParamValues(
+  expr: string,
+  defaults: Record<string, number>,
+  overrides?: Record<string, string>
+) {
+  const required = extractHpFormulaParams(expr);
+  const allKeys = new Set<string>([
+    ...required,
+    ...Object.keys(defaults ?? {}),
+    ...Object.keys(overrides ?? {}),
+  ]);
+  const params: Record<string, number> = {};
+
+  for (const key of allKeys) {
+    const raw = overrides?.[key];
+    if (typeof raw === "string" && raw.trim() !== "") {
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) return null;
+      params[key] = parsed;
+      continue;
+    }
+    const fallback = defaults?.[key];
+    if (typeof fallback === "number") params[key] = fallback;
+  }
+
+  const missing = required.filter((name) => params[name] === undefined);
+  if (missing.length > 0) return null;
+  return params;
+}
+
+function replaceFormulaParams(expr: string, params: Record<string, number>) {
+  return expr.replace(/\{([^}]+)\}/g, (_raw, keyRaw) => {
+    const key = String(keyRaw ?? "").trim();
+    if (!key) return "0";
+    const value = params[key];
+    return Number.isFinite(value) ? String(value) : "0";
+  });
+}
+
+function replaceDice(expr: string, kind: "min" | "max") {
+  return expr.replace(/(\d*)[dD](\d+)/g, (_raw, countRaw, sidesRaw) => {
+    const count = countRaw ? Number(countRaw) : 1;
+    const sides = Number(sidesRaw);
+    if (!Number.isFinite(count) || !Number.isFinite(sides)) return "0";
+    const value = kind === "min" ? count * 1 : count * sides;
+    return String(value);
+  });
+}
+
+function evalFormulaExpression(expr: string): number | null {
+  const prepared = expr
+    .replace(/\s+/g, "")
+    .replace(/\bmin\s*\(/gi, "Math.min(")
+    .replace(/\bmax\s*\(/gi, "Math.max(");
+  if (!/^[0-9+\-*/().,Mathinax]+$/.test(prepared)) return null;
+  try {
+    const value = Function(`"use strict";return (${prepared});`)();
+    return Number.isFinite(value) ? Number(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+function estimateFormulaRange(
+  expr: string,
+  params: Record<string, number>
+) {
+  const resolved = replaceFormulaParams(expr, params);
+  const minExpr = replaceDice(resolved, "min");
+  const maxExpr = replaceDice(resolved, "max");
+  const minValue = evalFormulaExpression(minExpr);
+  const maxValue = evalFormulaExpression(maxExpr);
+  if (minValue == null || maxValue == null) return null;
+  const min = Math.min(minValue, maxValue);
+  const max = Math.max(minValue, maxValue);
+  return { min: Math.round(min), max: Math.round(max) };
+}
+
+function formatRangeLabel(range?: { min: number; max: number } | null) {
+  if (!range) return "-";
+  return `${range.min}~${range.max}`;
+}
+
 function PlusIcon(props: { className?: string }) {
   return (
     <svg
@@ -359,6 +442,11 @@ export default function UnitsPanel(props: {
     z: 0,
   });
   const [presetMasterId, setPresetMasterId] = useState("");
+  const [presetFormulaParams, setPresetFormulaParams] = useState<
+    Record<string, string>
+  >({});
+  const [presetHpMinInput, setPresetHpMinInput] = useState("");
+  const [presetHpMaxInput, setPresetHpMaxInput] = useState("");
 
   const [panelMode, setPanelMode] = useState<"units" | "markers">("units");
   const isMarkerMode = panelMode === "markers";
@@ -382,6 +470,41 @@ export default function UnitsPanel(props: {
     () => presetList.find((p) => p.id === selectedPresetId) ?? null,
     [presetList, selectedPresetId]
   );
+  const presetFormulaExpr = useMemo(
+    () =>
+      typeof selectedPreset?.data?.hpFormula?.expr === "string"
+        ? selectedPreset.data.hpFormula.expr.trim()
+        : "",
+    [selectedPreset?.data?.hpFormula?.expr]
+  );
+  const presetFormulaDefaults = useMemo(
+    () => selectedPreset?.data?.hpFormula?.params ?? {},
+    [selectedPreset?.data?.hpFormula?.params]
+  );
+  const presetFormulaParamKeys = useMemo(() => {
+    if (!presetFormulaExpr) return [];
+    const keys = new Set<string>();
+    for (const name of extractHpFormulaParams(presetFormulaExpr)) keys.add(name);
+    for (const name of Object.keys(presetFormulaDefaults)) keys.add(name);
+    return Array.from(keys);
+  }, [presetFormulaExpr, presetFormulaDefaults]);
+  const presetDefaultRange = useMemo(() => {
+    if (!presetFormulaExpr) return null;
+    const params = buildFormulaParamValues(
+      presetFormulaExpr,
+      presetFormulaDefaults
+    );
+    if (!params) return null;
+    return estimateFormulaRange(presetFormulaExpr, params);
+  }, [presetFormulaExpr, presetFormulaDefaults]);
+  const presetDefaultClamp = useMemo(() => {
+    const minRaw = selectedPreset?.data?.hpFormula?.min;
+    const maxRaw = selectedPreset?.data?.hpFormula?.max;
+    const min = typeof minRaw === "number" ? minRaw : undefined;
+    const max = typeof maxRaw === "number" ? maxRaw : undefined;
+    if (min === undefined && max === undefined) return null;
+    return { min, max };
+  }, [selectedPreset?.data?.hpFormula?.min, selectedPreset?.data?.hpFormula?.max]);
   const presetFolderTree = useMemo(() => {
     const byParent = new Map<string, UnitPresetFolder[]>();
     for (const folder of presetFolders) {
@@ -444,6 +567,27 @@ export default function UnitsPanel(props: {
       setPresetMasterId("");
     }
   }, [presetOpen, selectedPresetId, selected?.id, selected?.unitType, selectedPreset]);
+
+  useEffect(() => {
+    if (!presetOpen) return;
+    if (!presetFormulaExpr) {
+      setPresetFormulaParams({});
+      setPresetHpMinInput("");
+      setPresetHpMaxInput("");
+      return;
+    }
+    const next: Record<string, string> = {};
+    const keys = new Set<string>(presetFormulaParamKeys);
+    for (const name of keys) {
+      const raw = presetFormulaDefaults[name];
+      next[name] = typeof raw === "number" ? String(raw) : "";
+    }
+    setPresetFormulaParams(next);
+    const minRaw = selectedPreset?.data?.hpFormula?.min;
+    const maxRaw = selectedPreset?.data?.hpFormula?.max;
+    setPresetHpMinInput(typeof minRaw === "number" ? String(minRaw) : "");
+    setPresetHpMaxInput(typeof maxRaw === "number" ? String(maxRaw) : "");
+  }, [presetOpen, selectedPresetId, presetFormulaExpr, presetFormulaParamKeys, presetFormulaDefaults]);
 
 
   useEffect(() => {
@@ -657,19 +801,32 @@ export default function UnitsPanel(props: {
         : "";
     let hpFormula: CreateUnitPayload["hpFormula"] | undefined = undefined;
     if (hpFormulaExpr) {
-      const rawParams = data.hpFormula?.params ?? {};
+      const defaultParams = data.hpFormula?.params ?? {};
       const paramValues: Record<string, number> = {};
-      for (const [rawName, rawValue] of Object.entries(rawParams)) {
+      const requiredParams = extractHpFormulaParams(hpFormulaExpr);
+      const allKeys = new Set<string>([
+        ...requiredParams,
+        ...Object.keys(defaultParams),
+        ...Object.keys(presetFormulaParams),
+      ]);
+      for (const rawName of allKeys) {
         const name = String(rawName ?? "").trim();
         if (!name) continue;
-        const parsed = Number(rawValue);
+        const rawInput = (presetFormulaParams[name] ?? "").trim();
+        if (rawInput === "") {
+          const fallback = defaultParams[name];
+          if (typeof fallback === "number") {
+            paramValues[name] = fallback;
+          }
+          continue;
+        }
+        const parsed = Number(rawInput);
         if (!Number.isFinite(parsed)) {
           setPresetErr(`HP 공식 파라미터 "${name}" 값이 숫자가 아니야.`);
           return;
         }
         paramValues[name] = parsed;
       }
-      const requiredParams = extractHpFormulaParams(hpFormulaExpr);
       const missing = requiredParams.filter(
         (name) => paramValues[name] === undefined
       );
@@ -677,15 +834,35 @@ export default function UnitsPanel(props: {
         setPresetErr(`HP 공식 파라미터가 누락됐어: ${missing.join(", ")}`);
         return;
       }
+      const rawMin = presetHpMinInput.trim();
+      const rawMax = presetHpMaxInput.trim();
+      let minValue: number | undefined = undefined;
+      let maxValue: number | undefined = undefined;
+      if (rawMin) {
+        const parsed = Number(rawMin);
+        if (!Number.isFinite(parsed)) {
+          setPresetErr("HP 공식 최소값이 숫자가 아니야.");
+          return;
+        }
+        minValue = parsed;
+      } else if (typeof data.hpFormula?.min === "number") {
+        minValue = data.hpFormula.min;
+      }
+      if (rawMax) {
+        const parsed = Number(rawMax);
+        if (!Number.isFinite(parsed)) {
+          setPresetErr("HP 공식 최대값이 숫자가 아니야.");
+          return;
+        }
+        maxValue = parsed;
+      } else if (typeof data.hpFormula?.max === "number") {
+        maxValue = data.hpFormula.max;
+      }
       hpFormula = {
         expr: hpFormulaExpr,
         ...(Object.keys(paramValues).length > 0 ? { params: paramValues } : {}),
-        ...(typeof data.hpFormula?.min === "number"
-          ? { min: data.hpFormula.min }
-          : {}),
-        ...(typeof data.hpFormula?.max === "number"
-          ? { max: data.hpFormula.max }
-          : {}),
+        ...(typeof minValue === "number" ? { min: minValue } : {}),
+        ...(typeof maxValue === "number" ? { max: maxValue } : {}),
       };
     }
 
@@ -1489,7 +1666,7 @@ export default function UnitsPanel(props: {
 
       {presetOpen && !isMarkerMode && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-5xl rounded-2xl border border-zinc-800 bg-zinc-950 p-4">
+          <div className="w-full max-w-5xl max-h-[90vh] overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950 p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
               <div>
                 <div className="text-sm font-semibold text-zinc-100">
@@ -1671,28 +1848,34 @@ export default function UnitsPanel(props: {
                     <div>
                       <span className="text-zinc-500">HP</span>
                       <span className="ml-2">
-                        {selectedPreset.data?.hpFormula?.expr
-                          ? `공식: ${selectedPreset.data.hpFormula.expr}` +
-                            (typeof selectedPreset.data.hpFormula.min ===
-                              "number" ||
-                            typeof selectedPreset.data.hpFormula.max === "number"
-                              ? ` (${[
-                                  typeof selectedPreset.data.hpFormula.min ===
-                                  "number"
-                                    ? selectedPreset.data.hpFormula.min
+                        {selectedPreset.data?.hpFormula?.expr ? (
+                          <div className="space-y-1">
+                            <div>공식: {selectedPreset.data.hpFormula.expr}</div>
+                            <div className="text-[11px] text-zinc-400">
+                              범위(기본값): {formatRangeLabel(presetDefaultRange)}
+                            </div>
+                            {presetDefaultClamp ? (
+                              <div className="text-[11px] text-zinc-400">
+                                최소/최대:{" "}
+                                {[
+                                  typeof presetDefaultClamp.min === "number"
+                                    ? presetDefaultClamp.min
                                     : "-",
-                                  typeof selectedPreset.data.hpFormula.max ===
-                                  "number"
-                                    ? selectedPreset.data.hpFormula.max
+                                  typeof presetDefaultClamp.max === "number"
+                                    ? presetDefaultClamp.max
                                     : "-",
-                                ].join("~")})`
-                              : "")
-                          : selectedPreset.data?.hp
-                            ? `${selectedPreset.data.hp.cur ?? 0}/${selectedPreset.data.hp.max ?? 0}` +
-                              (typeof selectedPreset.data.hp.temp === "number"
-                                ? ` (+${selectedPreset.data.hp.temp})`
-                                : "")
-                            : "없음"}
+                                ].join("~")}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : selectedPreset.data?.hp ? (
+                          `${selectedPreset.data.hp.cur ?? 0}/${selectedPreset.data.hp.max ?? 0}` +
+                          (typeof selectedPreset.data.hp.temp === "number"
+                            ? ` (+${selectedPreset.data.hp.temp})`
+                            : "")
+                        ) : (
+                          "없음"
+                        )}
                       </span>
                     </div>
                     <div>
@@ -1842,6 +2025,103 @@ export default function UnitsPanel(props: {
                 )}
               </div>
             </div>
+
+            {presetFormulaExpr && (
+            <div className="mt-3 rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
+              <div className="text-xs font-semibold text-zinc-200">
+                HP 공식 파라미터
+              </div>
+              {presetFormulaParamKeys.length === 0 ? (
+                <div className="mt-2 text-xs text-zinc-500">
+                  파라미터 없음
+                </div>
+              ) : (
+                  <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                    {presetFormulaParamKeys.map((name) => {
+                      const placeholder =
+                        typeof presetFormulaDefaults[name] === "number"
+                          ? `기본값 ${presetFormulaDefaults[name]}`
+                          : "";
+                      return (
+                        <label
+                          key={name}
+                          className="text-[11px] text-amber-300"
+                        >
+                          {name}
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={presetFormulaParams[name] ?? ""}
+                            placeholder={placeholder}
+                            onChange={(e) =>
+                              setPresetFormulaParams((prev) => ({
+                                ...prev,
+                                [name]: e.target.value,
+                              }))
+                            }
+                            className="mt-1 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-sky-300 placeholder:text-sky-300/70 outline-none focus:border-zinc-600"
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  <label className="text-[11px] text-red-300/80">
+                    최소값
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={presetHpMinInput}
+                      placeholder={
+                        typeof selectedPreset?.data?.hpFormula?.min === "number"
+                          ? `기본값 ${selectedPreset.data.hpFormula.min}`
+                          : ""
+                      }
+                      onChange={(e) => setPresetHpMinInput(e.target.value)}
+                      className="mt-1 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-red-300/80 placeholder:text-red-300/60 outline-none focus:border-zinc-600"
+                    />
+                  </label>
+                  <label className="text-[11px] text-red-300/80">
+                    최대값
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={presetHpMaxInput}
+                      placeholder={
+                        typeof selectedPreset?.data?.hpFormula?.max === "number"
+                          ? `기본값 ${selectedPreset.data.hpFormula.max}`
+                          : ""
+                      }
+                      onChange={(e) => setPresetHpMaxInput(e.target.value)}
+                      className="mt-1 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-red-300/80 placeholder:text-red-300/60 outline-none focus:border-zinc-600"
+                    />
+                  </label>
+                </div>
+                <div className="mt-1 text-[11px] text-zinc-500">
+                  빈칸이면 기본값을 사용합니다.
+                </div>
+              </div>
+            )}
+
+            {presetFormulaExpr && (
+              <div className="mt-3 rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
+                <div className="text-xs font-semibold text-zinc-200">
+                  현재 HP 범위
+                </div>
+                <div className="mt-2 text-sm text-zinc-200">
+                  {formatRangeLabel(estimateFormulaRange(presetFormulaExpr, buildFormulaParamValues(presetFormulaExpr, presetFormulaDefaults, presetFormulaParams) ?? {}))}
+                </div>
+                {(presetHpMinInput.trim() ||
+                  presetHpMaxInput.trim() ||
+                  typeof selectedPreset?.data?.hpFormula?.min === "number" ||
+                  typeof selectedPreset?.data?.hpFormula?.max === "number") && (
+                  <div className="mt-1 text-[11px] text-zinc-500">
+                    수동 최소/최대 범위는 이 표시에서 제외됨
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="mt-4 flex items-center justify-end gap-2">
               <button
