@@ -60,7 +60,7 @@ export default function EditUnitModal(props: {
   onSubmitDeathSaves: (
     unitId: string,
     success: number,
-    failure: number
+    failure: number,
   ) => Promise<void> | void;
   onSubmitPos: (unitId: string, x: number, z: number) => Promise<void> | void;
   onRemoveUnit: (unitId: string) => Promise<void> | void;
@@ -130,14 +130,14 @@ export default function EditUnitModal(props: {
     setColorCode(
       typeof (unit as any).colorCode === "number"
         ? String((unit as any).colorCode)
-        : ""
+        : "",
     );
 
     setAcBase(typeof unit.acBase === "number" ? String(unit.acBase) : "");
     setIntegrityBase(
       typeof (unit as any).integrityBase === "number"
         ? String((unit as any).integrityBase)
-        : ""
+        : "",
     );
 
     const hp = unit.hp;
@@ -180,8 +180,7 @@ export default function EditUnitModal(props: {
     const maxLevel = levels.length ? levels[levels.length - 1] : 0;
     const nextSlots: number[] = [];
     for (let lvl = 1; lvl <= maxLevel; lvl++) {
-      const raw =
-        (slotMap as any)[lvl] ?? (slotMap as any)[String(lvl)] ?? 0;
+      const raw = (slotMap as any)[lvl] ?? (slotMap as any)[String(lvl)] ?? 0;
       nextSlots.push(normalizeCount(raw, 0));
     }
     setSpellSlots(nextSlots);
@@ -203,12 +202,9 @@ export default function EditUnitModal(props: {
   const aliasText = useMemo(() => (unit?.alias ?? "").trim(), [unit?.alias]);
   const toggleTags = useMemo(
     () => manualTags.filter((t) => !stackTags[t]),
-    [manualTags, stackTags]
+    [manualTags, stackTags],
   );
-  const stackEntries = useMemo(
-    () => Object.entries(stackTags),
-    [stackTags]
-  );
+  const stackEntries = useMemo(() => Object.entries(stackTags), [stackTags]);
 
   const tabBtnClass = (active: boolean) =>
     [
@@ -341,8 +337,8 @@ export default function EditUnitModal(props: {
   function updateConsumableCount(name: string, value: number) {
     setConsumables((prev) =>
       prev.map((c) =>
-        c.name === name ? { ...c, count: normalizeCount(value, 0) } : c
-      )
+        c.name === name ? { ...c, count: normalizeCount(value, 0) } : c,
+      ),
     );
   }
 
@@ -417,9 +413,7 @@ export default function EditUnitModal(props: {
       // backend 허용 범위: 30~37, 39
       const ok = (cc >= 30 && cc <= 37) || cc === 39;
       if (!ok) {
-        setErr(
-          "colorCode는 30~37, 39 중 하나만 가능해. (또는 비워서 자동)"
-        );
+        setErr("colorCode는 30~37, 39 중 하나만 가능해. (또는 비워서 자동)");
         return;
       }
       if (cc !== prevColor) patch.colorCode = cc;
@@ -586,7 +580,9 @@ export default function EditUnitModal(props: {
       const cur = normalizeCount((currentConsumables as any)[key], 0);
       if (cur !== val) consumablePatch[key] = val;
     }
-    for (const key of Object.keys(currentConsumables as Record<string, number>)) {
+    for (const key of Object.keys(
+      currentConsumables as Record<string, number>,
+    )) {
       if (desiredConsumables[key] === undefined) consumablePatch[key] = null;
     }
     if (Object.keys(consumablePatch).length > 0) {
@@ -673,7 +669,7 @@ export default function EditUnitModal(props: {
           </div>
         )}
 
-                <div className="mb-3 flex flex-wrap gap-2">
+        <div className="mb-3 flex flex-wrap gap-2">
           <button
             type="button"
             onClick={() => setActiveTab("INFO")}
@@ -718,213 +714,215 @@ export default function EditUnitModal(props: {
 
         {activeTab === "INFO" && (
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <div>
-            <label className="mb-1 block text-xs text-zinc-400">Name</label>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              disabled={busy}
-              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
-            />
-          </div>
+            <div>
+              <label className="mb-1 block text-xs text-zinc-400">Name</label>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                disabled={busy}
+                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
+              />
+            </div>
 
-          <div>
-            <label className="mb-1 block text-xs text-zinc-400">
-              Alias (optional)
-            </label>
-            <input
-              value={alias}
-              onChange={(e) => setAlias(e.target.value)}
-              disabled={busy}
-              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-zinc-400">Type</label>
-            <select
-              value={unitType}
-              onChange={(e) => {
-                const next = e.target.value as UnitKind;
-                setUnitType(next);
-                if (next !== "SERVANT") setMasterUnitId("");
-              }}
-              disabled={busy}
-              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
-            >
-              <option value="NORMAL">일반 유닛</option>
-              <option value="SERVANT">서번트</option>
-              <option value="BUILDING">건물</option>
-            </select>
-          </div>
-
-          {unitType === "SERVANT" && (
             <div>
               <label className="mb-1 block text-xs text-zinc-400">
-                사역자
+                Alias (optional)
               </label>
+              <input
+                value={alias}
+                onChange={(e) => setAlias(e.target.value)}
+                disabled={busy}
+                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs text-zinc-400">Type</label>
               <select
-                value={masterUnitId}
-                onChange={(e) => setMasterUnitId(e.target.value)}
+                value={unitType}
+                onChange={(e) => {
+                  const next = e.target.value as UnitKind;
+                  setUnitType(next);
+                  if (next !== "SERVANT") setMasterUnitId("");
+                }}
                 disabled={busy}
                 className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
               >
-                <option value="">선택</option>
-                {units
-                  .filter((item) => {
-                    if (item.id === u.id) return false;
-                    return (item.unitType ?? "NORMAL") === "NORMAL";
-                  })
-                  .map((item) => {
-                    const aliasText = (item.alias ?? "").trim();
-                    const label = aliasText
-                      ? `${item.name} (${aliasText})`
-                      : item.name;
-                    return (
-                      <option key={item.id} value={item.id}>
-                        {label}
-                      </option>
-                    );
-                  })}
+                <option value="NORMAL">일반 유닛</option>
+                <option value="SERVANT">서번트</option>
+                <option value="BUILDING">건물</option>
               </select>
             </div>
-          )}
 
-          <div>
-            <label className="mb-1 block text-xs text-zinc-400">
-              ColorCode (optional)
-            </label>
-            <select
-              value={colorCode}
-              onChange={(e) => setColorCode(e.target.value)}
-              disabled={busy}
-              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
-            >
-              <option value="">Auto (remove explicit)</option>
-              <option value="39">Default (39)</option>
-
-              <option value="31">Red (31)</option>
-              <option value="32">Green (32)</option>
-              <option value="33">Yellow (33)</option>
-              <option value="34">Blue (34)</option>
-              <option value="35">Magenta (35)</option>
-              <option value="36">Cyan (36)</option>
-              <option value="37">White (37)</option>
-              <option value="30">Gray (30)</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-zinc-400">
-              AC Base (optional)
-            </label>
-            <input
-              value={acBase}
-              onChange={(e) => setAcBase(e.target.value)}
-              placeholder="비우면 base 삭제"
-              disabled={busy}
-              inputMode="numeric"
-              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-zinc-400">
-              Integrity Base (optional)
-            </label>
-            <input
-              value={integrityBase}
-              onChange={(e) => setIntegrityBase(e.target.value)}
-              placeholder="비우면 base 삭제"
-              disabled={busy}
-              inputMode="numeric"
-              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
-            />
-          </div>
-
-          
-
-          <div className="md:col-span-2 flex items-center gap-2">
-            <input
-              id="hasHp"
-              type="checkbox"
-              checked={hasHp}
-              onChange={(e) => setHasHp(e.target.checked)}
-              disabled={busy}
-            />
-            <label htmlFor="hasHp" className="text-sm text-zinc-200">
-              Has HP
-            </label>
-            <span className="text-xs text-zinc-500">
-              (끄면 PATCH에서 hp=null로 삭제)
-            </span>
-          </div>
-
-          {hasHp && (
-            <>
+            {unitType === "SERVANT" && (
               <div>
                 <label className="mb-1 block text-xs text-zinc-400">
-                  HP cur
+                  사역자
                 </label>
-                <input
-                  value={hpCur}
-                  onChange={(e) => setHpCur(e.target.value)}
+                <select
+                  value={masterUnitId}
+                  onChange={(e) => setMasterUnitId(e.target.value)}
                   disabled={busy}
-                  inputMode="numeric"
                   className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
-                />
+                >
+                  <option value="">선택</option>
+                  {units
+                    .filter((item) => {
+                      if (item.id === u.id) return false;
+                      return (item.unitType ?? "NORMAL") === "NORMAL";
+                    })
+                    .map((item) => {
+                      const aliasText = (item.alias ?? "").trim();
+                      const label = aliasText
+                        ? `${item.name} (${aliasText})`
+                        : item.name;
+                      return (
+                        <option key={item.id} value={item.id}>
+                          {label}
+                        </option>
+                      );
+                    })}
+                </select>
               </div>
-              <div>
-                <label className="mb-1 block text-xs text-zinc-400">
-                  HP max
-                </label>
-                <input
-                  value={hpMax}
-                  onChange={(e) => setHpMax(e.target.value)}
-                  disabled={busy}
-                  inputMode="numeric"
-                  className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-zinc-400">
-                  HP temp (optional)
-                </label>
-                <input
-                  value={hpTemp}
-                  onChange={(e) => setHpTemp(e.target.value)}
-                  placeholder="비우면 temp 삭제"
-                  disabled={busy}
-                  inputMode="numeric"
-                  className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
-                />
-              </div>
-            </>
-          )}
+            )}
 
-          <div className="grid grid-cols-2 gap-2 md:col-span-2">
             <div>
-              <label className="mb-1 block text-xs text-zinc-400">pos.x</label>
+              <label className="mb-1 block text-xs text-zinc-400">
+                ColorCode (optional)
+              </label>
+              <select
+                value={colorCode}
+                onChange={(e) => setColorCode(e.target.value)}
+                disabled={busy}
+                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
+              >
+                <option value="">Auto (remove explicit)</option>
+                <option value="39">Default (39)</option>
+
+                <option value="31">Red (31)</option>
+                <option value="32">Green (32)</option>
+                <option value="33">Yellow (33)</option>
+                <option value="34">Blue (34)</option>
+                <option value="35">Magenta (35)</option>
+                <option value="36">Cyan (36)</option>
+                <option value="37">White (37)</option>
+                <option value="30">Gray (30)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs text-zinc-400">
+                AC Base (optional)
+              </label>
               <input
-                value={x}
-                onChange={(e) => setX(e.target.value)}
+                value={acBase}
+                onChange={(e) => setAcBase(e.target.value)}
+                placeholder="비우면 base 삭제"
                 disabled={busy}
                 inputMode="numeric"
                 className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
               />
             </div>
+
             <div>
-              <label className="mb-1 block text-xs text-zinc-400">pos.z</label>
+              <label className="mb-1 block text-xs text-zinc-400">
+                Integrity Base (optional)
+              </label>
               <input
-                value={z}
-                onChange={(e) => setZ(e.target.value)}
+                value={integrityBase}
+                onChange={(e) => setIntegrityBase(e.target.value)}
+                placeholder="비우면 base 삭제"
                 disabled={busy}
                 inputMode="numeric"
                 className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
               />
             </div>
+
+            <div className="md:col-span-2 flex items-center gap-2">
+              <input
+                id="hasHp"
+                type="checkbox"
+                checked={hasHp}
+                onChange={(e) => setHasHp(e.target.checked)}
+                disabled={busy}
+              />
+              <label htmlFor="hasHp" className="text-sm text-zinc-200">
+                Has HP
+              </label>
+              <span className="text-xs text-zinc-500">
+                (끄면 PATCH에서 hp=null로 삭제)
+              </span>
+            </div>
+
+            {hasHp && (
+              <>
+                <div>
+                  <label className="mb-1 block text-xs text-zinc-400">
+                    HP cur
+                  </label>
+                  <input
+                    value={hpCur}
+                    onChange={(e) => setHpCur(e.target.value)}
+                    disabled={busy}
+                    inputMode="numeric"
+                    className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-zinc-400">
+                    HP max
+                  </label>
+                  <input
+                    value={hpMax}
+                    onChange={(e) => setHpMax(e.target.value)}
+                    disabled={busy}
+                    inputMode="numeric"
+                    className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-zinc-400">
+                    HP temp (optional)
+                  </label>
+                  <input
+                    value={hpTemp}
+                    onChange={(e) => setHpTemp(e.target.value)}
+                    placeholder="비우면 temp 삭제"
+                    disabled={busy}
+                    inputMode="numeric"
+                    className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
+                  />
+                </div>
+              </>
+            )}
+
+            <div className="grid grid-cols-2 gap-2 md:col-span-2">
+              <div>
+                <label className="mb-1 block text-xs text-zinc-400">
+                  pos.x
+                </label>
+                <input
+                  value={x}
+                  onChange={(e) => setX(e.target.value)}
+                  disabled={busy}
+                  inputMode="numeric"
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-zinc-400">
+                  pos.z
+                </label>
+                <input
+                  value={z}
+                  onChange={(e) => setZ(e.target.value)}
+                  disabled={busy}
+                  inputMode="numeric"
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
+                />
+              </div>
+            </div>
           </div>
-        </div>
         )}
 
         {activeTab === "STATUS" && (
@@ -1120,10 +1118,6 @@ export default function EditUnitModal(props: {
                   ))}
                 </div>
               )}
-              <div className="mt-3 text-xs text-zinc-500">
-                수동 태그/턴 기반 태그만 관리합니다. 프리셋으로 추가된 태그는
-                여기서 수정되지 않습니다.
-              </div>
             </div>
           </div>
         )}
@@ -1299,9 +1293,7 @@ export default function EditUnitModal(props: {
                     min={0}
                     value={String(newConsumableCount)}
                     onChange={(e) =>
-                      setNewConsumableCount(
-                        normalizeCount(e.target.value, 0)
-                      )
+                      setNewConsumableCount(normalizeCount(e.target.value, 0))
                     }
                     disabled={busy}
                     className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
@@ -1338,10 +1330,7 @@ export default function EditUnitModal(props: {
                         <button
                           type="button"
                           onClick={() =>
-                            updateConsumableCount(
-                              entry.name,
-                              entry.count - 1
-                            )
+                            updateConsumableCount(entry.name, entry.count - 1)
                           }
                           disabled={busy}
                           className="rounded-md border border-zinc-700 bg-zinc-950/40 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800/60 disabled:opacity-50"
@@ -1355,7 +1344,7 @@ export default function EditUnitModal(props: {
                           onChange={(e) =>
                             updateConsumableCount(
                               entry.name,
-                              normalizeCount(e.target.value, 0)
+                              normalizeCount(e.target.value, 0),
                             )
                           }
                           disabled={busy}
@@ -1364,10 +1353,7 @@ export default function EditUnitModal(props: {
                         <button
                           type="button"
                           onClick={() =>
-                            updateConsumableCount(
-                              entry.name,
-                              entry.count + 1
-                            )
+                            updateConsumableCount(entry.name, entry.count + 1)
                           }
                           disabled={busy}
                           className="rounded-md border border-zinc-700 bg-zinc-950/40 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800/60 disabled:opacity-50"

@@ -1,4 +1,4 @@
-// src/App.tsx
+﻿// src/App.tsx
 import {
   useEffect,
   useMemo,
@@ -14,6 +14,7 @@ import {
   createEncounter,
   fetchState,
   listEncounters,
+  listTagPresets,
   postAction,
   publish,
   undo as undoAction,
@@ -26,6 +27,8 @@ import type {
   Marker,
   Pos,
   Side,
+  TagPreset,
+  TagPresetFolder,
   TurnEntry,
   TurnGroup,
   Unit,
@@ -39,6 +42,7 @@ import BenchPanel from "./BenchPanel";
 import TurnOrderBar from "./TurnOrderBar";
 import TurnOrderReorderModal from "./TurnOrderReorderModal";
 import UnitPresetManager from "./UnitPresetManager";
+import TagPresetManager from "./TagPresetManager";
 import { ansiColorCodeToCss } from "./UnitColor";
 
 const LS_DEFAULT_CHANNEL = "operator.defaultChannelId";
@@ -497,6 +501,7 @@ export default function App() {
   );
   const [sessionSelected, setSessionSelected] = useState(false);
   const [presetView, setPresetView] = useState(false);
+  const [tagPresetView, setTagPresetView] = useState(false);
   const [encounters, setEncounters] = useState<EncounterSummary[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null); // primary(대표) 선택
@@ -593,6 +598,20 @@ export default function App() {
   const [tagGrantDecStart, setTagGrantDecStart] = useState(false);
   const [tagGrantDecEnd, setTagGrantDecEnd] = useState(false);
   const [tagGrantErr, setTagGrantErr] = useState<string | null>(null);
+  const [tagGrantPresets, setTagGrantPresets] = useState<TagPreset[]>([]);
+  const [tagGrantPresetFolders, setTagGrantPresetFolders] = useState<
+    TagPresetFolder[]
+  >([]);
+  const [tagGrantPresetId, setTagGrantPresetId] = useState("");
+  const [tagGrantFolderFilter, setTagGrantFolderFilter] = useState<string>("ALL");
+  const [tagGrantPresetQuery, setTagGrantPresetQuery] = useState("");
+  const [tagGrantFolderCollapsed, setTagGrantFolderCollapsed] = useState<
+    Record<string, boolean>
+  >({});
+  const [tagGrantPresetErr, setTagGrantPresetErr] = useState<string | null>(
+    null
+  );
+  const [tagGrantPresetLoading, setTagGrantPresetLoading] = useState(false);
   const [slotUseNotice, setSlotUseNotice] = useState<{
     level: number;
     kind: "spend" | "recover";
@@ -644,6 +663,7 @@ export default function App() {
   const [panelConsumableDelta, setPanelConsumableDelta] = useState<"dec" | "inc">(
     "dec"
   );
+  const [panelTagReduceName, setPanelTagReduceName] = useState("");
   const panelConsumableOptions = useMemo(() => {
     const entries = Object.entries(selected?.consumables ?? {}).filter(
       ([, value]) => typeof value === "number"
@@ -661,6 +681,40 @@ export default function App() {
   const panelConsumableDisabled =
     !selectedId || panelConsumableOptions.length === 0;
 
+  const panelTagReduceOptions = useMemo(() => {
+    const out = new Map<
+      string,
+      { name: string; kind: "toggle" | "stack"; stacks?: number }
+    >();
+    const tags = Array.isArray(selected?.tags) ? selected?.tags : [];
+    for (const raw of tags) {
+      const name = String(raw ?? "").trim();
+      if (!name) continue;
+      if (!out.has(name)) out.set(name, { name, kind: "toggle" });
+    }
+    const tagStates = selected?.tagStates ?? {};
+    for (const [nameRaw, st] of Object.entries(tagStates)) {
+      const name = String(nameRaw ?? "").trim();
+      if (!name) continue;
+      const stacks = Math.max(
+        0,
+        Math.trunc(Number((st as any)?.stacks ?? 0))
+      );
+      if (Number.isFinite(stacks)) {
+        out.set(name, { name, kind: "stack", stacks });
+      }
+    }
+    return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [selected?.tags, selected?.tagStates]);
+  const panelTagReduceDisabled =
+    !selectedId || panelTagReduceOptions.length === 0;
+  const panelTagReduceSelected = useMemo(
+    () =>
+      panelTagReduceOptions.find((opt) => opt.name === panelTagReduceName) ??
+      null,
+    [panelTagReduceOptions, panelTagReduceName]
+  );
+
   useEffect(() => {
     if (!selectedId || panelConsumableOptions.length === 0) {
       if (panelConsumableName !== "") setPanelConsumableName("");
@@ -672,12 +726,74 @@ export default function App() {
     if (!exists) setPanelConsumableName(panelConsumableOptions[0].name);
   }, [selectedId, panelConsumableOptions, panelConsumableName]);
 
+  useEffect(() => {
+    if (!selectedId || panelTagReduceOptions.length === 0) {
+      if (panelTagReduceName !== "") setPanelTagReduceName("");
+      return;
+    }
+    const exists = panelTagReduceOptions.some(
+      (entry) => entry.name === panelTagReduceName
+    );
+    if (!exists) setPanelTagReduceName(panelTagReduceOptions[0].name);
+  }, [selectedId, panelTagReduceOptions, panelTagReduceName]);
+
   const canControlMove = selectedIds.length > 0 || !!selectedId;
   const tagGrantTargetCount = selectedIds.length
     ? selectedIds.length
     : selectedId
       ? 1
       : 0;
+  const tagGrantFolderTree = useMemo(() => {
+    const byParent = new Map<string | null, TagPresetFolder[]>();
+    for (const folder of tagGrantPresetFolders) {
+      const parentId = folder.parentId ?? null;
+      const list = byParent.get(parentId) ?? [];
+      list.push(folder);
+      byParent.set(parentId, list);
+    }
+    for (const list of byParent.values()) {
+      list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    }
+    const out: Array<{
+      folder: TagPresetFolder;
+      depth: number;
+      hasChildren: boolean;
+      collapsed: boolean;
+    }> = [];
+    const walk = (parentId: string | null, depth: number) => {
+      const list = byParent.get(parentId) ?? [];
+      for (const folder of list) {
+        const children = byParent.get(folder.id) ?? [];
+        const collapsed = !!tagGrantFolderCollapsed[folder.id];
+        out.push({
+          folder,
+          depth,
+          hasChildren: children.length > 0,
+          collapsed,
+        });
+        if (!collapsed) walk(folder.id, depth + 1);
+      }
+    };
+    walk(null, 0);
+    return out;
+  }, [tagGrantPresetFolders, tagGrantFolderCollapsed]);
+  const tagGrantFilteredPresets = useMemo(() => {
+    const query = tagGrantPresetQuery.trim().toLowerCase();
+    let list = tagGrantPresets;
+    if (tagGrantFolderFilter === "NONE") {
+      list = list.filter((preset) => !preset.folderId);
+    } else if (tagGrantFolderFilter !== "ALL") {
+      list = list.filter(
+        (preset) => (preset.folderId ?? "") === tagGrantFolderFilter
+      );
+    }
+    if (query) {
+      list = list.filter((preset) =>
+        (preset.name ?? "").toLowerCase().includes(query)
+      );
+    }
+    return [...list].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  }, [tagGrantPresets, tagGrantFolderFilter, tagGrantPresetQuery]);
 
   useEffect(() => {
     if (authToken) {
@@ -719,10 +835,12 @@ export default function App() {
     if (!authUser) {
       setSessionSelected(false);
       setPresetView(false);
+      setTagPresetView(false);
       return;
     }
     setSessionSelected(false);
     setPresetView(false);
+    setTagPresetView(false);
   }, [authUser?.id]);
 
   useEffect(() => {
@@ -990,6 +1108,7 @@ export default function App() {
       setState(null);
       setSessionSelected(false);
       setPresetView(false);
+      setTagPresetView(false);
     }
   }
 
@@ -1145,7 +1264,43 @@ export default function App() {
       setTagGrantDecStart(false);
       setTagGrantDecEnd(false);
       setTagGrantErr(null);
+      setTagGrantPresets([]);
+      setTagGrantPresetFolders([]);
+      setTagGrantPresetId("");
+      setTagGrantFolderFilter("ALL");
+      setTagGrantPresetQuery("");
+      setTagGrantFolderCollapsed({});
+      setTagGrantPresetErr(null);
+      setTagGrantPresetLoading(false);
     }
+  }, [tagGrantOpen]);
+
+  useEffect(() => {
+    if (!tagGrantOpen) return;
+    let cancelled = false;
+    setTagGrantPresetLoading(true);
+    setTagGrantPresetErr(null);
+    listTagPresets()
+      .then((res) => {
+        if (cancelled) return;
+        const data = res as {
+          presets?: TagPreset[];
+          folders?: TagPresetFolder[];
+        };
+        setTagGrantPresets(data.presets ?? []);
+        setTagGrantPresetFolders(data.folders ?? []);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setTagGrantPresetErr(String(e?.message ?? e));
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setTagGrantPresetLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [tagGrantOpen]);
 
   useEffect(() => {
@@ -1357,6 +1512,22 @@ export default function App() {
     setTagGrantOpen(false);
   }
 
+  function applyTagPresetToGrant(presetOverride?: TagPreset) {
+    const preset =
+      presetOverride ??
+      tagGrantPresets.find((p) => p.id === tagGrantPresetId);
+    if (!preset) {
+      setTagGrantErr("태그 프리셋을 선택해줘.");
+      return;
+    }
+    setTagGrantErr(null);
+    setTagGrantName(preset.name ?? "");
+    setTagGrantType(preset.kind === "stack" ? "stack" : "toggle");
+    setTagGrantStacks(1);
+    setTagGrantDecStart(!!preset.decOnTurnStart);
+    setTagGrantDecEnd(!!preset.decOnTurnEnd);
+  }
+
   async function applyStatusTagGrant() {
     if (busy) return;
     const name = normalizeTagName(tagGrantName);
@@ -1451,6 +1622,39 @@ export default function App() {
 
     if (mode === "ADD_TAG") {
       openTagGrantModal();
+      return;
+    }
+
+    if (mode === "REMOVE_TAG") {
+      const unitId = selectedId;
+      if (!unitId) return;
+      const entry = panelTagReduceSelected;
+      if (!entry) return;
+      if (entry.kind === "toggle") {
+        await run({
+          type: "PATCH_UNIT",
+          unitId,
+          patch: {
+            tags: { remove: [entry.name] },
+            tagStates: { [entry.name]: null },
+          },
+        });
+        return;
+      }
+      const deltaRaw = Math.max(1, Math.trunc(Number(amount)));
+      if (!Number.isFinite(deltaRaw) || deltaRaw <= 0) return;
+      const delta =
+        typeof entry.stacks === "number"
+          ? Math.min(deltaRaw, entry.stacks)
+          : deltaRaw;
+      await run({
+        type: "PATCH_UNIT",
+        unitId,
+        patch: {
+          tags: { remove: [entry.name] },
+          tagStates: { [entry.name]: { stacks: { delta: -delta } } },
+        },
+      });
       return;
     }
 
@@ -1994,6 +2198,15 @@ export default function App() {
     );
   }
 
+  if (tagPresetView) {
+    return (
+      <TagPresetManager
+        authUser={authUser}
+        onBack={() => setTagPresetView(false)}
+      />
+    );
+  }
+
   if (!sessionSelected || !encounterId) {
     return (
       <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -2031,10 +2244,24 @@ export default function App() {
                 <button
                   type="button"
                   className="rounded-lg border border-emerald-700/60 bg-emerald-950/30 px-3 py-1.5 text-xs text-emerald-200 hover:bg-emerald-900/40"
-                  onClick={() => setPresetView(true)}
+                  onClick={() => {
+                    setTagPresetView(false);
+                    setPresetView(true);
+                  }}
                   disabled={busy}
                 >
                   유닛 프리셋 관리
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-sky-700/60 bg-sky-950/30 px-3 py-1.5 text-xs text-sky-200 hover:bg-sky-900/40"
+                  onClick={() => {
+                    setPresetView(false);
+                    setTagPresetView(true);
+                  }}
+                  disabled={busy}
+                >
+                  태그 프리셋 관리
                 </button>
                 <button
                   type="button"
@@ -2523,7 +2750,7 @@ export default function App() {
           >
             {/* overlay */}
             <div
-              className="absolute inset-0 bg-black/25 backdrop-blur-[2px]"
+              className="absolute inset-0 bg-black/25"
               onClick={busy ? undefined : closeTagGrantModal}
               role="button"
               aria-label="Close overlay"
@@ -2630,6 +2857,181 @@ export default function App() {
                   </label>
                 </div>
               )}
+
+              <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+                <div className="mb-2 text-xs font-semibold text-zinc-300">
+                  태그 프리셋
+                </div>
+                {tagGrantPresetErr && (
+                  <div className="mb-2 rounded-md border border-rose-900/60 bg-rose-950/30 px-2 py-1 text-[11px] text-rose-200">
+                    {tagGrantPresetErr}
+                  </div>
+                )}
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-[160px_minmax(0,1fr)]">
+                  <div className="rounded-md border border-zinc-800 bg-zinc-950/30 p-2">
+                    <div className="text-[11px] font-semibold text-zinc-200">
+                      폴더
+                    </div>
+                    <div className="mt-2 max-h-40 space-y-1 overflow-auto pr-1">
+                      <button
+                        type="button"
+                        className={[
+                          "w-full rounded-md border px-2 py-1 text-left text-[11px]",
+                          tagGrantFolderFilter === "ALL"
+                            ? "border-amber-700/70 bg-amber-950/30 text-amber-100"
+                            : "border-zinc-800 bg-zinc-950/30 text-zinc-400 hover:text-zinc-200",
+                        ].join(" ")}
+                        onClick={() => setTagGrantFolderFilter("ALL")}
+                        disabled={tagGrantPresetLoading || busy}
+                      >
+                        전체
+                      </button>
+                      <button
+                        type="button"
+                        className={[
+                          "w-full rounded-md border px-2 py-1 text-left text-[11px]",
+                          tagGrantFolderFilter === "NONE"
+                            ? "border-amber-700/70 bg-amber-950/30 text-amber-100"
+                            : "border-zinc-800 bg-zinc-950/30 text-zinc-400 hover:text-zinc-200",
+                        ].join(" ")}
+                        onClick={() => setTagGrantFolderFilter("NONE")}
+                        disabled={tagGrantPresetLoading || busy}
+                      >
+                        폴더 없음
+                      </button>
+                      {tagGrantFolderTree.map(
+                        ({ folder, depth, hasChildren, collapsed }) => (
+                        <button
+                          key={folder.id}
+                          type="button"
+                          className={[
+                            "flex w-full items-center gap-1 rounded-md border px-2 py-1 text-left text-[11px]",
+                            tagGrantFolderFilter === folder.id
+                              ? "border-amber-700/70 bg-amber-950/30 text-amber-100"
+                              : "border-zinc-800 bg-zinc-950/30 text-zinc-400 hover:text-zinc-200",
+                          ].join(" ")}
+                          style={{ paddingLeft: `${8 + depth * 10}px` }}
+                          onClick={() => setTagGrantFolderFilter(folder.id)}
+                          disabled={tagGrantPresetLoading || busy}
+                        >
+                          {hasChildren ? (
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              className="rounded border border-zinc-700 px-1 text-[10px] text-zinc-300 hover:text-zinc-100"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTagGrantFolderCollapsed((prev) => ({
+                                  ...prev,
+                                  [folder.id]: !collapsed,
+                                }));
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key !== "Enter") return;
+                                e.stopPropagation();
+                                setTagGrantFolderCollapsed((prev) => ({
+                                  ...prev,
+                                  [folder.id]: !collapsed,
+                                }));
+                              }}
+                            >
+                              {collapsed ? "+" : "-"}
+                            </span>
+                          ) : (
+                            <span className="w-4" />
+                          )}
+                          <span>{folder.name}</span>
+                        </button>
+                      )
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border border-zinc-800 bg-zinc-950/30 p-2">
+                    <div className="mb-2 flex items-center justify-between">
+                      <div className="text-[11px] font-semibold text-zinc-200">
+                        프리셋
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!tagGrantOpen) return;
+                          setTagGrantPresetErr(null);
+                          setTagGrantPresetLoading(true);
+                          listTagPresets()
+                            .then((res) => {
+                              const data = res as {
+                                presets?: TagPreset[];
+                                folders?: TagPresetFolder[];
+                              };
+                              setTagGrantPresets(data.presets ?? []);
+                              setTagGrantPresetFolders(data.folders ?? []);
+                            })
+                            .catch((e) =>
+                              setTagGrantPresetErr(String(e?.message ?? e))
+                            )
+                            .finally(() => setTagGrantPresetLoading(false));
+                        }}
+                        disabled={tagGrantPresetLoading || busy}
+                        className="rounded-md border border-zinc-800 px-2 py-1 text-[10px] text-zinc-200 hover:bg-zinc-800/60 disabled:opacity-50"
+                      >
+                        새로고침
+                      </button>
+                    </div>
+                    <input
+                      value={tagGrantPresetQuery}
+                      onChange={(e) => setTagGrantPresetQuery(e.target.value)}
+                      placeholder="프리셋 검색"
+                      disabled={tagGrantPresetLoading || busy}
+                      className="mb-2 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-zinc-600 disabled:opacity-60"
+                    />
+                    <div className="max-h-40 space-y-1 overflow-auto pr-1">
+                      {tagGrantFilteredPresets.length === 0 ? (
+                        <div className="rounded-md border border-zinc-800 bg-zinc-950/30 p-2 text-xs text-zinc-500">
+                          표시할 프리셋이 없습니다.
+                        </div>
+                      ) : (
+                        tagGrantFilteredPresets.map((preset) => {
+                          const presetColor =
+                            typeof preset.colorCode === "number" &&
+                            preset.colorCode !== 37
+                              ? ansiColorCodeToCss(preset.colorCode)
+                              : undefined;
+                          return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() => {
+                              setTagGrantPresetId(preset.id);
+                              applyTagPresetToGrant(preset);
+                            }}
+                            className={[
+                              "w-full rounded-md border px-2 py-1 text-left text-xs",
+                              preset.id === tagGrantPresetId
+                                ? "border-amber-700/70 bg-amber-950/30 text-amber-100"
+                                : "border-zinc-800 bg-zinc-950/30 text-zinc-300 hover:bg-zinc-800/60",
+                            ].join(" ")}
+                          >
+                            <div className="font-semibold">
+                              <span
+                                style={
+                                  presetColor ? { color: presetColor } : undefined
+                                }
+                              >
+                                {preset.name ?? ""}
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-zinc-500">
+                              {preset.kind === "stack" ? "스택형" : "토글형"}
+                            </div>
+                          </button>
+                        );
+                        })
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
 
               <div className="mt-4 flex justify-end gap-2">
                 <button
@@ -3136,6 +3538,12 @@ export default function App() {
           setConsumableDelta={setPanelConsumableDelta}
           consumableRemaining={panelConsumableRemaining}
           consumableDisabled={panelConsumableDisabled}
+          tagReduceOptions={panelTagReduceOptions}
+          tagReduceName={panelTagReduceName}
+          setTagReduceName={setPanelTagReduceName}
+          tagReduceKind={panelTagReduceSelected?.kind ?? null}
+          tagReduceStacks={panelTagReduceSelected?.stacks ?? null}
+          tagReduceDisabled={panelTagReduceDisabled}
         />
       </div>
     </div>

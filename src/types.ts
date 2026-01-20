@@ -168,6 +168,31 @@ export type UnitPreset = {
   updatedAt?: string;
 };
 
+export type TagPresetKind = "toggle" | "stack";
+
+export type TagPreset = {
+  id: string;
+  ownerId?: string;
+  folderId?: string | null;
+  order?: number;
+  name: string;
+  kind: TagPresetKind;
+  decOnTurnStart?: boolean;
+  decOnTurnEnd?: boolean;
+  colorCode?: number;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type TagPresetFolder = {
+  id: string;
+  name: string;
+  order: number;
+  parentId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 /**
  * ✅ UI에서 쓰는 CREATE_UNIT payload (backend CREATE_UNIT과 맞춤)
  * - unitId/alias/colorCode optional

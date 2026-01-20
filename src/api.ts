@@ -190,6 +190,98 @@ export async function validateHpFormula(body: {
   return res.json();
 }
 
+export async function listTagPresets() {
+  const res = await fetch(`${API_BASE}/tag-presets`, {
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createTagPresetFolder(body: {
+  name?: string;
+  order?: number;
+  parentId?: string | null;
+}) {
+  const res = await fetch(`${API_BASE}/tag-presets/folders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateTagPresetFolder(
+  id: string,
+  body: { name?: string; order?: number | null; parentId?: string | null }
+) {
+  const res = await fetch(`${API_BASE}/tag-presets/folders/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteTagPresetFolder(id: string) {
+  const res = await fetch(`${API_BASE}/tag-presets/folders/${id}`, {
+    method: "DELETE",
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createTagPreset(body: {
+  name?: string;
+  folderId?: string | null;
+  order?: number;
+  kind?: "toggle" | "stack";
+  decOnTurnStart?: boolean;
+  decOnTurnEnd?: boolean;
+  colorCode?: number | null;
+}) {
+  const res = await fetch(`${API_BASE}/tag-presets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateTagPreset(
+  id: string,
+  body: {
+    name?: string;
+    folderId?: string | null;
+    order?: number | null;
+    kind?: "toggle" | "stack";
+    decOnTurnStart?: boolean;
+    decOnTurnEnd?: boolean;
+    colorCode?: number | null;
+  }
+) {
+  const res = await fetch(`${API_BASE}/tag-presets/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteTagPreset(id: string) {
+  const res = await fetch(`${API_BASE}/tag-presets/${id}`, {
+    method: "DELETE",
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 // 이동/배치
 export const moveUnit = (encounterId: string, unitId: string, dx = 0, dz = 0) =>
   postAction(encounterId, { type: "MOVE_UNIT", unitId, dx, dz });

@@ -7,6 +7,7 @@ export type ControlActionMode =
   | "NEXT_TURN"
   | "TEMP_HP"
   | "ADD_TAG"
+  | "REMOVE_TAG"
   | "SPELL_SLOT"
   | "ADD_DEATH_FAIL"
   | "TOGGLE_HIDDEN"
@@ -48,6 +49,7 @@ function loadMode(): ControlActionMode | null {
       raw === "NEXT_TURN" ||
       raw === "TEMP_HP" ||
       raw === "ADD_TAG" ||
+      raw === "REMOVE_TAG" ||
       raw === "SPELL_SLOT" ||
       raw === "ADD_DEATH_FAIL" ||
       raw === "TOGGLE_HIDDEN" ||
@@ -103,6 +105,12 @@ export default function ControlPanel(props: {
   setConsumableDelta: (delta: "dec" | "inc") => void;
   consumableRemaining?: number | null;
   consumableDisabled?: boolean;
+  tagReduceOptions: Array<{ name: string; kind: "toggle" | "stack"; stacks?: number }>;
+  tagReduceName: string;
+  setTagReduceName: (name: string) => void;
+  tagReduceKind?: "toggle" | "stack" | null;
+  tagReduceStacks?: number | null;
+  tagReduceDisabled?: boolean;
 }) {
   const {
     disabled,
@@ -123,6 +131,12 @@ export default function ControlPanel(props: {
     setConsumableDelta,
     consumableRemaining,
     consumableDisabled = false,
+    tagReduceOptions,
+    tagReduceName,
+    setTagReduceName,
+    tagReduceKind = null,
+    tagReduceStacks = null,
+    tagReduceDisabled = false,
   } = props;
 
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -151,6 +165,8 @@ export default function ControlPanel(props: {
         return "Temp HP";
       case "ADD_TAG":
         return "Add Tag";
+      case "REMOVE_TAG":
+        return "Remove Tag";
       case "SPELL_SLOT":
         return "Spell Slot";
       case "ADD_DEATH_FAIL":
@@ -255,7 +271,21 @@ export default function ControlPanel(props: {
       ? true
       : mode === "CONSUMABLE"
         ? canControlAction && !consumableDisabled && !!consumableName
+        : mode === "REMOVE_TAG"
+          ? canControlAction && !tagReduceDisabled && !!tagReduceName
         : canControlAction;
+
+  const amountUnusedMode =
+    mode === "NEXT_TURN" ||
+    mode === "ADD_TAG" ||
+    mode === "ADD_DEATH_FAIL" ||
+    mode === "TOGGLE_HIDDEN";
+  const amountDisabled =
+    disabled ||
+    amountUnusedMode ||
+    (mode === "REMOVE_TAG" && (tagReduceDisabled || tagReduceKind !== "stack"));
+  const amountMuted =
+    amountUnusedMode || (mode === "REMOVE_TAG" && tagReduceKind === "toggle");
 
   return (
     <div
@@ -375,6 +405,7 @@ export default function ControlPanel(props: {
                 <option value="NEXT_TURN">다음 턴</option>
                 <option value="TEMP_HP">임체 부여</option>
                 <option value="ADD_TAG">상태 부여</option>
+                <option value="REMOVE_TAG">상태 감소(해제)</option>
                 <option value="SPELL_SLOT">주문 슬롯</option>
                 <option value="ADD_DEATH_FAIL">사망 내성 증가</option>
                 <option value="TOGGLE_HIDDEN">숨겨짐 토글</option>
@@ -386,7 +417,11 @@ export default function ControlPanel(props: {
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                className={btnBase + " h-9 w-9"}
+                className={[
+                  btnBase,
+                  "h-9 w-9",
+                  amountMuted ? "text-zinc-500" : "",
+                ].join(" ")}
                 onClick={() => {
                   const next =
                     mode === "SPELL_SLOT"
@@ -394,13 +429,7 @@ export default function ControlPanel(props: {
                       : Math.max(0, amount - 1);
                   setAmount(next);
                 }}
-                disabled={
-                  disabled ||
-                  mode === "NEXT_TURN" ||
-                  mode === "ADD_TAG" ||
-                  mode === "ADD_DEATH_FAIL" ||
-                  mode === "TOGGLE_HIDDEN"
-                }
+                disabled={amountDisabled}
                 title="-1"
               >
                 -
@@ -429,19 +458,20 @@ export default function ControlPanel(props: {
                   setAmount(next);
                   setAmountInput(String(next));
                 }}
-                className="h-9 w-16 rounded-xl border border-zinc-800 bg-zinc-950 px-2 text-sm text-zinc-100 outline-none focus:border-zinc-600"
-                disabled={
-                  disabled ||
-                  mode === "NEXT_TURN" ||
-                  mode === "ADD_TAG" ||
-                  mode === "ADD_DEATH_FAIL" ||
-                  mode === "TOGGLE_HIDDEN"
-                }
+                className={[
+                  "h-9 w-16 rounded-xl border border-zinc-800 bg-zinc-950 px-2 text-sm outline-none focus:border-zinc-600",
+                  amountMuted ? "text-zinc-500" : "text-zinc-100",
+                ].join(" ")}
+                disabled={amountDisabled}
                 title="amount"
               />
               <button
                 type="button"
-                className={btnBase + " h-9 w-9"}
+                className={[
+                  btnBase,
+                  "h-9 w-9",
+                  amountMuted ? "text-zinc-500" : "",
+                ].join(" ")}
                 onClick={() => {
                   const next =
                     mode === "SPELL_SLOT"
@@ -449,19 +479,53 @@ export default function ControlPanel(props: {
                       : amount + 1;
                   setAmount(next);
                 }}
-                disabled={
-                  disabled ||
-                  mode === "NEXT_TURN" ||
-                  mode === "ADD_TAG" ||
-                  mode === "ADD_DEATH_FAIL" ||
-                  mode === "TOGGLE_HIDDEN"
-                }
+                disabled={amountDisabled}
                 title="+1"
               >
                 +
               </button>
             </div>
           </div>
+
+          {mode === "REMOVE_TAG" && (
+            <div className="mt-3 space-y-1">
+              <div className="flex items-center gap-2">
+                <select
+                  value={tagReduceName}
+                  onChange={(e) => setTagReduceName(e.target.value)}
+                  disabled={disabled || tagReduceDisabled}
+                  className={[
+                    "h-9 flex-1 rounded-xl border bg-zinc-950 px-3 text-xs font-semibold text-zinc-100 outline-none focus:border-zinc-600",
+                    "border-zinc-800",
+                    "disabled:border-zinc-800/60 disabled:bg-zinc-900/40 disabled:text-zinc-500",
+                  ].join(" ")}
+                >
+                  {tagReduceOptions.length === 0 ? (
+                    <option value="">적용 중인 상태 없음</option>
+                  ) : (
+                    tagReduceOptions.map((entry) => (
+                      <option key={entry.name} value={entry.name}>
+                        {entry.name}
+                      </option>
+                    ))
+                  )}
+                </select>
+                {tagReduceKind ? (
+                  <div className="text-xs text-zinc-400">
+                    {tagReduceKind === "stack" ? "스택형" : "토글형"}
+                  </div>
+                ) : (
+                  <div className="text-xs text-zinc-500">-</div>
+                )}
+              </div>
+              {tagReduceKind === "stack" &&
+                typeof tagReduceStacks === "number" && (
+                  <div className="text-[11px] text-amber-300">
+                    잔여 스택: {tagReduceStacks}
+                  </div>
+                )}
+            </div>
+          )}
 
           {mode === "SPELL_SLOT" && (
             <div className="mt-3 flex items-center gap-2">
