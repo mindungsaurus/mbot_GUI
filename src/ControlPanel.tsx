@@ -11,7 +11,8 @@ export type ControlActionMode =
   | "SPELL_SLOT"
   | "ADD_DEATH_FAIL"
   | "TOGGLE_HIDDEN"
-  | "CONSUMABLE";
+  | "CONSUMABLE"
+  | "ASSIGN_IDENTIFIER";
 
 const LS_PANEL_POS = "operator.controlPanel.pos";
 const LS_PANEL_MODE = "operator.controlPanel.mode";
@@ -53,7 +54,8 @@ function loadMode(): ControlActionMode | null {
       raw === "SPELL_SLOT" ||
       raw === "ADD_DEATH_FAIL" ||
       raw === "TOGGLE_HIDDEN" ||
-      raw === "CONSUMABLE"
+      raw === "CONSUMABLE" ||
+      raw === "ASSIGN_IDENTIFIER"
     )
       return raw;
     return null;
@@ -108,6 +110,9 @@ export default function ControlPanel(props: {
   setSlotLevel: (level: number) => void;
   slotDelta: "spend" | "recover";
   setSlotDelta: (delta: "spend" | "recover") => void;
+  identifierOptions: Array<{ id: string; label: string }>;
+  identifierScheme: string;
+  setIdentifierScheme: (value: string) => void;
   consumableOptions: Array<{ name: string; value: number }>;
   consumableName: string;
   setConsumableName: (name: string) => void;
@@ -135,6 +140,9 @@ export default function ControlPanel(props: {
     setSlotLevel,
     slotDelta,
     setSlotDelta,
+    identifierOptions,
+    identifierScheme,
+    setIdentifierScheme,
     consumableOptions,
     consumableName,
     setConsumableName,
@@ -186,6 +194,8 @@ export default function ControlPanel(props: {
         return "Hide";
       case "CONSUMABLE":
         return "Consumable";
+      case "ASSIGN_IDENTIFIER":
+        return "Identifier";
       case "NEXT_TURN":
         return "Next Turn";
     }
@@ -315,7 +325,8 @@ export default function ControlPanel(props: {
     mode === "NEXT_TURN" ||
     mode === "ADD_TAG" ||
     mode === "ADD_DEATH_FAIL" ||
-    mode === "TOGGLE_HIDDEN";
+    mode === "TOGGLE_HIDDEN" ||
+    mode === "ASSIGN_IDENTIFIER";
   const amountDisabled =
     disabled ||
     amountUnusedMode ||
@@ -447,6 +458,7 @@ export default function ControlPanel(props: {
                 <option value="ADD_DEATH_FAIL">사망 내성 증가</option>
                 <option value="TOGGLE_HIDDEN">숨겨짐 토글</option>
                 <option value="CONSUMABLE">고유 소모값</option>
+                <option value="ASSIGN_IDENTIFIER">식별자 부여</option>
               </select>
             </div>
 
@@ -588,6 +600,23 @@ export default function ControlPanel(props: {
               >
                 <option value="spend">감소</option>
                 <option value="recover">증가</option>
+              </select>
+            </div>
+          )}
+
+          {mode === "ASSIGN_IDENTIFIER" && (
+            <div className="mt-3">
+              <select
+                value={identifierScheme}
+                onChange={(e) => setIdentifierScheme(e.target.value)}
+                disabled={disabled || !canControlAction}
+                className="h-9 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 text-xs font-semibold text-zinc-100 outline-none focus:border-zinc-600 disabled:border-zinc-800/60 disabled:bg-zinc-900/40 disabled:text-zinc-500"
+              >
+                {identifierOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
             </div>
           )}

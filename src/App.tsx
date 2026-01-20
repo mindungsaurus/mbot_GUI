@@ -61,6 +61,13 @@ const SIDE_MEMO_COLORS: Array<{ code: number; label: string }> = [
   { code: 36, label: "하늘" },
   { code: 37, label: "흰색" },
 ];
+const IDENTIFIER_SCHEME_OPTIONS = [
+  { id: "korean", label: "한글 ㄱㄴㄷ" },
+  { id: "abc", label: "영문 abc" },
+  { id: "ABC", label: "영문 ABC" },
+  { id: "greek", label: "그리스 문자" },
+  { id: "number", label: "숫자" },
+] as const;
 
 type AnsiSegment = {
   text: string;
@@ -515,6 +522,9 @@ export default function App() {
   const [amount, setAmount] = useState<number>(5);
   const [panelSlotLevel, setPanelSlotLevel] = useState<number>(1);
   const [panelSlotDelta, setPanelSlotDelta] = useState<"spend" | "recover">("spend");
+  const [panelIdentifierScheme, setPanelIdentifierScheme] = useState<string>(
+    () => IDENTIFIER_SCHEME_OPTIONS[0].id
+  );
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1783,6 +1793,18 @@ export default function App() {
         unitId,
       }));
       await run(actions);
+      return;
+    }
+
+    if (mode === "ASSIGN_IDENTIFIER") {
+      const targets = selectedIds.length
+        ? selectedIds
+        : selectedId
+          ? [selectedId]
+          : [];
+      if (targets.length === 0) return;
+      const scheme = panelIdentifierScheme || IDENTIFIER_SCHEME_OPTIONS[0].id;
+      await run({ type: "ASSIGN_IDENTIFIER", unitIds: targets, scheme });
       return;
     }
 
@@ -3716,6 +3738,9 @@ export default function App() {
           setSlotLevel={setPanelSlotLevel}
           slotDelta={panelSlotDelta}
           setSlotDelta={setPanelSlotDelta}
+          identifierOptions={[...IDENTIFIER_SCHEME_OPTIONS]}
+          identifierScheme={panelIdentifierScheme}
+          setIdentifierScheme={setPanelIdentifierScheme}
           consumableOptions={panelConsumableOptions}
           consumableName={panelConsumableName}
           setConsumableName={setPanelConsumableName}

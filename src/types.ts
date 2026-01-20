@@ -119,6 +119,7 @@ export type EncounterState = {
   turnGroups?: TurnGroup[];
   turnIndex?: number;
   battleStarted?: boolean;
+  identifierCounters?: Record<string, number>;
 
   // optional (backend has these)
   round?: number;
