@@ -136,7 +136,10 @@ function renderAnsiMemo(text: string) {
     <span
       key={`${idx}-${seg.text.length}`}
       style={{
-        color: seg.color,
+        color:
+          typeof seg.color === "number"
+            ? ansiColorCodeToCss(seg.color)
+            : seg.color,
         fontWeight: seg.bold ? 700 : 400,
         fontSynthesis: "weight",
       }}
