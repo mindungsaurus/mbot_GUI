@@ -113,6 +113,7 @@ export type EncounterState = {
 
   units: Unit[];
   markers?: Marker[];
+  sideNotes?: Partial<Record<Side, string>>;
 
   turnOrder?: TurnEntry[];
   turnGroups?: TurnGroup[];

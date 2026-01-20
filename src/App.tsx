@@ -45,10 +45,20 @@ const LS_DEFAULT_CHANNEL = "operator.defaultChannelId";
 const LS_RECENT_CHANNELS = "operator.recentChannelIds";
 const LS_AUTH_TOKEN = "operator.auth.token";
 const LS_ENCOUNTER_ID = "operator.encounterId";
+const SIDE_MEMO_COLORS: Array<{ code: number; label: string }> = [
+  { code: 30, label: "회색" },
+  { code: 31, label: "빨강" },
+  { code: 32, label: "초록" },
+  { code: 33, label: "노랑" },
+  { code: 34, label: "파랑" },
+  { code: 35, label: "보라" },
+  { code: 36, label: "하늘" },
+  { code: 37, label: "흰색" },
+];
 
 type AnsiSegment = {
   text: string;
-  color?: string;
+  color?: number | string;
   bold?: boolean;
 };
 
@@ -128,12 +138,189 @@ function renderAnsiMemo(text: string) {
       style={{
         color: seg.color,
         fontWeight: seg.bold ? 700 : 400,
+        fontSynthesis: "weight",
       }}
     >
       {seg.text}
     </span>
   ));
 }
+
+function escapeHtml(text: string) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function normalizeCssColor(raw?: string | null): string | null {
+  if (!raw) return null;
+  const value = raw.trim().toLowerCase();
+  if (!value) return null;
+  if (value.startsWith("#")) {
+    if (value.length === 4) {
+      return (
+        "#" +
+        value
+          .slice(1)
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      );
+    }
+    return value;
+  }
+  const rgbMatch = value.match(/rgba?\(([^)]+)\)/);
+  if (rgbMatch) {
+    const parts = rgbMatch[1]
+      .split(/[,\s/]+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    const [rRaw, gRaw, bRaw] = parts;
+    const r = Number(rRaw);
+    const g = Number(gRaw);
+    const b = Number(bRaw);
+    if ([r, g, b].every((n) => Number.isFinite(n))) {
+      return (
+        "#" +
+        [r, g, b]
+          .map((n) => n.toString(16).padStart(2, "0"))
+          .join("")
+      );
+    }
+  }
+  return null;
+}
+
+const ANSI_COLOR_MAP: Array<{ code: number; css: string }> = SIDE_MEMO_COLORS.map(
+  (c) => ({ code: c.code, css: ansiColorCodeToCss(c.code) ?? "" })
+).filter((c) => c.css);
+
+function cssColorToAnsiCode(raw?: string | null): number | undefined {
+  const norm = normalizeCssColor(raw);
+  if (!norm) return undefined;
+  for (const entry of ANSI_COLOR_MAP) {
+    if (normalizeCssColor(entry.css) === norm) return entry.code;
+  }
+  return undefined;
+}
+
+function segmentsToHtml(segments: AnsiSegment[]): string {
+  if (!segments.length) return "";
+  return segments
+    .map((seg) => {
+      const text = escapeHtml(seg.text);
+      const styles: string[] = [];
+      if (typeof seg.color === "number") {
+        styles.push(`color: ${ansiColorCodeToCss(seg.color)}`);
+      } else if (typeof seg.color === "string") {
+        styles.push(`color: ${seg.color}`);
+      }
+      if (seg.bold) styles.push("font-weight: 700");
+      const styleAttr = styles.length ? ` style="${styles.join("; ")}"` : "";
+      return `<span${styleAttr}>${text}</span>`;
+    })
+    .join("");
+}
+
+function ansiToHtml(raw: string | null | undefined): string {
+  const segments = parseAnsiSegments(normalizeAnsiMemo(raw));
+  return segmentsToHtml(segments);
+}
+
+function extractSegmentsFromHtml(html: string): AnsiSegment[] {
+  const container = document.createElement("div");
+  container.innerHTML = html || "";
+  const out: AnsiSegment[] = [];
+
+  function pushText(text: string, style: { color?: number; bold?: boolean }) {
+    if (!text) return;
+    const cleaned = text.replace(/ /g, " ");
+    if (!cleaned) return;
+    const last = out[out.length - 1];
+    if (last && last.color === style.color && last.bold === style.bold) {
+      last.text += cleaned;
+      return;
+    }
+    out.push({ text: cleaned, color: style.color, bold: style.bold });
+  }
+
+  function walk(node: Node, style: { color?: number; bold?: boolean }) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      pushText(node.textContent ?? "", style);
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+    const el = node as HTMLElement;
+    let nextStyle = { ...style };
+    const tag = el.tagName.toUpperCase();
+
+    if (tag === "B" || tag === "STRONG") {
+      nextStyle.bold = true;
+    }
+
+    const weight = el.style.fontWeight;
+    if (weight) {
+      if (weight === "bold") nextStyle.bold = true;
+      const numeric = Number(weight);
+      if (Number.isFinite(numeric) && numeric >= 600) nextStyle.bold = true;
+    }
+
+    const color = el.style.color || el.getAttribute("color");
+    const mapped = cssColorToAnsiCode(color);
+    if (mapped !== undefined) nextStyle.color = mapped;
+
+    if (tag === "BR") {
+      pushText("\n", style);
+      return;
+    }
+
+    const isBlock = tag === "DIV" || tag === "P";
+    const children = Array.from(el.childNodes);
+    for (const child of children) {
+      walk(child, nextStyle);
+    }
+    if (isBlock && children.length) {
+      pushText("\n", style);
+    }
+  }
+
+  for (const child of Array.from(container.childNodes)) {
+    walk(child, {});
+  }
+
+  return out;
+}
+
+function segmentsToAnsi(segments: AnsiSegment[]): string {
+  let out = "";
+  let curColor: number | undefined = undefined;
+  let curBold = false;
+  for (const seg of segments) {
+    if (!seg.text) continue;
+    const color =
+      typeof seg.color === "number"
+        ? seg.color
+        : cssColorToAnsiCode(seg.color);
+    const bold = !!seg.bold;
+    if (color !== curColor || bold !== curBold) {
+      out += "[0m";
+      const codes: string[] = [];
+      if (bold) codes.push("1");
+      if (typeof color === "number") codes.push(String(color));
+      if (codes.length) out += `[${codes.join(";")}m`;
+      curColor = color;
+      curBold = bold;
+    }
+    out += seg.text;
+  }
+  if (curColor !== undefined || curBold) out += "[0m";
+  return out;
+}
+
 
 function sanitizeChannelId(input: string): string {
   return (input ?? "").replace(/\D/g, "");
@@ -330,8 +517,7 @@ export default function App() {
         window.clearTimeout(memoCopyTimerRef.current);
       }
     };
-  }, []);
-  const [debugOpen, setDebugOpen] = useState(true);
+  }, []);  const [debugOpen, setDebugOpen] = useState(true);
   const [hideBenchTeamOnPublish, setHideBenchTeamOnPublish] = useState(false);
   const [hideBenchEnemyOnPublish, setHideBenchEnemyOnPublish] = useState(false);
   const channelInputRef = useRef<HTMLInputElement | null>(null);
@@ -369,6 +555,29 @@ export default function App() {
     "🚪",
     "🪟",
   ];
+
+  const [sideMemoOpen, setSideMemoOpen] = useState(false);
+  const [sideMemoTab, setSideMemoTab] = useState<Side>("TEAM");
+  const sideMemoDraftsRef = useRef<Record<Side, string>>({
+    TEAM: "",
+    ENEMY: "",
+    NEUTRAL: "",
+  });
+  const sideMemoRefs = useRef<Record<Side, HTMLDivElement | null>>({
+    TEAM: null,
+    ENEMY: null,
+    NEUTRAL: null,
+  });
+
+  useEffect(() => {
+    if (!sideMemoOpen) return;
+    const el = sideMemoRefs.current[sideMemoTab];
+    if (!el) return;
+    const html = sideMemoDraftsRef.current[sideMemoTab] ?? "";
+    if (el.innerHTML !== html) {
+      el.innerHTML = html;
+    }
+  }, [sideMemoOpen, sideMemoTab]);
   // Status tag grant modal
   const [tagGrantOpen, setTagGrantOpen] = useState(false);
   const [tagGrantName, setTagGrantName] = useState("");
@@ -391,6 +600,7 @@ export default function App() {
   } | null>(null);
 
   const units: Unit[] = useMemo(() => state?.units ?? [], [state]);
+  const markers: Marker[] = useMemo(() => state?.markers ?? [], [state]);
   const activeUnits: Unit[] = useMemo(
     () => units.filter((u) => !u.bench),
     [units]
@@ -408,7 +618,6 @@ export default function App() {
     const normalized = normalizeAnsiMemo(memoViewUnit.note);
     return renderAnsiMemo(normalized);
   }, [memoViewUnit?.note]);
-  const markers: Marker[] = useMemo(() => state?.markers ?? [], [state]);
   const logEntries = useMemo(() => {
     const logs = state?.logs ?? [];
     return logs.slice(-200).reverse();
@@ -812,14 +1021,14 @@ export default function App() {
 
     const name = markerDraftName.trim();
     if (!name) {
-      setMarkerDraftErr("?? ??? ????.");
+      setMarkerDraftErr("?? ??? 저장.");
       return;
     }
 
     const alias = markerDraftAlias.trim();
 
     if (markerSelectedCells.length === 0) {
-      setMarkerDraftErr("???? ?? ????.");
+      setMarkerDraftErr("저장 ?? 저장.");
       return;
     }
 
@@ -829,7 +1038,7 @@ export default function App() {
     if (durationRaw.length > 0) {
       const parsed = Math.trunc(Number(durationRaw));
       if (!Number.isFinite(parsed) || parsed <= 0) {
-        setMarkerDraftErr("????? 1 ??? ???? ?.");
+        setMarkerDraftErr("저장? 1 ??? 저장 ?.");
         return;
       }
       duration = parsed;
@@ -1623,6 +1832,98 @@ export default function App() {
     setBoardMenu({ id: unitId, x: e.clientX, y: e.clientY });
   }
 
+  function openSideMemo() {
+    const notes = (state as any)?.sideNotes ?? {};
+    sideMemoDraftsRef.current = {
+      TEAM: ansiToHtml(notes.TEAM ?? ""),
+      ENEMY: ansiToHtml(notes.ENEMY ?? ""),
+      NEUTRAL: ansiToHtml(notes.NEUTRAL ?? ""),
+    };
+    setSideMemoTab("TEAM");
+    setSideMemoOpen(true);
+  }
+
+  function updateSideMemo(side: Side, value: string) {
+    sideMemoDraftsRef.current[side] = value;
+  }
+
+  function syncSideMemoHtml(side: Side) {
+    const el = sideMemoRefs.current[side];
+    if (!el) return;
+    updateSideMemo(side, el.innerHTML);
+  }
+
+  function execSideMemoCommand(
+    side: Side,
+    command: "bold" | "foreColor" | "removeFormat",
+    value?: string
+  ) {
+    const el = sideMemoRefs.current[side];
+    if (!el) return;
+    el.focus();
+    document.execCommand(command, false, value);
+    syncSideMemoHtml(side);
+  }
+
+  function applySideMemoBold(side: Side) {
+    execSideMemoCommand(side, "bold");
+  }
+
+  function applySideMemoColor(side: Side, code: number) {
+    const css = ansiColorCodeToCss(code);
+    if (!css) return;
+    execSideMemoCommand(side, "foreColor", css);
+  }
+
+  function clearSideMemoFormat(side: Side) {
+    execSideMemoCommand(side, "removeFormat");
+  }
+
+  async function saveSideNotes() {
+    syncSideMemoHtml(sideMemoTab);
+    if (!encounterId) {
+      setErr("선택된 전투 세션이 없습니다.");
+      return;
+    }
+    const notes: Partial<Record<Side, string | null>> = {};
+    const sides: Side[] = ["TEAM", "ENEMY", "NEUTRAL"];
+    for (const side of sides) {
+      const html = sideMemoDraftsRef.current[side] ?? "";
+      const segments = extractSegmentsFromHtml(html);
+      const plain = segments.map((seg) => seg.text).join("");
+      if (!plain.trim()) {
+        notes[side] = null;
+        continue;
+      }
+      notes[side] = segmentsToAnsi(segments);
+    }
+
+    try {
+      setErr(null);
+      setBusy(true);
+      const next = (await postAction(encounterId, {
+        type: "SET_SIDE_NOTES",
+        notes,
+      })) as EncounterState;
+      setState(next);
+
+      const firstId = next?.units?.[0]?.id ?? null;
+
+      if (!selectedId) {
+        if (firstId) setSelectedId(firstId);
+      } else {
+        const exists = (next?.units ?? []).some((u) => u.id === selectedId);
+        if (!exists) setSelectedId(firstId);
+      }
+
+      setSideMemoOpen(false);
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (presetView) {
     return (
       <UnitPresetManager
@@ -1905,6 +2206,8 @@ export default function App() {
             selectedIds={selectedIds}
             onSelectUnit={selectUnit}
             onOpenUnitMenu={openBoardMenu}
+            onOpenSideMemo={openSideMemo}
+            sideMemoActive={sideMemoOpen}
             markerSelectActive={markerCreateOpen}
             selectedMarkerCells={markerSelectedCells}
             onSelectCell={handleMarkerCellSelect}
@@ -2459,7 +2762,128 @@ export default function App() {
           </div>
         )}
 
-        {boardMenu && (
+
+        {sideMemoOpen && (
+          <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
+            <div className="w-[min(900px,96vw)] rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-base font-semibold text-zinc-100">
+                    진영별 메모
+                  </div>
+                  <div className="mt-1 text-xs text-zinc-500">
+                    ANSI 스타일을 적용해 디스코드 출력과 동일하게 확인할 수 있습니다.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSideMemoOpen(false)}
+                  className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/60"
+                >
+                  닫기
+                </button>
+              </div>
+
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                {(["TEAM", "ENEMY", "NEUTRAL"] as Side[]).map((side) => {
+                  const active = sideMemoTab === side;
+                  const color =
+                    side === "TEAM"
+                      ? "text-sky-300"
+                      : side === "ENEMY"
+                        ? "text-red-300"
+                        : "text-zinc-300";
+                  return (
+                    <button
+                      key={side}
+                      type="button"
+                      onClick={() => setSideMemoTab(side)}
+                      className={[
+                        "rounded-lg border px-3 py-1 text-xs font-semibold",
+                        color,
+                        active
+                          ? "border-amber-500/60 bg-amber-950/30"
+                          : "border-zinc-800 bg-zinc-950/40 hover:bg-zinc-800/60",
+                      ].join(" ")}
+                    >
+                      {side}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => applySideMemoBold(sideMemoTab)}
+                    className="rounded-md border border-zinc-800 bg-zinc-950/40 px-2 py-1 text-[11px] text-zinc-200 hover:bg-zinc-800/60"
+                  >
+                    굵게
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => clearSideMemoFormat(sideMemoTab)}
+                    className="rounded-md border border-zinc-800 bg-zinc-950/40 px-2 py-1 text-[11px] text-zinc-400 hover:bg-zinc-800/60"
+                  >
+                    리셋
+                  </button>
+                  <div className="flex flex-wrap items-center gap-1">
+                    {SIDE_MEMO_COLORS.map((color) => (
+                      <button
+                        key={color.code}
+                        type="button"
+                        onClick={() => applySideMemoColor(sideMemoTab, color.code)}
+                        className="flex h-6 w-6 items-center justify-center rounded-md border border-zinc-800 bg-zinc-950/40 text-xs hover:bg-zinc-800/60"
+                        title={color.label}
+                        aria-label={color.label}
+                      >
+                        <span
+                          className="inline-block h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: ansiColorCodeToCss(color.code) }}
+                        />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div
+                  ref={(el) => {
+                    sideMemoRefs.current[sideMemoTab] = el;
+                  }}
+                  contentEditable
+                  suppressContentEditableWarning
+                  onInput={(e) =>
+                    updateSideMemo(sideMemoTab, e.currentTarget.innerHTML)
+                  }
+                  className="min-h-[140px] w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-zinc-100 outline-none focus:border-zinc-600 font-mono whitespace-pre-wrap [&_b]:font-semibold [&_strong]:font-semibold"
+                  style={{ fontSynthesis: "weight" }}
+                  data-placeholder="Side memo..."
+                />
+              </div>
+
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSideMemoOpen(false)}
+                  className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-200 hover:bg-zinc-800/60"
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  onClick={saveSideNotes}
+                  disabled={busy}
+                  className="rounded-lg bg-amber-700 px-3 py-2 text-xs text-white hover:bg-amber-600 disabled:opacity-50"
+                >
+                  저장
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+{boardMenu && (
           <>
             <div
               className="fixed inset-0 z-40"

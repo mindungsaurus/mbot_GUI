@@ -215,6 +215,8 @@ export default function UnitCard(props: {
   const hasHidden = !!u.hidden;
   const deathSuccess = Math.max(0, Math.trunc(u.deathSaves?.success ?? 0));
   const deathFailure = Math.max(0, Math.trunc(u.deathSaves?.failure ?? 0));
+  const integrity =
+    typeof u.integrityBase === "number" ? Math.trunc(u.integrityBase) : null;
   const unitType = u.unitType ?? "NORMAL";
   const c = unitTextColor(u);
 
@@ -286,6 +288,9 @@ export default function UnitCard(props: {
               HP <span className="font-semibold">{hpMain}</span>
               {hpTemp ? (
                 <span className="font-semibold text-green-400">{hpTemp}</span>
+              ) : null}
+              {integrity !== null ? (
+                <span className="ml-1 text-violet-300">({integrity})</span>
               ) : null}
             </span>
           ) : (
@@ -505,6 +510,9 @@ export default function UnitCard(props: {
             HP <span className="font-semibold">{hpMain}</span>
             {hpTemp ? (
               <span className="font-semibold text-green-400">{hpTemp}</span>
+            ) : null}
+            {integrity !== null ? (
+              <span className="ml-1 text-violet-300">({integrity})</span>
             ) : null}
           </span>
         ) : (

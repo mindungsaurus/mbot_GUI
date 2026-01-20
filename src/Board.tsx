@@ -23,6 +23,8 @@ export default function Board(props: {
   onSelectCell?: (pos: Pos, opts?: { additive?: boolean }) => void;
   onToggleMarkerCreate?: () => void;
   markerCreateActive?: boolean;
+  onOpenSideMemo?: () => void;
+  sideMemoActive?: boolean;
 }) {
   const {
     units,
@@ -38,6 +40,8 @@ export default function Board(props: {
     onSelectCell,
     onToggleMarkerCreate,
     markerCreateActive = false,
+    onOpenSideMemo,
+    sideMemoActive = false,
   } = props;
 
   // ✅ 여기만 조절하면 "셀 크기/폰트"가 확실히 바뀜 (Tailwind 스캔 문제 없음)
@@ -142,6 +146,21 @@ export default function Board(props: {
       <div className="mb-2 flex items-center justify-between">
         <div className="text-sm font-semibold text-zinc-200">Battle Grid</div>
         <div className="flex items-center gap-2">
+          {onOpenSideMemo && (
+            <button
+              type="button"
+              onClick={onOpenSideMemo}
+              className={[
+                "rounded-lg border px-2 py-1 text-[11px] font-semibold",
+                "border-sky-500/40 bg-sky-950/30 text-sky-200",
+                "hover:bg-sky-900/35 hover:text-sky-100",
+                sideMemoActive ? "ring-1 ring-sky-400/60" : "",
+              ].join(" ")}
+              title="Edit side notes"
+            >
+              진영 메모
+            </button>
+          )}
           {onToggleMarkerCreate && (
             <button
               type="button"
