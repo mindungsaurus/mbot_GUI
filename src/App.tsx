@@ -10,6 +10,7 @@ import {
   authLogin,
   authLogout,
   authMe,
+  authClaimAdmin,
   authRegister,
   createEncounter,
   fetchState,
@@ -43,6 +44,7 @@ import TurnOrderBar from "./TurnOrderBar";
 import TurnOrderReorderModal from "./TurnOrderReorderModal";
 import UnitPresetManager from "./UnitPresetManager";
 import TagPresetManager from "./TagPresetManager";
+import GoldItemsManager from "./GoldItemsManager";
 import { ansiColorCodeToCss } from "./UnitColor";
 
 const LS_DEFAULT_CHANNEL = "operator.defaultChannelId";
@@ -496,12 +498,17 @@ export default function App() {
   const [registerPassword, setRegisterPassword] = useState("");
   const [registerConfirm, setRegisterConfirm] = useState("");
   const [registerErr, setRegisterErr] = useState<string | null>(null);
+  const [adminKeyOpen, setAdminKeyOpen] = useState(false);
+  const [adminKeyValue, setAdminKeyValue] = useState("");
+  const [adminKeyErr, setAdminKeyErr] = useState<string | null>(null);
+  const [adminKeyBusy, setAdminKeyBusy] = useState(false);
   const [encounterId, setEncounterId] = useState<string>(
     () => localStorage.getItem(LS_ENCOUNTER_ID) ?? ""
   );
   const [sessionSelected, setSessionSelected] = useState(false);
   const [presetView, setPresetView] = useState(false);
   const [tagPresetView, setTagPresetView] = useState(false);
+  const [goldItemsView, setGoldItemsView] = useState(false);
   const [encounters, setEncounters] = useState<EncounterSummary[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null); // primary(대표) 선택
@@ -521,6 +528,7 @@ export default function App() {
   } | null>(null);
   const [memoCopyToast, setMemoCopyToast] = useState(false);
   const memoCopyTimerRef = useRef<number | null>(null);
+  const adminHotkeyKeysRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     return () => {
       if (memoCopyTimerRef.current) {
@@ -977,6 +985,55 @@ export default function App() {
     selectedId,
   ]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!authUser) return;
+    if (sessionSelected || presetView || tagPresetView || goldItemsView) return;
+
+    const pressed = adminHotkeyKeysRef.current;
+    const hasCombo = () =>
+      (pressed.has("AltLeft") || pressed.has("AltRight")) &&
+      pressed.has("KeyA") &&
+      pressed.has("KeyT");
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (adminKeyOpen) return;
+      pressed.add(event.code);
+      if (!hasCombo()) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      pressed.clear();
+      setAdminKeyErr(null);
+      setAdminKeyValue("");
+      setAdminKeyOpen(true);
+    };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      pressed.delete(event.code);
+    };
+
+    const handleBlur = () => {
+      pressed.clear();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", handleBlur);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [
+    authUser,
+    adminKeyOpen,
+    sessionSelected,
+    presetView,
+    tagPresetView,
+    goldItemsView,
+  ]);
+
   async function refresh() {
     if (!encounterId) return;
     const s = (await fetchState(encounterId)) as EncounterState;
@@ -1103,6 +1160,33 @@ export default function App() {
       setRegisterErr(String(e?.message ?? e));
     }
   }
+
+  async function handleClaimAdmin() {
+    const key = adminKeyValue.trim();
+    if (!key) {
+      setAdminKeyErr("관리자 키를 입력해 주세요.");
+      return;
+    }
+
+    try {
+      setAdminKeyErr(null);
+      setAdminKeyBusy(true);
+      const user = await authClaimAdmin(key);
+      setAuthUser(user);
+      setAdminKeyOpen(false);
+      setAdminKeyValue("");
+    } catch (e: any) {
+      setAdminKeyErr(String(e?.message ?? e));
+    } finally {
+      setAdminKeyBusy(false);
+    }
+  }
+
+  const closeAdminKeyModal = () => {
+    setAdminKeyOpen(false);
+    setAdminKeyErr(null);
+    setAdminKeyValue("");
+  };
 
   async function handleLogout() {
     try {
@@ -2218,6 +2302,15 @@ export default function App() {
     );
   }
 
+  if (goldItemsView) {
+    return (
+      <GoldItemsManager
+        authUser={authUser}
+        onBack={() => setGoldItemsView(false)}
+      />
+    );
+  }
+
   if (!sessionSelected || !encounterId) {
     return (
       <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -2229,6 +2322,11 @@ export default function App() {
             </div>
             <div className="flex items-center gap-2 text-xs text-zinc-300">
               <span>{authUser.username}</span>
+              {authUser.isAdmin ? (
+                <span className="rounded-md border border-amber-500/60 bg-amber-950/40 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200">
+                  관리자
+                </span>
+              ) : null}
               <button
                 type="button"
                 className="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-200 hover:border-zinc-600"
@@ -2273,6 +2371,18 @@ export default function App() {
                   disabled={busy}
                 >
                   태그 프리셋 관리
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-amber-700/60 bg-amber-950/30 px-3 py-1.5 text-xs text-amber-200 hover:bg-amber-900/40"
+                  onClick={() => {
+                    setPresetView(false);
+                    setTagPresetView(false);
+                    setGoldItemsView(true);
+                  }}
+                  disabled={busy}
+                >
+                  골드/아이템 관리
                 </button>
                 <button
                   type="button"
@@ -2341,6 +2451,69 @@ export default function App() {
             )}
           </section>
         </div>
+
+        {adminKeyOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Admin key modal"
+          >
+            <div
+              className="absolute inset-0 bg-black/35 backdrop-blur-[2px]"
+              onClick={closeAdminKeyModal}
+              role="button"
+              aria-label="Close overlay"
+              tabIndex={0}
+              onKeyDown={(e) => e.key === "Enter" && closeAdminKeyModal()}
+            />
+            <div className="relative z-10 w-[min(420px,92vw)] rounded-2xl border border-zinc-800 bg-zinc-950 p-5 shadow-2xl">
+              <div className="mb-3 text-base font-semibold text-zinc-100">
+                관리자 전환
+              </div>
+
+              {adminKeyErr ? (
+                <div className="mb-3 rounded-lg border border-red-900 bg-red-950/40 p-2 text-xs text-red-200">
+                  {adminKeyErr}
+                </div>
+              ) : null}
+
+              <div>
+                <label className="mb-1 block text-xs text-zinc-400">
+                  관리자 키
+                </label>
+                <input
+                  autoFocus
+                  type="password"
+                  value={adminKeyValue}
+                  onChange={(e) => setAdminKeyValue(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleClaimAdmin()}
+                  placeholder="admin key"
+                  className="h-9 w-full rounded-md border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
+                />
+              </div>
+
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeAdminKeyModal}
+                  className="rounded-lg border border-zinc-800 px-3 py-2 text-xs text-zinc-200 hover:bg-zinc-800/60"
+                  disabled={adminKeyBusy}
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClaimAdmin}
+                  className="rounded-lg bg-amber-700 px-3 py-2 text-xs text-white hover:bg-amber-600 disabled:opacity-50"
+                  disabled={adminKeyBusy}
+                >
+                  승격
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

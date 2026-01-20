@@ -130,6 +130,24 @@ function readDragPayload(e: React.DragEvent): DragPayload | null {
   }
 }
 
+function mergeMarkerTemplate(template: TurnEntry[], order: TurnEntry[]) {
+  if (!template.length) return order;
+  const out: TurnEntry[] = [];
+  let idx = 0;
+  for (const entry of template) {
+    if (entry.kind === "marker") {
+      out.push(entry);
+      continue;
+    }
+    const next = order[idx++];
+    if (next) out.push(next);
+  }
+  if (idx < order.length) {
+    out.push(...order.slice(idx));
+  }
+  return out;
+}
+
 export default function TurnOrderReorderModal(props: {
   open: boolean;
   units: Unit[];
@@ -161,6 +179,7 @@ export default function TurnOrderReorderModal(props: {
   const [overGroupId, setOverGroupId] = useState<string | null>(null);
   const [groupName, setGroupName] = useState("");
   const initialOrderRef = useRef<TurnEntry[]>([]);
+  const markerTemplateRef = useRef<TurnEntry[]>([]);
   const initialGroupsRef = useRef<TurnGroup[]>([]);
   const initialDisabledRef = useRef<Record<string, boolean>>({});
   const entryRefs = useRef<Array<HTMLDivElement | null>>([]);
@@ -170,12 +189,14 @@ export default function TurnOrderReorderModal(props: {
     const normalizedGroups = normalizeGroups(units, turnGroups ?? [], {
       keepEmpty: true,
     });
-    const baseOrder = buildInitialOrder(
+    const templateOrder = buildInitialOrder(
       Array.isArray(turnOrder) ? turnOrder : [],
       units,
       normalizedGroups
     );
+    const baseOrder = templateOrder.filter((entry) => entry.kind !== "marker");
     initialOrderRef.current = baseOrder;
+    markerTemplateRef.current = templateOrder;
     initialGroupsRef.current = normalizedGroups;
     setDraftOrder(baseOrder);
     setDraftGroups(normalizedGroups);
@@ -541,7 +562,11 @@ export default function TurnOrderReorderModal(props: {
         disabledChanges.push({ unitId, turnDisabled: !!disabled });
       }
     }
-    await onApply(safeOrder as TurnEntry[], draftGroups, disabledChanges);
+    const nextOrder = mergeMarkerTemplate(
+      markerTemplateRef.current,
+      safeOrder as TurnEntry[]
+    );
+    await onApply(nextOrder, draftGroups, disabledChanges);
   }
 
   const safeOrder = draftOrder.filter((entry) => !!entry);

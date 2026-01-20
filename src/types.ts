@@ -135,6 +135,29 @@ export type EncounterSummary = {
 export type AuthUser = {
   id: string;
   username: string;
+  isAdmin?: boolean;
+};
+
+export type GoldCharacter = {
+  name: string;
+  gold: number;
+  dailyExpense: number;
+  day?: number | null;
+  isNpc: boolean;
+  friend?: string | null;
+};
+
+export type InventoryItem = {
+  itemName: string;
+  amount: number;
+  owner?: string;
+};
+
+export type ItemCatalogEntry = {
+  name: string;
+  quality: number;
+  unit: string;
+  type: string;
 };
 
 export type HpFormula = {

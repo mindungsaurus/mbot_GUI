@@ -89,6 +89,16 @@ export async function authLogout() {
   return res.json();
 }
 
+export async function authClaimAdmin(key: string) {
+  const res = await fetch(`${API_BASE}/auth/claim-admin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify({ key }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function listUnitPresets() {
   const res = await fetch(`${API_BASE}/unit-presets`, {
     headers: { ...getAuthHeaders() },
@@ -276,6 +286,108 @@ export async function updateTagPreset(
 export async function deleteTagPreset(id: string) {
   const res = await fetch(`${API_BASE}/tag-presets/${id}`, {
     method: "DELETE",
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listGoldCharacters() {
+  const res = await fetch(`${API_BASE}/gold/characters`, {
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getGoldCharacter(name: string) {
+  const res = await fetch(`${API_BASE}/gold/characters/${encodeURIComponent(name)}`, {
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createGoldCharacter(body: {
+  name: string;
+  isNpc?: boolean;
+  friend?: string | null;
+}) {
+  const res = await fetch(`${API_BASE}/gold/characters`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateGoldCharacter(
+  name: string,
+  body: {
+    gold?: number;
+    dailyExpense?: number;
+    day?: number | null;
+    isNpc?: boolean;
+    friend?: string | null;
+  }
+) {
+  const res = await fetch(`${API_BASE}/gold/characters/${encodeURIComponent(name)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteGoldCharacter(name: string) {
+  const res = await fetch(`${API_BASE}/gold/characters/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listInventory(owner: string) {
+  const res = await fetch(`${API_BASE}/items/inventory/${encodeURIComponent(owner)}`, {
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function addInventoryItem(body: {
+  owner: string;
+  itemName: string;
+  amount: number;
+}) {
+  const res = await fetch(`${API_BASE}/items/inventory/add`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function useInventoryItem(body: {
+  owner: string;
+  itemName: string;
+  amount: number;
+}) {
+  const res = await fetch(`${API_BASE}/items/inventory/use`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listItemCatalog() {
+  const res = await fetch(`${API_BASE}/items/catalog`, {
     headers: { ...getAuthHeaders() },
   });
   if (!res.ok) throw new Error(await res.text());
