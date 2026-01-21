@@ -337,6 +337,47 @@ function segmentsToAnsi(segments: AnsiSegment[]): string {
   return out;
 }
 
+function CombatTabIcon(props: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      className={props.className}
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4 4l7 7" />
+      <path d="M3 9l4 4" />
+      <path d="M20 4l-7 7" />
+      <path d="M21 9l-4 4" />
+      <path d="M8 20l4-4 4 4" />
+    </svg>
+  );
+}
+
+function GoldItemsTabIcon(props: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      className={props.className}
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="8" r="4" />
+      <path d="M7 14h10v6H7z" />
+      <path d="M10 14v6" />
+      <path d="M14 14v6" />
+    </svg>
+  );
+}
+
 
 function sanitizeChannelId(input: string): string {
   return (input ?? "").replace(/\D/g, "");
@@ -2348,7 +2389,7 @@ export default function App() {
   if (!sessionSelected || !encounterId) {
     return (
       <div className="min-h-screen bg-zinc-950 text-zinc-100">
-        <div className="mx-auto max-w-3xl p-4">
+        <div className="mx-auto max-w-5xl p-4">
           <header className="mb-4 flex items-center justify-between gap-3">
             <div>
               <div className="text-xl font-semibold">Operator UI</div>
@@ -2378,37 +2419,30 @@ export default function App() {
             </div>
           )}
 
-          <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <div className="text-sm font-semibold text-zinc-200">
-                Session list
-              </div>
-              <div className="flex items-center gap-2">
+          <div className="flex gap-4">
+            <nav className="w-40 shrink-0">
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-2">
                 <button
                   type="button"
-                  className="rounded-lg border border-emerald-700/60 bg-emerald-950/30 px-3 py-1.5 text-xs text-emerald-200 hover:bg-emerald-900/40"
-                  onClick={() => {
-                    setTagPresetView(false);
-                    setPresetView(true);
-                  }}
-                  disabled={busy}
-                >
-                  유닛 프리셋 관리
-                </button>
-                <button
-                  type="button"
-                  className="rounded-lg border border-sky-700/60 bg-sky-950/30 px-3 py-1.5 text-xs text-sky-200 hover:bg-sky-900/40"
+                  className={[
+                    "flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold",
+                    "border-amber-500/60 bg-amber-950/30 text-amber-200",
+                  ].join(" ")}
                   onClick={() => {
                     setPresetView(false);
-                    setTagPresetView(true);
+                    setTagPresetView(false);
+                    setGoldItemsView(false);
                   }}
-                  disabled={busy}
                 >
-                  태그 프리셋 관리
+                  <CombatTabIcon className="h-4 w-4" />
+                  Combat
                 </button>
                 <button
                   type="button"
-                  className="rounded-lg border border-amber-700/60 bg-amber-950/30 px-3 py-1.5 text-xs text-amber-200 hover:bg-amber-900/40"
+                  className={[
+                    "mt-2 flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold",
+                    "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:bg-zinc-800/60",
+                  ].join(" ")}
                   onClick={() => {
                     setPresetView(false);
                     setTagPresetView(false);
@@ -2416,74 +2450,107 @@ export default function App() {
                   }}
                   disabled={busy}
                 >
-                  골드/아이템 관리
-                </button>
-                <button
-                  type="button"
-                  className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/60"
-                  onClick={() => loadEncounters()}
-                  disabled={busy}
-                >
-                  Refresh
-                </button>
-                <button
-                  type="button"
-                  className="rounded-lg bg-amber-700 px-3 py-1.5 text-xs text-white hover:bg-amber-600 disabled:opacity-50"
-                  onClick={handleCreateEncounter}
-                  disabled={busy}
-                >
-                  New
+                  <GoldItemsTabIcon className="h-4 w-4" />
+                  Gold/Items
                 </button>
               </div>
-            </div>
+            </nav>
 
-            {encounters.length === 0 ? (
-              <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4 text-sm text-zinc-500">
-                No active sessions yet.
+            <section className="flex-1 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <div className="text-sm font-semibold text-zinc-200">
+                  Session list
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="rounded-lg border border-emerald-700/60 bg-emerald-950/30 px-3 py-1.5 text-xs text-emerald-200 hover:bg-emerald-900/40"
+                    onClick={() => {
+                      setTagPresetView(false);
+                      setPresetView(true);
+                    }}
+                    disabled={busy}
+                  >
+                    유닛 프리셋 관리
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-sky-700/60 bg-sky-950/30 px-3 py-1.5 text-xs text-sky-200 hover:bg-sky-900/40"
+                    onClick={() => {
+                      setPresetView(false);
+                      setTagPresetView(true);
+                    }}
+                    disabled={busy}
+                  >
+                    태그 프리셋 관리
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/60"
+                    onClick={() => loadEncounters()}
+                    disabled={busy}
+                  >
+                    Refresh
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-lg bg-amber-700 px-3 py-1.5 text-xs text-white hover:bg-amber-600 disabled:opacity-50"
+                    onClick={handleCreateEncounter}
+                    disabled={busy}
+                  >
+                    New
+                  </button>
+                </div>
               </div>
-            ) : (
-              <div className="space-y-2">
-                {encounters.map((enc) => {
-                  const isLastUsed = enc.id === encounterId;
-                  const updated = enc.updatedAt
-                    ? new Date(enc.updatedAt).toLocaleString()
-                    : null;
-                  return (
-                    <div
-                      key={enc.id}
-                      className={[
-                        "flex items-center justify-between rounded-lg border px-3 py-2",
-                        "bg-zinc-950/40",
-                        isLastUsed
-                          ? "border-amber-700/70"
-                          : "border-zinc-800",
-                      ].join(" ")}
-                    >
-                      <div>
-                        <div className="text-sm font-semibold text-zinc-100">
-                          {enc.name || enc.id}
+
+              {encounters.length === 0 ? (
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4 text-sm text-zinc-500">
+                  No active sessions yet.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {encounters.map((enc) => {
+                    const isLastUsed = enc.id === encounterId;
+                    const updated = enc.updatedAt
+                      ? new Date(enc.updatedAt).toLocaleString()
+                      : null;
+                    return (
+                      <div
+                        key={enc.id}
+                        className={[
+                          "flex items-center justify-between rounded-lg border px-3 py-2",
+                          "bg-zinc-950/40",
+                          isLastUsed
+                            ? "border-amber-700/70"
+                            : "border-zinc-800",
+                        ].join(" ")}
+                      >
+                        <div>
+                          <div className="text-sm font-semibold text-zinc-100">
+                            {enc.name || enc.id}
+                          </div>
+                          <div className="text-[11px] text-zinc-500">
+                            {enc.id}
+                          </div>
                         </div>
-                        <div className="text-[11px] text-zinc-500">
-                          {enc.id}
+                        <div className="flex items-center gap-3 text-xs text-zinc-400">
+                          {updated ? <span>{updated}</span> : null}
+                          <button
+                            type="button"
+                            className="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-200 hover:border-zinc-600"
+                            onClick={() => openEncounter(enc.id)}
+                            disabled={busy}
+                          >
+                            Open
+                          </button>
                         </div>
                       </div>
-                      <div className="flex items-center gap-3 text-xs text-zinc-400">
-                        {updated ? <span>{updated}</span> : null}
-                        <button
-                          type="button"
-                          className="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-200 hover:border-zinc-600"
-                          onClick={() => openEncounter(enc.id)}
-                          disabled={busy}
-                        >
-                          Open
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </section>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </div>
         </div>
 
         {adminKeyOpen && (
