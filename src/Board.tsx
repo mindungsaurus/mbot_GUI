@@ -16,6 +16,40 @@ function keyXZ(x: number, z: number) {
   return `${x},${z}`;
 }
 
+function formatSummaryTags(u: Unit): string[] {
+  const order: string[] = [];
+  const bag = new Map<string, { stacks?: number }>();
+
+  function addTag(raw: string, stacks?: number) {
+    const key = (raw ?? "").trim();
+    if (!key) return;
+    if (!bag.has(key)) {
+      bag.set(key, {});
+      order.push(key);
+    }
+    if (stacks !== undefined) {
+      const s = Math.max(1, Math.trunc(Number(stacks)));
+      const cur = bag.get(key)!;
+      cur.stacks = cur.stacks === undefined ? s : Math.max(cur.stacks, s);
+    }
+  }
+
+  const manual = Array.isArray(u.tags) ? u.tags : [];
+  for (const t of manual) addTag(t);
+
+  const states = u.tagStates ?? {};
+  for (const [k, st] of Object.entries(states)) {
+    const stacks = Math.max(1, Math.trunc(Number((st as any)?.stacks ?? 1)));
+    addTag(k, stacks);
+  }
+
+  return order.map((k) => {
+    const it = bag.get(k);
+    if (it?.stacks !== undefined) return `${k} x${it.stacks}`;
+    return k;
+  });
+}
+
 export default function Board(props: {
   units: Unit[];
   markers: Marker[];
@@ -108,6 +142,16 @@ export default function Board(props: {
     return set;
   }, [selectedMarkerCells]);
   const [dropTargetCell, setDropTargetCell] = useState<string | null>(null);
+  const [hoveredUnitId, setHoveredUnitId] = useState<string | null>(null);
+  const hoverTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current) {
+        window.clearTimeout(hoverTimerRef.current);
+      }
+    };
+  }, []);
 
   function handleUnitDragStart(e: ReactDragEvent, unitId: string) {
     if (markerSelectActive) return;
@@ -371,52 +415,154 @@ export default function Board(props: {
 
                               const isPrimary = u.id === selectedId;
                               const isMulti = selectedIds.includes(u.id);
+                              const showBubble = hoveredUnitId === u.id;
+                              const hpCur =
+                                typeof u.hp?.cur === "number" ? u.hp.cur : null;
+                              const hpMax =
+                                typeof u.hp?.max === "number" ? u.hp.max : null;
+                              const hpTemp =
+                                typeof u.hp?.temp === "number"
+                                  ? u.hp.temp
+                                  : null;
+                              const integrity =
+                                typeof u.integrityBase === "number"
+                                  ? u.integrityBase
+                                  : null;
+                              const ac =
+                                typeof u.acBase === "number" ? u.acBase : null;
+                              const dsSuccess =
+                                typeof u.deathSaves?.success === "number"
+                                  ? u.deathSaves.success
+                                  : 0;
+                              const dsFailure =
+                                typeof u.deathSaves?.failure === "number"
+                                  ? u.deathSaves.failure
+                                  : 0;
+                              const summaryTags = formatSummaryTags(u);
 
                               return (
-                                <button
-                                  key={u.id}
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onSelectUnit(u.id, {
-                                      additive:
-                                        e.shiftKey || e.ctrlKey || e.metaKey,
-                                    });
-                                  }}
-                                  onContextMenu={(e) => {
-                                    if (!onOpenUnitMenu) return;
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    onOpenUnitMenu(e, u.id);
-                                  }}
-                                  className={[
-                                    "block w-full truncate rounded-md border px-1.5 py-0.5 text-left",
-                                    "border-zinc-800 bg-zinc-950/20 hover:bg-zinc-900/60",
-                                    "transition-colors",
-                                    "cursor-grab active:cursor-grabbing",
-                                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/50",
-                                    "active:bg-zinc-900/80",
-                                    isPrimary
-                                      ? "border-emerald-300 bg-emerald-950/70 ring-2 ring-emerald-300/60 shadow-[0_0_0_1px_rgba(16,185,129,0.25)]"
-                                      : isMulti
-                                        ? "border-sky-300 bg-sky-950/40 ring-2 ring-sky-300/60 shadow-[0_0_0_1px_rgba(56,189,248,0.22)]"
-                                        : "",
-                                  ].join(" ")}
-                                  style={{
-                                    color, // ✅ 유닛별 컬러
-                                    fontSize: FONT_ITEM,
-                                    lineHeight: LINE_H,
-                                  }}
-                                  title={
-                                    u.name + (u.alias ? ` (${u.alias})` : "")
-                                  } // ✅ 툴팁은 둘 다 보이게
-                                  draggable={!markerSelectActive}
-                                  onDragStart={(e) =>
-                                    handleUnitDragStart(e, u.id)
-                                  }
-                                >
-                                  {displayLabel}
-                                </button>
+                                <div key={u.id} className="relative">
+                                  {showBubble && (
+                                    <div className="pointer-events-none absolute left-0 top-0 z-20 -translate-y-full">
+                                      <div className="relative max-w-[220px] rounded-lg border border-zinc-700/50 bg-zinc-950/55 px-2 py-1.5 text-[10px] text-zinc-200 shadow-xl backdrop-blur-[1px]">
+                                        <div className="font-semibold text-zinc-100">
+                                          {(u.alias ?? "").trim() || u.name}
+                                        </div>
+                                        <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5">
+                                          <span className="text-red-400">
+                                            HP{" "}
+                                            <span className="font-semibold">
+                                              {hpCur !== null && hpMax !== null
+                                                ? `${hpCur}/${hpMax}`
+                                                : "-"}
+                                            </span>
+                                            {hpTemp !== null ? (
+                                              <span className="ml-1 font-semibold text-green-400">
+                                                +{hpTemp}
+                                              </span>
+                                            ) : null}
+                                            {integrity !== null ? (
+                                              <span className="ml-1 text-violet-300">
+                                                ({integrity})
+                                              </span>
+                                            ) : null}
+                                          </span>
+                                          <span className="text-yellow-300">
+                                            AC{" "}
+                                            <span className="font-semibold">
+                                              {ac ?? "-"}
+                                            </span>
+                                          </span>
+                                          {(dsSuccess > 0 || dsFailure > 0) && (
+                                            <span className="text-zinc-400">
+                                              (
+                                              <span className="font-semibold text-green-400">
+                                                {dsSuccess}
+                                              </span>
+                                              ,{" "}
+                                              <span className="font-semibold text-red-400">
+                                                {dsFailure}
+                                              </span>
+                                              )
+                                            </span>
+                                          )}
+                                        </div>
+                                        {summaryTags.length > 0 && (
+                                          <div className="mt-1 text-violet-300">
+                                            {summaryTags.join(", ")}
+                                          </div>
+                                        )}
+                                        <div className="absolute left-3 top-full h-2 w-2 -translate-y-1 rotate-45 border-b border-l border-zinc-700/50 bg-zinc-950/55" />
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onSelectUnit(u.id, {
+                                        additive:
+                                          e.shiftKey || e.ctrlKey || e.metaKey,
+                                      });
+                                    }}
+                                    onMouseEnter={() => {
+                                      if (hoverTimerRef.current) {
+                                        window.clearTimeout(
+                                          hoverTimerRef.current
+                                        );
+                                      }
+                                      hoverTimerRef.current =
+                                        window.setTimeout(() => {
+                                          setHoveredUnitId(u.id);
+                                        }, 250);
+                                    }}
+                                    onMouseLeave={() => {
+                                      if (hoverTimerRef.current) {
+                                        window.clearTimeout(
+                                          hoverTimerRef.current
+                                        );
+                                        hoverTimerRef.current = null;
+                                      }
+                                      setHoveredUnitId((prev) =>
+                                        prev === u.id ? null : prev
+                                      );
+                                    }}
+                                    onContextMenu={(e) => {
+                                      if (!onOpenUnitMenu) return;
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      onOpenUnitMenu(e, u.id);
+                                    }}
+                                    className={[
+                                      "block w-full truncate rounded-md border px-1.5 py-0.5 text-left",
+                                      "border-zinc-800 bg-zinc-950/20 hover:bg-zinc-900/60",
+                                      "transition-colors",
+                                      "cursor-grab active:cursor-grabbing",
+                                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/50",
+                                      "active:bg-zinc-900/80",
+                                      isPrimary
+                                        ? "border-emerald-300 bg-emerald-950/70 ring-2 ring-emerald-300/60 shadow-[0_0_0_1px_rgba(16,185,129,0.25)]"
+                                        : isMulti
+                                          ? "border-sky-300 bg-sky-950/40 ring-2 ring-sky-300/60 shadow-[0_0_0_1px_rgba(56,189,248,0.22)]"
+                                          : "",
+                                    ].join(" ")}
+                                    style={{
+                                      color, // ✅ 유닛별 컬러
+                                      fontSize: FONT_ITEM,
+                                      lineHeight: LINE_H,
+                                    }}
+                                    title={
+                                      u.name + (u.alias ? ` (${u.alias})` : "")
+                                    } // ✅ 툴팁은 둘 다 보이게
+                                    draggable={!markerSelectActive}
+                                    onDragStart={(e) =>
+                                      handleUnitDragStart(e, u.id)
+                                    }
+                                  >
+                                    {displayLabel}
+                                  </button>
+                                </div>
                               );
                             })}
                           </div>
