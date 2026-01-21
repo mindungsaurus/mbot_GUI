@@ -529,11 +529,11 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                   </div>
                 ) : (
                   <div className="overflow-hidden rounded-lg border border-zinc-800">
-                    <div className="grid grid-cols-[1fr_80px_1px_1fr_80px] bg-zinc-950/60 px-3 py-2 text-xs font-semibold text-zinc-400">
+                    <div className="grid grid-cols-[1fr_80px_4px_1fr_80px] bg-zinc-950/60 px-4 py-2 text-xs font-semibold text-zinc-400">
                       <span>항목</span>
-                      <span className="text-right">수량</span>
-                      <span className="bg-zinc-800/80" aria-hidden="true" />
-                      <span className="text-right md:text-left">항목</span>
+                      <span className="pr-2 text-right">수량</span>
+                      <span className="bg-zinc-700/80" aria-hidden="true" />
+                      <span className="pl-2 text-right md:text-left">항목</span>
                       <span className="text-right">수량</span>
                     </div>
                     <div className="divide-y divide-zinc-800">
@@ -543,7 +543,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                         return (
                           <div
                             key={`${left?.itemName ?? "row"}-${idx}`}
-                            className="grid grid-cols-[1fr_80px_1px_1fr_80px] items-center bg-zinc-950/30 px-3 py-2 text-sm text-zinc-200"
+                            className="grid grid-cols-[1fr_80px_4px_1fr_80px] items-center bg-zinc-950/30 px-4 py-2 text-sm text-zinc-200"
                           >
                             {left ? (
                               <>
@@ -552,37 +552,39 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                                 >
                                   {left.itemName}
                                 </span>
-                                <span className="text-right text-zinc-300">
+                                <span className="pr-2 text-right font-semibold text-amber-200">
                                   {left.amount}
                                 </span>
                               </>
                             ) : (
                               <>
                                 <span className="text-zinc-600">-</span>
-                                <span className="text-right text-zinc-600">-</span>
+                                <span className="pr-2 text-right text-zinc-600">
+                                  -
+                                </span>
                               </>
                             )}
                             <span
-                              className="h-full bg-zinc-800/80"
+                              className="h-full bg-zinc-700/80"
                               aria-hidden="true"
                             />
                             {right ? (
                               <>
                                 <span
                                   className={[
-                                    "text-right md:text-left",
+                                    "pl-2 text-right md:text-left",
                                     qualityColorClass(right.qualityLabel),
                                   ].join(" ")}
                                 >
                                   {right.itemName}
                                 </span>
-                                <span className="text-right text-zinc-300">
+                                <span className="text-right font-semibold text-amber-200">
                                   {right.amount}
                                 </span>
                               </>
                             ) : (
                               <>
-                                <span className="text-right text-zinc-600 md:text-left">
+                                <span className="pl-2 text-right text-zinc-600 md:text-left">
                                   -
                                 </span>
                                 <span className="text-right text-zinc-600">-</span>
