@@ -1719,6 +1719,18 @@ export default function App() {
     run({ type: "MOVE_UNIT", unitId: targets[0], dx, dz });
   }
 
+  function moveUnitsByDelta(unitIds: string[], dx: number, dz: number) {
+    if (!unitIds.length) return;
+    if (dx === 0 && dz === 0) return;
+    const actions = unitIds.map((unitId) => ({
+      type: "MOVE_UNIT",
+      unitId,
+      dx,
+      dz,
+    }));
+    run(actions);
+  }
+
   async function applyPanelAction(mode: ControlActionMode) {
     if (mode === "NEXT_TURN") {
       await run({ type: "NEXT_TURN" });
@@ -2700,6 +2712,7 @@ export default function App() {
             selectedIds={selectedIds}
             onSelectUnit={selectUnit}
             onOpenUnitMenu={openBoardMenu}
+            onMoveUnitsByDelta={moveUnitsByDelta}
             onOpenSideMemo={openSideMemo}
             sideMemoActive={sideMemoOpen}
             markerSelectActive={markerCreateOpen}

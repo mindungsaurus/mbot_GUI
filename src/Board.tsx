@@ -1,5 +1,12 @@
 ﻿// src/Board.tsx
-import { useEffect, useMemo, useRef, type MouseEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type DragEvent as ReactDragEvent,
+} from "react";
 import type { Marker, Pos, Unit } from "./types";
 import { unitTextColor } from "./UnitColor";
 
@@ -16,6 +23,7 @@ export default function Board(props: {
   selectedId: string | null; // primary
   onSelectUnit: (id: string, opts?: { additive?: boolean }) => void;
   onOpenUnitMenu?: (e: MouseEvent, unitId: string) => void;
+  onMoveUnitsByDelta?: (unitIds: string[], dx: number, dz: number) => void;
   view: View;
   maxHeightPx?: number;
   markerSelectActive?: boolean;
@@ -33,6 +41,7 @@ export default function Board(props: {
     selectedId,
     onSelectUnit,
     onOpenUnitMenu,
+    onMoveUnitsByDelta,
     view,
     maxHeightPx = 520,
     markerSelectActive = false,
@@ -98,6 +107,14 @@ export default function Board(props: {
     }
     return set;
   }, [selectedMarkerCells]);
+  const [dropTargetCell, setDropTargetCell] = useState<string | null>(null);
+
+  function handleUnitDragStart(e: ReactDragEvent, unitId: string) {
+    if (markerSelectActive) return;
+    e.dataTransfer.setData("application/x-unit-id", unitId);
+    e.dataTransfer.setData("text/plain", unitId);
+    e.dataTransfer.effectAllowed = "move";
+  }
 
   // =========================
   // ✅ "카메라(스크롤)" 자동 이동
@@ -262,12 +279,46 @@ export default function Board(props: {
                           isMarkerSelected
                             ? "outline outline-2 outline-amber-300/70"
                             : "",
+                          dropTargetCell === k
+                            ? "outline outline-2 outline-sky-300/80"
+                            : "",
                           markerSelectActive ? "cursor-pointer" : "",
                         ].join(" ")}
                         style={{
                           minHeight: CELL_MIN_H, // ✅ 최소 높이 보장
                         }}
                         title={`(${x},${z})`}
+                        onDragOver={(e) => {
+                          if (markerSelectActive || !onMoveUnitsByDelta) return;
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = "move";
+                          setDropTargetCell(k);
+                        }}
+                        onDragLeave={() => {
+                          setDropTargetCell((prev) => (prev === k ? null : prev));
+                        }}
+                        onDrop={(e) => {
+                          if (markerSelectActive || !onMoveUnitsByDelta) return;
+                          e.preventDefault();
+                          setDropTargetCell(null);
+                          const unitId =
+                            e.dataTransfer.getData("application/x-unit-id") ||
+                            e.dataTransfer.getData("text/plain");
+                          if (!unitId) return;
+                          const dragged = units.find((u) => u.id === unitId);
+                          if (!dragged?.pos) return;
+                          const dx = x - dragged.pos.x;
+                          const dz = z - dragged.pos.z;
+                          if (dx === 0 && dz === 0) return;
+                          const targets = selectedIds.includes(unitId)
+                            ? selectedIds
+                            : [unitId];
+                          const targetIds = targets.filter((id) =>
+                            units.some((u) => u.id === id && u.pos)
+                          );
+                          if (targetIds.length === 0) return;
+                          onMoveUnitsByDelta(targetIds, dx, dz);
+                        }}
                         onClick={(e) => {
                           if (!markerSelectActive || !onSelectCell) return;
                           onSelectCell(
@@ -342,6 +393,7 @@ export default function Board(props: {
                                     "block w-full truncate rounded-md border px-1.5 py-0.5 text-left",
                                     "border-zinc-800 bg-zinc-950/20 hover:bg-zinc-900/60",
                                     "transition-colors",
+                                    "cursor-grab active:cursor-grabbing",
                                     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/50",
                                     "active:bg-zinc-900/80",
                                     isPrimary
@@ -358,6 +410,10 @@ export default function Board(props: {
                                   title={
                                     u.name + (u.alias ? ` (${u.alias})` : "")
                                   } // ✅ 툴팁은 둘 다 보이게
+                                  draggable={!markerSelectActive}
+                                  onDragStart={(e) =>
+                                    handleUnitDragStart(e, u.id)
+                                  }
                                 >
                                   {displayLabel}
                                 </button>
