@@ -653,14 +653,6 @@ export default function EditUnitModal(props: {
             </div>
           </div>
 
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onClose}
-            className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm text-zinc-100 hover:bg-zinc-800/60 disabled:opacity-50"
-          >
-            Close
-          </button>
         </div>
 
         {err && (
@@ -1408,24 +1400,14 @@ export default function EditUnitModal(props: {
           >
             Delete
           </button>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={onClose}
-              className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-sm text-zinc-100 hover:bg-zinc-800/60 disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={submit}
-              className="rounded-lg bg-emerald-700 px-3 py-2 text-sm text-white hover:bg-emerald-600 disabled:opacity-50"
-            >
-              Save
-            </button>
-          </div>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={submit}
+            className="rounded-lg bg-emerald-700 px-3 py-2 text-sm text-white hover:bg-emerald-600 disabled:opacity-50"
+          >
+            Save
+          </button>
         </div>
       </div>
     </div>

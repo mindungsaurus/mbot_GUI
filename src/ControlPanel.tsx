@@ -159,6 +159,7 @@ export default function ControlPanel(props: {
   } = props;
 
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const amountInputRef = useRef<HTMLInputElement | null>(null);
   const dragRef = useRef<{
     pointerId: number;
     startClientX: number;
@@ -171,6 +172,7 @@ export default function ControlPanel(props: {
   const [mode, setMode] = useState<ControlActionMode>(
     () => loadMode() ?? "NEXT_TURN"
   );
+  const prevModeRef = useRef<ControlActionMode | null>(null);
   const [collapsed, setCollapsed] = useState<boolean>(() => loadCollapsed());
   const [amountInput, setAmountInput] = useState<string>(() => String(amount));
 
@@ -210,6 +212,56 @@ export default function ControlPanel(props: {
       if (next !== amount) setAmount(next);
     }
   }, [mode, amount, setAmount]);
+  useEffect(() => {
+    const prev = prevModeRef.current;
+    if (prev === null) {
+      prevModeRef.current = mode;
+      return;
+    }
+    if (prev !== mode) {
+      if (mode === "SPELL_SLOT" || mode === "CONSUMABLE") {
+        if (amount !== 1) setAmount(1);
+      } else if (mode === "DAMAGE" || mode === "HEAL" || mode === "TEMP_HP") {
+        if (amount !== 5) setAmount(5);
+      } else if (mode === "REMOVE_TAG") {
+        if (amount !== 1) setAmount(1);
+      }
+      prevModeRef.current = mode;
+    }
+  }, [mode, amount, setAmount]);
+
+  const amountUnusedMode =
+    mode === "NEXT_TURN" ||
+    mode === "ADD_TAG" ||
+    mode === "ADD_DEATH_FAIL" ||
+    mode === "TOGGLE_HIDDEN" ||
+    mode === "ASSIGN_IDENTIFIER";
+  const amountDisabled =
+    disabled ||
+    amountUnusedMode ||
+    (mode === "REMOVE_TAG" && (tagReduceDisabled || tagReduceKind !== "stack"));
+  const amountMuted =
+    amountUnusedMode || (mode === "REMOVE_TAG" && tagReduceKind === "toggle");
+
+  useEffect(() => {
+    const el = amountInputRef.current;
+    if (!el) return;
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (amountDisabled) return;
+      const direction = e.deltaY < 0 ? 1 : -1;
+      const base = Number.isFinite(amount) ? amount : 0;
+      const nextRaw = base + direction;
+      const next =
+        mode === "SPELL_SLOT" ? Math.max(1, nextRaw) : Math.max(0, nextRaw);
+      setAmount(next);
+    };
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => {
+      el.removeEventListener("wheel", handleWheel);
+    };
+  }, [amount, amountDisabled, mode, setAmount]);
   useEffect(() => {
     setAmountInput(String(amount));
   }, [amount]);
@@ -320,19 +372,6 @@ export default function ControlPanel(props: {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [hotkeysEnabled, disabled, collapsed, canApplyAction, onAction, mode]);
-
-  const amountUnusedMode =
-    mode === "NEXT_TURN" ||
-    mode === "ADD_TAG" ||
-    mode === "ADD_DEATH_FAIL" ||
-    mode === "TOGGLE_HIDDEN" ||
-    mode === "ASSIGN_IDENTIFIER";
-  const amountDisabled =
-    disabled ||
-    amountUnusedMode ||
-    (mode === "REMOVE_TAG" && (tagReduceDisabled || tagReduceKind !== "stack"));
-  const amountMuted =
-    amountUnusedMode || (mode === "REMOVE_TAG" && tagReduceKind === "toggle");
 
   return (
     <div
@@ -487,6 +526,7 @@ export default function ControlPanel(props: {
                 type="text"
                 inputMode="numeric"
                 pattern="[0-9]*"
+                ref={amountInputRef}
                 value={amountInput}
                 onChange={(e) => {
                   const raw = e.target.value;

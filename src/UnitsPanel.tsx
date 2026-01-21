@@ -2123,14 +2123,7 @@ export default function UnitsPanel(props: {
               </div>
             )}
 
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={closePresetPicker}
-                className="rounded-lg border border-zinc-800 bg-zinc-950/30 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800/60"
-              >
-                취소
-              </button>
+            <div className="mt-4 flex items-center justify-end">
               <button
                 type="button"
                 onClick={submitPresetCreate}

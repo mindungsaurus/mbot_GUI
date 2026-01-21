@@ -600,14 +600,6 @@ export default function TurnOrderReorderModal(props: {
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800/60 disabled:opacity-50"
-          >
-            Close
-          </button>
         </div>
 
         <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -821,24 +813,14 @@ export default function TurnOrderReorderModal(props: {
             Reset
           </button>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={onClose}
-              className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-xs text-zinc-200 hover:bg-zinc-800/60 disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={busy || empty}
-              onClick={applyOrder}
-              className="rounded-lg bg-amber-700 px-3 py-2 text-xs text-white hover:bg-amber-600 disabled:opacity-50"
-            >
-              Apply
-            </button>
-          </div>
+          <button
+            type="button"
+            disabled={busy || empty}
+            onClick={applyOrder}
+            className="rounded-lg bg-amber-700 px-3 py-2 text-xs text-white hover:bg-amber-600 disabled:opacity-50"
+          >
+            Apply
+          </button>
         </div>
       </div>
     </div>

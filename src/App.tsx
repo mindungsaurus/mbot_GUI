@@ -2979,14 +2979,6 @@ export default function App() {
                     </span>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={closeTagGrantModal}
-                  disabled={busy}
-                  className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800/60 disabled:opacity-50"
-                >
-                  닫기
-                </button>
               </div>
 
               {tagGrantErr && (
@@ -3239,15 +3231,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="mt-4 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={closeTagGrantModal}
-                  disabled={busy}
-                  className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-xs text-zinc-200 hover:bg-zinc-800/60 disabled:opacity-50"
-                >
-                  취소
-                </button>
+              <div className="mt-4 flex justify-end">
                 <button
                   type="button"
                   onClick={applyStatusTagGrant}
@@ -3531,14 +3515,7 @@ export default function App() {
                 />
               </div>
 
-              <div className="mt-4 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setSideMemoOpen(false)}
-                  className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-200 hover:bg-zinc-800/60"
-                >
-                  취소
-                </button>
+              <div className="mt-4 flex justify-end">
                 <button
                   type="button"
                   onClick={saveSideNotes}
