@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AuthUser, GoldCharacter, InventoryItem } from "./types";
-import { listGoldCharacters, listInventory } from "./api";
+import type {
+  AuthUser,
+  GoldCharacter,
+  InventoryItem,
+  ItemCatalogEntry,
+} from "./types";
+import { listGoldCharacters, listInventory, listItemCatalog } from "./api";
 
 type Props = {
   authUser: AuthUser;
@@ -8,6 +13,29 @@ type Props = {
 };
 
 const numberFormat = new Intl.NumberFormat("ko-KR");
+
+const ITEM_TYPE_OPTIONS = [
+  "전체",
+  "장비",
+  "소모품",
+  "식품",
+  "광물",
+  "수렵품",
+  "채집물",
+  "기타아이템",
+  "매개체",
+] as const;
+
+const QUALITY_ORDER = [
+  "유일",
+  "전설",
+  "서사",
+  "진귀",
+  "영웅",
+  "희귀",
+  "고급",
+  "일반",
+] as const;
 
 function formatNumber(value: number | null | undefined): string {
   if (value === null || value === undefined) return "0";
@@ -20,6 +48,50 @@ function formatGold(value: number | null | undefined): string {
 
 function formatDay(value: number | null | undefined): string {
   return `${formatNumber(value)}日`;
+}
+
+function qualityLabelFromNumber(value: number | null | undefined): string {
+  switch (value) {
+    case 8:
+      return "유일";
+    case 7:
+      return "전설";
+    case 6:
+      return "서사";
+    case 5:
+      return "진귀";
+    case 4:
+      return "영웅";
+    case 3:
+      return "희귀";
+    case 2:
+      return "고급";
+    case 1:
+      return "일반";
+    default:
+      return "일반";
+  }
+}
+
+function qualityColorClass(label: string): string {
+  switch (label) {
+    case "유일":
+      return "text-teal-300";
+    case "전설":
+      return "text-yellow-300";
+    case "서사":
+      return "text-red-300";
+    case "진귀":
+      return "text-zinc-300";
+    case "영웅":
+      return "text-fuchsia-300";
+    case "희귀":
+      return "text-sky-300";
+    case "고급":
+      return "text-lime-300";
+    default:
+      return "text-zinc-100";
+  }
 }
 
 function getDailyDeltaDisplay(value: number): { text: string; className: string } {
@@ -42,10 +114,14 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
   const [characters, setCharacters] = useState<GoldCharacter[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [catalog, setCatalog] = useState<ItemCatalogEntry[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTab] = useState<"gold" | "inventory" | "sheet">(
     "gold",
   );
+  const [inventoryType, setInventoryType] =
+    useState<(typeof ITEM_TYPE_OPTIONS)[number]>("전체");
+  const [inventorySearch, setInventorySearch] = useState("");
 
   const selected = useMemo(
     () => characters.find((c) => c.name === selectedName) ?? null,
@@ -71,6 +147,45 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
     });
   }, [characters, searchTerm]);
 
+  const catalogByName = useMemo(() => {
+    return new Map(catalog.map((entry) => [entry.name, entry]));
+  }, [catalog]);
+
+  const inventoryRows = useMemo(() => {
+    const rankMap = new Map<string, number>();
+    QUALITY_ORDER.forEach((label, idx) => rankMap.set(label, idx));
+    const term = inventorySearch.trim();
+    const list = inventory
+      .map((item) => {
+        const meta = catalogByName.get(item.itemName);
+        const qualityLabel = qualityLabelFromNumber(meta?.quality);
+        const type = meta?.type ?? "기타아이템";
+        return {
+          ...item,
+          type,
+          qualityLabel,
+          qualityRank: rankMap.get(qualityLabel) ?? QUALITY_ORDER.length,
+        };
+      })
+      .filter((item) => {
+        if (inventoryType !== "전체" && item.type !== inventoryType) return false;
+        if (term && !item.itemName.includes(term)) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        if (a.qualityRank !== b.qualityRank) {
+          return a.qualityRank - b.qualityRank;
+        }
+        return a.itemName.localeCompare(b.itemName, "ko");
+      });
+
+    const rows: typeof list[] = [];
+    for (let i = 0; i < list.length; i += 2) {
+      rows.push(list.slice(i, i + 2));
+    }
+    return rows;
+  }, [catalogByName, inventory, inventorySearch, inventoryType]);
+
   const reloadCharacters = async (preserveSelection = true) => {
     try {
       setErr(null);
@@ -86,6 +201,19 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
       setErr(String(e?.message ?? e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const reloadCatalog = async () => {
+    if (!isAdmin) {
+      setCatalog([]);
+      return;
+    }
+    try {
+      const items = (await listItemCatalog()) as ItemCatalogEntry[];
+      setCatalog(items);
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
     }
   };
 
@@ -105,6 +233,9 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
 
   useEffect(() => {
     reloadCharacters(false);
+    if (isAdmin) {
+      reloadCatalog();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -177,9 +308,9 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
             />
 
             <div className="mt-2 flex-1 space-y-1 overflow-y-auto pr-1">
-                  {filteredCharacters.map((c) => {
-                    const active = c.name === selectedName;
-                    return (
+              {filteredCharacters.map((c) => {
+                const active = c.name === selectedName;
+                return (
                   <button
                     key={c.name}
                     type="button"
@@ -360,32 +491,106 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                   인벤토리
                 </div>
 
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  {ITEM_TYPE_OPTIONS.map((type) => {
+                    const active = inventoryType === type;
+                    return (
+                      <button
+                        key={type}
+                        type="button"
+                        className={[
+                          "rounded-md border px-2.5 py-1 text-[11px] font-semibold",
+                          active
+                            ? "border-amber-500/70 bg-amber-950/30 text-amber-100"
+                            : "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:border-zinc-700",
+                        ].join(" ")}
+                        onClick={() => setInventoryType(type)}
+                        disabled={busy}
+                      >
+                        {type}
+                      </button>
+                    );
+                  })}
+                  <input
+                    value={inventorySearch}
+                    onChange={(e) => setInventorySearch(e.target.value)}
+                    placeholder="아이템 검색"
+                    className="h-8 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600 md:ml-auto md:w-48"
+                  />
+                </div>
+
                 {!selected ? (
                   <div className="rounded-lg border border-dashed border-zinc-800 p-4 text-sm text-zinc-500">
                     캐릭터를 선택해 주세요.
                   </div>
-                ) : inventory.length === 0 ? (
+                ) : inventoryRows.length === 0 ? (
                   <div className="rounded-md border border-dashed border-zinc-800 p-3 text-xs text-zinc-500">
                     등록된 아이템이 없습니다.
                   </div>
                 ) : (
                   <div className="overflow-hidden rounded-lg border border-zinc-800">
-                    <div className="grid grid-cols-[1fr_90px] bg-zinc-950/60 px-3 py-2 text-xs font-semibold text-zinc-400">
-                      <span>아이템</span>
+                    <div className="grid grid-cols-[1fr_80px_1px_1fr_80px] bg-zinc-950/60 px-3 py-2 text-xs font-semibold text-zinc-400">
+                      <span>항목</span>
+                      <span className="text-right">수량</span>
+                      <span className="bg-zinc-800/80" aria-hidden="true" />
+                      <span className="text-right md:text-left">항목</span>
                       <span className="text-right">수량</span>
                     </div>
                     <div className="divide-y divide-zinc-800">
-                      {inventory.map((item) => (
-                        <div
-                          key={item.itemName}
-                          className="grid grid-cols-[1fr_90px] items-center bg-zinc-950/30 px-3 py-2 text-sm text-zinc-200"
-                        >
-                          <span>{item.itemName}</span>
-                          <span className="text-right text-zinc-300">
-                            {item.amount}
-                          </span>
-                        </div>
-                      ))}
+                      {inventoryRows.map((row, idx) => {
+                        const left = row[0];
+                        const right = row[1];
+                        return (
+                          <div
+                            key={`${left?.itemName ?? "row"}-${idx}`}
+                            className="grid grid-cols-[1fr_80px_1px_1fr_80px] items-center bg-zinc-950/30 px-3 py-2 text-sm text-zinc-200"
+                          >
+                            {left ? (
+                              <>
+                                <span
+                                  className={qualityColorClass(left.qualityLabel)}
+                                >
+                                  {left.itemName}
+                                </span>
+                                <span className="text-right text-zinc-300">
+                                  {left.amount}
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="text-zinc-600">-</span>
+                                <span className="text-right text-zinc-600">-</span>
+                              </>
+                            )}
+                            <span
+                              className="h-full bg-zinc-800/80"
+                              aria-hidden="true"
+                            />
+                            {right ? (
+                              <>
+                                <span
+                                  className={[
+                                    "text-right md:text-left",
+                                    qualityColorClass(right.qualityLabel),
+                                  ].join(" ")}
+                                >
+                                  {right.itemName}
+                                </span>
+                                <span className="text-right text-zinc-300">
+                                  {right.amount}
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="text-right text-zinc-600 md:text-left">
+                                  -
+                                </span>
+                                <span className="text-right text-zinc-600">-</span>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
