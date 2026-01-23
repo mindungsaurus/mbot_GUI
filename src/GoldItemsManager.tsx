@@ -5,7 +5,13 @@ import type {
   InventoryItem,
   ItemCatalogEntry,
 } from "./types";
-import { listGoldCharacters, listInventory, listItemCatalog } from "./api";
+import {
+  addInventoryItem,
+  listGoldCharacters,
+  listInventory,
+  listItemCatalog,
+  useInventoryItem,
+} from "./api";
 
 type Props = {
   authUser: AuthUser;
@@ -107,6 +113,11 @@ function getDailyDeltaDisplay(value: number): { text: string; className: string 
   return { text: "0G", className: "text-zinc-200" };
 }
 
+function formatItemAmount(amount: number, unit?: string | null): string {
+  if (!unit || unit === "-") return `${amount}`;
+  return `${amount}${unit}`;
+}
+
 export default function GoldItemsManager({ authUser, onBack }: Props) {
   const isAdmin = !!authUser.isAdmin;
   const [busy, setBusy] = useState(false);
@@ -119,9 +130,38 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
   const [activeTab, setActiveTab] = useState<"gold" | "inventory" | "sheet">(
     "gold",
   );
+  const [inventoryMode, setInventoryMode] = useState<
+    "none" | "consume" | "acquire"
+  >("none");
   const [inventoryType, setInventoryType] =
     useState<(typeof ITEM_TYPE_OPTIONS)[number]>("전체");
   const [inventorySearch, setInventorySearch] = useState("");
+  const [selectedInventoryName, setSelectedInventoryName] = useState<
+    string | null
+  >(null);
+  const [selectedCatalogName, setSelectedCatalogName] = useState<string | null>(
+    null,
+  );
+  const [inventoryAmount, setInventoryAmount] = useState("1");
+  const [inventoryResult, setInventoryResult] = useState<{
+    title: string;
+    ownerName: string;
+    itemName: string;
+    before: number;
+    after: number;
+    qualityLabel: string;
+    unit?: string | null;
+    action: "consume" | "acquire";
+    delta: number;
+  } | null>(null);
+  const [inventoryNotice, setInventoryNotice] = useState<{
+    title: string;
+    ownerName: string;
+    itemName: string;
+    qualityLabel: string;
+    message: string;
+    detail: string;
+  } | null>(null);
 
   const selected = useMemo(
     () => characters.find((c) => c.name === selectedName) ?? null,
@@ -151,25 +191,54 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
     return new Map(catalog.map((entry) => [entry.name, entry]));
   }, [catalog]);
 
+  const catalogResults = useMemo(() => {
+    const rankMap = new Map<string, number>();
+    QUALITY_ORDER.forEach((label, idx) => rankMap.set(label, idx));
+    const term = inventorySearch.trim().toLowerCase();
+    return catalog
+      .map((entry) => {
+        const qualityLabel = qualityLabelFromNumber(entry.quality);
+        return {
+          ...entry,
+          qualityLabel,
+          qualityRank: rankMap.get(qualityLabel) ?? QUALITY_ORDER.length,
+        };
+      })
+      .filter((entry) => {
+        if (inventoryType !== "전체" && entry.type !== inventoryType) return false;
+        if (term && !entry.name.toLowerCase().includes(term)) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        if (a.qualityRank !== b.qualityRank) {
+          return a.qualityRank - b.qualityRank;
+        }
+        return a.name.localeCompare(b.name, "ko");
+      })
+      .slice(0, 12);
+  }, [catalog, inventorySearch, inventoryType]);
+
   const inventoryRows = useMemo(() => {
     const rankMap = new Map<string, number>();
     QUALITY_ORDER.forEach((label, idx) => rankMap.set(label, idx));
-    const term = inventorySearch.trim();
+    const term = inventorySearch.trim().toLowerCase();
     const list = inventory
       .map((item) => {
         const meta = catalogByName.get(item.itemName);
         const qualityLabel = qualityLabelFromNumber(meta?.quality);
         const type = meta?.type ?? "기타아이템";
+        const unit = meta?.unit ?? "-";
         return {
           ...item,
           type,
+          unit,
           qualityLabel,
           qualityRank: rankMap.get(qualityLabel) ?? QUALITY_ORDER.length,
         };
       })
       .filter((item) => {
         if (inventoryType !== "전체" && item.type !== inventoryType) return false;
-        if (term && !item.itemName.includes(term)) return false;
+        if (term && !item.itemName.toLowerCase().includes(term)) return false;
         return true;
       })
       .sort((a, b) => {
@@ -205,15 +274,13 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
   };
 
   const reloadCatalog = async () => {
-    if (!isAdmin) {
-      setCatalog([]);
-      return;
-    }
     try {
       const items = (await listItemCatalog()) as ItemCatalogEntry[];
       setCatalog(items);
     } catch (e: any) {
-      setErr(String(e?.message ?? e));
+      if (isAdmin) {
+        setErr(String(e?.message ?? e));
+      }
     }
   };
 
@@ -233,20 +300,155 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
 
   useEffect(() => {
     reloadCharacters(false);
-    if (isAdmin) {
-      reloadCatalog();
-    }
+    reloadCatalog();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (!selected) {
       setInventory([]);
+      setSelectedInventoryName(null);
+      setSelectedCatalogName(null);
       return;
     }
+    setSelectedInventoryName(null);
+    setSelectedCatalogName(null);
     reloadInventory(selected.name);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.name]);
+
+  useEffect(() => {
+    setInventoryAmount("1");
+  }, [inventoryMode]);
+
+  const parseAmount = (raw: string): number | null => {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    const value = Number(trimmed);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    return Math.trunc(value);
+  };
+
+  const handleConsume = async () => {
+    if (!selected) return;
+    if (!selectedInventoryName) {
+      setErr("소모할 아이템을 선택해 주세요.");
+      return;
+    }
+    const amount = parseAmount(inventoryAmount);
+    if (!amount) {
+      setErr("소모 수량을 입력해 주세요.");
+      return;
+    }
+    const beforeItem = inventory.find(
+      (item) => item.itemName === selectedInventoryName,
+    );
+    if (!beforeItem) {
+      setErr("선택한 아이템이 인벤토리에 없습니다.");
+      return;
+    }
+    const before = beforeItem.amount;
+    const qualityLabel = qualityLabelFromNumber(
+      catalogByName.get(selectedInventoryName)?.quality,
+    );
+    const unit = catalogByName.get(selectedInventoryName)?.unit ?? null;
+    try {
+      setErr(null);
+      setBusy(true);
+      await useInventoryItem({
+        owner: selected.name,
+        itemName: selectedInventoryName,
+        amount,
+      });
+      await reloadInventory(selected.name);
+      const delta = Math.min(before, amount);
+      const after = Math.max(0, before - delta);
+      setInventoryResult({
+        title: "아이템 소모 결과",
+        ownerName: selected.name,
+        itemName: selectedInventoryName,
+        before,
+        after,
+        qualityLabel,
+        unit,
+        action: "consume",
+        delta,
+      });
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      if (msg.toLowerCase().includes("insufficient")) {
+        setInventoryNotice({
+          title: "아이템 소모 실패",
+          ownerName: selected.name,
+          itemName: selectedInventoryName,
+          qualityLabel,
+          message: `보유 수량이 부족합니다.`,
+          detail: `(요청: ${formatItemAmount(amount, unit)}, 보유: ${formatItemAmount(
+            before,
+            unit,
+          )})`,
+        });
+        return;
+      }
+      setErr(msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleAcquire = async () => {
+    if (!selected) return;
+    if (!selectedCatalogName) {
+      setErr("획득할 아이템을 선택해 주세요.");
+      return;
+    }
+    const amount = parseAmount(inventoryAmount);
+    if (!amount) {
+      setErr("획득 수량을 입력해 주세요.");
+      return;
+    }
+    const beforeItem = inventory.find(
+      (item) => item.itemName === selectedCatalogName,
+    );
+    const before = beforeItem?.amount ?? 0;
+    const qualityLabel = qualityLabelFromNumber(
+      catalogByName.get(selectedCatalogName)?.quality,
+    );
+    const unit = catalogByName.get(selectedCatalogName)?.unit ?? null;
+    try {
+      setErr(null);
+      setBusy(true);
+      await addInventoryItem({
+        owner: selected.name,
+        itemName: selectedCatalogName,
+        amount,
+      });
+      await reloadInventory(selected.name);
+      const delta = amount;
+      const after = before + delta;
+      setInventoryResult({
+        title: "아이템 획득 결과",
+        ownerName: selected.name,
+        itemName: selectedCatalogName,
+        before,
+        after,
+        qualityLabel,
+        unit,
+        action: "acquire",
+        delta,
+      });
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  useEffect(() => {
+    if (!selectedInventoryName) return;
+    if (!inventory.some((item) => item.itemName === selectedInventoryName)) {
+      setSelectedInventoryName(null);
+    }
+  }, [inventory, selectedInventoryName]);
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -487,11 +689,47 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
             ) : null}
             {activeTab === "inventory" ? (
               <section className="flex-1 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
-                <div className="mb-3 text-sm font-semibold text-zinc-200">
-                  인벤토리
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="text-sm font-semibold text-zinc-200">
+                    인벤토리
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      className={[
+                        "rounded-md border px-2.5 py-1 text-[11px] font-semibold",
+                        inventoryMode === "acquire"
+                          ? "border-amber-500/70 bg-amber-950/30 text-amber-100"
+                          : "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:border-zinc-700",
+                      ].join(" ")}
+                      onClick={() =>
+                        setInventoryMode(
+                          inventoryMode === "acquire" ? "none" : "acquire",
+                        )
+                      }
+                    >
+                      아이템 획득
+                    </button>
+                    <button
+                      type="button"
+                      className={[
+                        "rounded-md border px-2.5 py-1 text-[11px] font-semibold",
+                        inventoryMode === "consume"
+                          ? "border-amber-500/70 bg-amber-950/30 text-amber-100"
+                          : "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:border-zinc-700",
+                      ].join(" ")}
+                      onClick={() =>
+                        setInventoryMode(
+                          inventoryMode === "consume" ? "none" : "consume",
+                        )
+                      }
+                    >
+                      아이템 소모
+                    </button>
+                  </div>
                 </div>
 
-                <div className="mb-3 flex flex-wrap items-center gap-2">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
                   {ITEM_TYPE_OPTIONS.map((type) => {
                     const active = inventoryType === type;
                     return (
@@ -511,13 +749,100 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                       </button>
                     );
                   })}
-                  <input
-                    value={inventorySearch}
-                    onChange={(e) => setInventorySearch(e.target.value)}
-                    placeholder="아이템 검색"
-                    className="h-8 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600 md:ml-auto md:w-48"
-                  />
                 </div>
+
+                <input
+                  value={inventorySearch}
+                  onChange={(e) => setInventorySearch(e.target.value)}
+                  placeholder="아이템 검색"
+                  className="mb-3 h-8 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
+                />
+
+                {inventoryMode !== "none" ? (
+                  <div className="mb-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+                    <div className="mb-2 text-xs font-semibold text-zinc-300">
+                      {inventoryMode === "consume"
+                        ? "아이템 소모"
+                        : "아이템 획득"}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="text-xs text-zinc-400">
+                        {inventoryMode === "consume"
+                          ? "선택한 아이템"
+                          : "선택한 아이템"}
+                        :
+                      </div>
+                      <div className="text-sm font-semibold text-zinc-100">
+                        {inventoryMode === "consume"
+                          ? selectedInventoryName ?? "없음"
+                          : selectedCatalogName ?? "없음"}
+                      </div>
+                      <input
+                        value={inventoryAmount}
+                        onChange={(e) => setInventoryAmount(e.target.value)}
+                        placeholder="수량"
+                        className="h-8 w-24 rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
+                      />
+                      <button
+                        type="button"
+                        className="rounded-md bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
+                        onClick={
+                          inventoryMode === "consume"
+                            ? handleConsume
+                            : handleAcquire
+                        }
+                        disabled={
+                          busy ||
+                          (inventoryMode === "consume"
+                            ? !selectedInventoryName
+                            : !selectedCatalogName) ||
+                          !inventoryAmount.trim()
+                        }
+                      >
+                        적용
+                      </button>
+                    </div>
+
+                    {inventoryMode === "acquire" ? (
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        {catalogResults.length === 0 ? (
+                          <div className="col-span-2 text-xs text-zinc-500">
+                            검색 결과가 없습니다.
+                          </div>
+                        ) : (
+                          catalogResults.map((entry) => {
+                            const active =
+                              entry.name === selectedCatalogName;
+                            return (
+                              <button
+                                key={entry.name}
+                                type="button"
+                                className={[
+                                  "rounded-md border px-2 py-1 text-left text-xs",
+                                  active
+                                    ? "border-amber-500/70 bg-amber-950/30 text-amber-100"
+                                    : "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:border-zinc-700",
+                                ].join(" ")}
+                                onClick={() => setSelectedCatalogName(entry.name)}
+                              >
+                                <div
+                                  className={qualityColorClass(
+                                    entry.qualityLabel,
+                                  )}
+                                >
+                                  {entry.name}
+                                </div>
+                                <div className="text-[10px] text-zinc-500">
+                                  {entry.type}
+                                </div>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 {!selected ? (
                   <div className="rounded-lg border border-dashed border-zinc-800 p-4 text-sm text-zinc-500">
@@ -528,7 +853,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                     등록된 아이템이 없습니다.
                   </div>
                 ) : (
-                  <div className="overflow-hidden rounded-lg border border-zinc-800">
+                  <div className="overflow-visible rounded-lg border border-zinc-800">
                     <div className="grid grid-cols-[1fr_80px_4px_1fr_80px] bg-zinc-950/60 px-4 py-2 text-xs font-semibold text-zinc-400">
                       <span>항목</span>
                       <span className="pr-2 text-right">수량</span>
@@ -540,39 +865,99 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                       {inventoryRows.map((row, idx) => {
                         const left = row[0];
                         const right = row[1];
-                        return (
-                          <div
-                            key={`${left?.itemName ?? "row"}-${idx}`}
-                            className="grid grid-cols-[1fr_80px_4px_1fr_80px] items-center bg-zinc-950/30 px-4 py-2 text-sm text-zinc-200"
-                          >
-                            {left ? (
-                              <>
+                        const leftSelected =
+                          left && left.itemName === selectedInventoryName;
+                        const rightSelected =
+                          right && right.itemName === selectedInventoryName;
+                          return (
+                            <div
+                              key={`${left?.itemName ?? "row"}-${idx}`}
+                              className="grid grid-cols-[1fr_80px_4px_1fr_80px] items-center bg-zinc-950/30 px-4 py-2 text-sm text-zinc-200"
+                            >
+                              {left ? (
+                                <button
+                                  type="button"
+                                  className={[
+                                    "relative col-span-2 grid grid-cols-[1fr_80px] items-center rounded-md pl-1 pr-2 py-1 text-left",
+                                    "hover:bg-zinc-900/40",
+                                    leftSelected
+                                      ? "bg-amber-950/30 ring-1 ring-amber-500/60"
+                                      : "",
+                                  ].join(" ")}
+                                  onClick={() =>
+                                    setSelectedInventoryName(
+                                      leftSelected ? null : left.itemName,
+                                    )
+                                  }
+                                >
                                 <span
                                   className={qualityColorClass(left.qualityLabel)}
                                 >
                                   {left.itemName}
                                 </span>
-                                <span className="pr-2 text-right font-semibold text-amber-200">
+                                <span className="text-right font-semibold text-amber-200">
                                   {left.amount}
                                 </span>
-                              </>
+                                {leftSelected ? (
+                                  <div className="absolute left-0 top-full z-30 mt-2 w-52 rounded-lg border border-zinc-800 bg-zinc-950/95 p-2 text-[11px] text-zinc-200 shadow-xl">
+                                    <div className="absolute left-4 top-0 h-2 w-2 -translate-y-1/2 rotate-45 border border-zinc-800 bg-zinc-950/95" />
+                                    <div className="font-semibold text-zinc-100">
+                                      {left.itemName}
+                                    </div>
+                                    <div className="mt-1 text-zinc-400">
+                                      수량:{" "}
+                                      <span className="font-semibold text-amber-200">
+                                        {left.amount}
+                                      </span>
+                                    </div>
+                                    <div className="mt-1 text-zinc-400">
+                                      등급:{" "}
+                                      <span
+                                        className={qualityColorClass(
+                                          left.qualityLabel,
+                                        )}
+                                      >
+                                        {left.qualityLabel}
+                                      </span>
+                                    </div>
+                                    <div className="mt-1 text-zinc-400">
+                                      종류: {left.type}
+                                    </div>
+                                    <div className="mt-1 text-zinc-400">
+                                      단위: {left.unit}
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </button>
                             ) : (
-                              <>
-                                <span className="text-zinc-600">-</span>
-                                <span className="pr-2 text-right text-zinc-600">
-                                  -
-                                </span>
-                              </>
+                              <div className="col-span-2 grid grid-cols-[1fr_80px] items-center rounded-md px-2 py-1 text-zinc-600">
+                                <span>-</span>
+                                <span className="text-right">-</span>
+                              </div>
                             )}
                             <span
                               className="h-full bg-zinc-700/80"
                               aria-hidden="true"
                             />
                             {right ? (
-                              <>
+                              <button
+                                type="button"
+                                className={[
+                                  "relative col-span-2 grid grid-cols-[1fr_80px] items-center rounded-md pl-2 pr-1 py-1 text-left",
+                                  "hover:bg-zinc-900/40",
+                                  rightSelected
+                                    ? "bg-amber-950/30 ring-1 ring-amber-500/60"
+                                    : "",
+                                ].join(" ")}
+                                onClick={() =>
+                                  setSelectedInventoryName(
+                                    rightSelected ? null : right.itemName,
+                                  )
+                                }
+                              >
                                 <span
                                   className={[
-                                    "pl-2 text-right md:text-left",
+                                    "text-right md:text-left",
                                     qualityColorClass(right.qualityLabel),
                                   ].join(" ")}
                                 >
@@ -581,14 +966,42 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                                 <span className="text-right font-semibold text-amber-200">
                                   {right.amount}
                                 </span>
-                              </>
+                                {rightSelected ? (
+                                  <div className="absolute right-0 top-full z-30 mt-2 w-52 rounded-lg border border-zinc-800 bg-zinc-950/95 p-2 text-[11px] text-zinc-200 shadow-xl">
+                                    <div className="absolute right-4 top-0 h-2 w-2 -translate-y-1/2 rotate-45 border border-zinc-800 bg-zinc-950/95" />
+                                    <div className="font-semibold text-zinc-100">
+                                      {right.itemName}
+                                    </div>
+                                    <div className="mt-1 text-zinc-400">
+                                      수량:{" "}
+                                      <span className="font-semibold text-amber-200">
+                                        {right.amount}
+                                      </span>
+                                    </div>
+                                    <div className="mt-1 text-zinc-400">
+                                      등급:{" "}
+                                      <span
+                                        className={qualityColorClass(
+                                          right.qualityLabel,
+                                        )}
+                                      >
+                                        {right.qualityLabel}
+                                      </span>
+                                    </div>
+                                    <div className="mt-1 text-zinc-400">
+                                      종류: {right.type}
+                                    </div>
+                                    <div className="mt-1 text-zinc-400">
+                                      단위: {right.unit}
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </button>
                             ) : (
-                              <>
-                                <span className="pl-2 text-right text-zinc-600 md:text-left">
-                                  -
-                                </span>
-                                <span className="text-right text-zinc-600">-</span>
-                              </>
+                              <div className="col-span-2 grid grid-cols-[1fr_80px] items-center rounded-md px-2 py-1 text-zinc-600">
+                                <span className="text-right md:text-left">-</span>
+                                <span className="text-right">-</span>
+                              </div>
                             )}
                           </div>
                         );
@@ -596,6 +1009,123 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                     </div>
                   </div>
                 )}
+
+                {inventoryResult ? (
+                  <div
+                    className="fixed inset-0 z-40 flex items-center justify-center"
+                    role="dialog"
+                    aria-modal="true"
+                  >
+                    <div
+                      className="absolute inset-0 bg-black/40"
+                      onClick={() => setInventoryResult(null)}
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Close overlay"
+                      onKeyDown={(e) =>
+                        e.key === "Enter" && setInventoryResult(null)
+                      }
+                    />
+                    <div className="relative z-50 w-[min(360px,92vw)] rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
+                      <div className="mb-2 text-sm font-semibold text-zinc-100">
+                        {inventoryResult.title}
+                      </div>
+                      <div className="text-sm text-zinc-100">
+                        <span className="font-semibold">
+                          「{inventoryResult.ownerName}」
+                        </span>
+                        , [
+                        <span
+                          className={[
+                            "font-semibold",
+                            qualityColorClass(inventoryResult.qualityLabel),
+                          ].join(" ")}
+                        >
+                          {inventoryResult.itemName}
+                        </span>
+                        ] 을(를){" "}
+                        {formatItemAmount(
+                          inventoryResult.delta,
+                          inventoryResult.unit,
+                        )}
+                        만큼{" "}
+                        {inventoryResult.action === "acquire"
+                          ? "획득하였다."
+                          : "소모하였다."}
+                      </div>
+                      <div className="mt-1 text-sm text-zinc-300">
+                        {formatItemAmount(
+                          inventoryResult.before,
+                          inventoryResult.unit,
+                        )}{" "}
+                        →{" "}
+                        {formatItemAmount(
+                          inventoryResult.after,
+                          inventoryResult.unit,
+                        )}
+                      </div>
+                      <div className="mt-4 flex justify-end">
+                        <button
+                          type="button"
+                          className="rounded-md bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600"
+                          onClick={() => setInventoryResult(null)}
+                        >
+                          확인
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+                {inventoryNotice ? (
+                  <div
+                    className="fixed inset-0 z-40 flex items-center justify-center"
+                    role="dialog"
+                    aria-modal="true"
+                  >
+                    <div
+                      className="absolute inset-0 bg-black/40"
+                      onClick={() => setInventoryNotice(null)}
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Close overlay"
+                      onKeyDown={(e) =>
+                        e.key === "Enter" && setInventoryNotice(null)
+                      }
+                    />
+                    <div className="relative z-50 w-[min(360px,92vw)] rounded-2xl border border-red-800/60 bg-zinc-950 p-4 shadow-2xl">
+                      <div className="mb-2 text-sm font-semibold text-rose-200">
+                        {inventoryNotice.title}
+                      </div>
+                      <div className="text-sm text-zinc-100">
+                        <span className="font-semibold">
+                          「{inventoryNotice.ownerName}」
+                        </span>
+                        의 [
+                        <span
+                          className={[
+                            "font-semibold",
+                            qualityColorClass(inventoryNotice.qualityLabel),
+                          ].join(" ")}
+                        >
+                          {inventoryNotice.itemName}
+                        </span>
+                        ] {inventoryNotice.message}
+                        <div className="mt-1 text-sm text-zinc-300">
+                          {inventoryNotice.detail}
+                        </div>
+                      </div>
+                      <div className="mt-4 flex justify-end">
+                        <button
+                          type="button"
+                          className="rounded-md bg-zinc-800 px-3 py-1.5 text-xs font-semibold text-zinc-100 hover:bg-zinc-700"
+                          onClick={() => setInventoryNotice(null)}
+                        >
+                          확인
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </section>
             ) : null}
             {activeTab === "sheet" ? (

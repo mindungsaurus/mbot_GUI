@@ -41,6 +41,13 @@ export type TurnGroup = {
   unitIds: string[];
 };
 
+export type TurnEndSnapshot = {
+  spellSlots?: string;
+  consumables?: string;
+  toggleTags?: string;
+  manualStacks?: string;
+};
+
 export type Side = "TEAM" | "ENEMY" | "NEUTRAL";
 export type UnitKind = "NORMAL" | "SERVANT" | "BUILDING";
 
@@ -118,6 +125,7 @@ export type EncounterState = {
   turnOrder?: TurnEntry[];
   turnGroups?: TurnGroup[];
   turnIndex?: number;
+  turnEndSnapshots?: Record<string, TurnEndSnapshot>;
   battleStarted?: boolean;
   identifierCounters?: Record<string, number>;
 

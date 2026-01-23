@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 export type ControlActionMode =
   | "DAMAGE"
   | "HEAL"
+  | "MAX_HP"
   | "NEXT_TURN"
   | "TEMP_HP"
   | "ADD_TAG"
@@ -47,6 +48,7 @@ function loadMode(): ControlActionMode | null {
     if (
       raw === "DAMAGE" ||
       raw === "HEAL" ||
+      raw === "MAX_HP" ||
       raw === "NEXT_TURN" ||
       raw === "TEMP_HP" ||
       raw === "ADD_TAG" ||
@@ -110,6 +112,10 @@ export default function ControlPanel(props: {
   setSlotLevel: (level: number) => void;
   slotDelta: "spend" | "recover";
   setSlotDelta: (delta: "spend" | "recover") => void;
+  maxHpDelta: "inc" | "dec";
+  setMaxHpDelta: (delta: "inc" | "dec") => void;
+  maxHpScope: "both" | "max";
+  setMaxHpScope: (scope: "both" | "max") => void;
   identifierOptions: Array<{ id: string; label: string }>;
   identifierScheme: string;
   setIdentifierScheme: (value: string) => void;
@@ -120,11 +126,16 @@ export default function ControlPanel(props: {
   setConsumableDelta: (delta: "dec" | "inc") => void;
   consumableRemaining?: number | null;
   consumableDisabled?: boolean;
-  tagReduceOptions: Array<{ name: string; kind: "toggle" | "stack"; stacks?: number }>;
+  tagReduceOptions: Array<{
+    name: string;
+    kind: "toggle" | "stack";
+    count?: number;
+  }>;
+  tagReduceShowCount?: boolean;
   tagReduceName: string;
   setTagReduceName: (name: string) => void;
   tagReduceKind?: "toggle" | "stack" | null;
-  tagReduceStacks?: number | null;
+  tagReduceEntries?: Array<{ label: string; stacks?: number }>;
   tagReduceDisabled?: boolean;
 }) {
   const {
@@ -140,6 +151,10 @@ export default function ControlPanel(props: {
     setSlotLevel,
     slotDelta,
     setSlotDelta,
+    maxHpDelta,
+    setMaxHpDelta,
+    maxHpScope,
+    setMaxHpScope,
     identifierOptions,
     identifierScheme,
     setIdentifierScheme,
@@ -151,10 +166,11 @@ export default function ControlPanel(props: {
     consumableRemaining,
     consumableDisabled = false,
     tagReduceOptions,
+    tagReduceShowCount = false,
     tagReduceName,
     setTagReduceName,
     tagReduceKind = null,
-    tagReduceStacks = null,
+    tagReduceEntries = [],
     tagReduceDisabled = false,
   } = props;
 
@@ -175,6 +191,8 @@ export default function ControlPanel(props: {
   const prevModeRef = useRef<ControlActionMode | null>(null);
   const [collapsed, setCollapsed] = useState<boolean>(() => loadCollapsed());
   const [amountInput, setAmountInput] = useState<string>(() => String(amount));
+  const [tagReduceMenuOpen, setTagReduceMenuOpen] = useState(false);
+  const tagReduceMenuRef = useRef<HTMLDivElement | null>(null);
 
   const modeLabel = useMemo(() => {
     switch (mode) {
@@ -182,6 +200,8 @@ export default function ControlPanel(props: {
         return "Damage";
       case "HEAL":
         return "Heal";
+      case "MAX_HP":
+        return "Max HP";
       case "TEMP_HP":
         return "Temp HP";
       case "ADD_TAG":
@@ -205,9 +225,21 @@ export default function ControlPanel(props: {
 
   useEffect(() => saveMode(mode), [mode]);
   useEffect(() => saveCollapsed(collapsed), [collapsed]);
+  useEffect(() => {
+    if (!tagReduceMenuOpen) return;
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!tagReduceMenuRef.current || !target) return;
+      if (!tagReduceMenuRef.current.contains(target)) {
+        setTagReduceMenuOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", handleClick);
+    return () => window.removeEventListener("mousedown", handleClick);
+  }, [tagReduceMenuOpen]);
 
   useEffect(() => {
-    if (mode === "SPELL_SLOT") {
+    if (mode === "SPELL_SLOT" || mode === "MAX_HP") {
       const next = Math.max(1, amount);
       if (next !== amount) setAmount(next);
     }
@@ -219,7 +251,7 @@ export default function ControlPanel(props: {
       return;
     }
     if (prev !== mode) {
-      if (mode === "SPELL_SLOT" || mode === "CONSUMABLE") {
+      if (mode === "SPELL_SLOT" || mode === "CONSUMABLE" || mode === "MAX_HP") {
         if (amount !== 1) setAmount(1);
       } else if (mode === "DAMAGE" || mode === "HEAL" || mode === "TEMP_HP") {
         if (amount !== 5) setAmount(5);
@@ -254,7 +286,9 @@ export default function ControlPanel(props: {
       const base = Number.isFinite(amount) ? amount : 0;
       const nextRaw = base + direction;
       const next =
-        mode === "SPELL_SLOT" ? Math.max(1, nextRaw) : Math.max(0, nextRaw);
+        mode === "SPELL_SLOT" || mode === "MAX_HP"
+          ? Math.max(1, nextRaw)
+          : Math.max(0, nextRaw);
       setAmount(next);
     };
     el.addEventListener("wheel", handleWheel, { passive: false });
@@ -489,6 +523,7 @@ export default function ControlPanel(props: {
               >
                 <option value="DAMAGE">데미지</option>
                 <option value="HEAL">회복</option>
+                <option value="MAX_HP">최대 체력</option>
                 <option value="NEXT_TURN">다음 턴</option>
                 <option value="TEMP_HP">임체 부여</option>
                 <option value="ADD_TAG">상태 부여</option>
@@ -512,7 +547,7 @@ export default function ControlPanel(props: {
                 ].join(" ")}
                 onClick={() => {
                   const next =
-                    mode === "SPELL_SLOT"
+                    mode === "SPELL_SLOT" || mode === "MAX_HP"
                       ? Math.max(1, amount - 1)
                       : Math.max(0, amount - 1);
                   setAmount(next);
@@ -536,14 +571,15 @@ export default function ControlPanel(props: {
                   const parsed = Math.trunc(Number(filtered));
                   if (!Number.isFinite(parsed)) return;
                   const next =
-                    mode === "SPELL_SLOT"
+                    mode === "SPELL_SLOT" || mode === "MAX_HP"
                       ? Math.max(1, parsed)
                       : Math.max(0, parsed);
                   setAmount(next);
                 }}
                 onBlur={() => {
                   if (amountInput.trim() !== "") return;
-                  const next = mode === "SPELL_SLOT" ? 1 : 0;
+                  const next =
+                    mode === "SPELL_SLOT" || mode === "MAX_HP" ? 1 : 0;
                   setAmount(next);
                   setAmountInput(String(next));
                 }}
@@ -579,26 +615,88 @@ export default function ControlPanel(props: {
           {mode === "REMOVE_TAG" && (
             <div className="mt-3 space-y-1">
               <div className="flex items-center gap-2">
-                <select
-                  value={tagReduceName}
-                  onChange={(e) => setTagReduceName(e.target.value)}
-                  disabled={disabled || tagReduceDisabled}
-                  className={[
-                    "h-9 flex-1 rounded-xl border bg-zinc-950 px-3 text-xs font-semibold text-zinc-100 outline-none focus:border-zinc-600",
-                    "border-zinc-800",
-                    "disabled:border-zinc-800/60 disabled:bg-zinc-900/40 disabled:text-zinc-500",
-                  ].join(" ")}
-                >
-                  {tagReduceOptions.length === 0 ? (
-                    <option value="">적용 중인 상태 없음</option>
-                  ) : (
-                    tagReduceOptions.map((entry) => (
-                      <option key={entry.name} value={entry.name}>
-                        {entry.name}
-                      </option>
-                    ))
-                  )}
-                </select>
+                <div className="relative flex-1" ref={tagReduceMenuRef}>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setTagReduceMenuOpen((prev) => !prev)
+                    }
+                    disabled={disabled || tagReduceDisabled}
+                    className={[
+                      "flex h-9 w-full items-center justify-between rounded-xl border bg-zinc-950 px-3 text-xs font-semibold text-zinc-100 outline-none focus:border-zinc-600",
+                      "border-zinc-800",
+                      "disabled:border-zinc-800/60 disabled:bg-zinc-900/40 disabled:text-zinc-500",
+                    ].join(" ")}
+                  >
+                    <span className="truncate">
+                      {tagReduceOptions.length === 0 ? (
+                        "적용 중인 상태 없음"
+                      ) : (
+                        (() => {
+                          const current = tagReduceOptions.find(
+                            (opt) => opt.name === tagReduceName
+                          );
+                          if (!current) return tagReduceName || "-";
+                          if (
+                            tagReduceShowCount &&
+                            typeof current.count === "number"
+                          ) {
+                            return (
+                              <span>
+                                [
+                                <span className="text-sky-300">
+                                  {current.count}
+                                </span>
+                                ] {current.name}
+                              </span>
+                            );
+                          }
+                          return current.name;
+                        })()
+                      )}
+                    </span>
+                    <span className="ml-2 text-zinc-500">▾</span>
+                  </button>
+                  {tagReduceMenuOpen &&
+                    !disabled &&
+                    !tagReduceDisabled &&
+                    tagReduceOptions.length > 0 && (
+                      <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-48 overflow-auto rounded-xl border border-zinc-800 bg-zinc-950 p-1 text-xs text-zinc-100 shadow-2xl">
+                        {tagReduceOptions.map((entry) => {
+                          const active = entry.name === tagReduceName;
+                          return (
+                            <button
+                              key={entry.name}
+                              type="button"
+                              onClick={() => {
+                                setTagReduceName(entry.name);
+                                setTagReduceMenuOpen(false);
+                              }}
+                              className={[
+                                "flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left",
+                                active
+                                  ? "bg-amber-900/40 text-amber-100"
+                                  : "hover:bg-zinc-800/70",
+                              ].join(" ")}
+                            >
+                              {tagReduceShowCount &&
+                              typeof entry.count === "number" ? (
+                                <>
+                                  [
+                                  <span className="text-sky-300">
+                                    {entry.count}
+                                  </span>
+                                  ] {entry.name}
+                                </>
+                              ) : (
+                                entry.name
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                </div>
                 {tagReduceKind ? (
                   <div className="text-xs text-zinc-400">
                     {tagReduceKind === "stack" ? "스택형" : "토글형"}
@@ -607,12 +705,41 @@ export default function ControlPanel(props: {
                   <div className="text-xs text-zinc-500">-</div>
                 )}
               </div>
-              {tagReduceKind === "stack" &&
-                typeof tagReduceStacks === "number" && (
-                  <div className="text-[11px] text-amber-300">
-                    잔여 스택: {tagReduceStacks}
-                  </div>
-                )}
+              {tagReduceEntries.length > 0 && (
+                <div className="text-[11px] text-amber-300">
+                  {tagReduceShowCount ? (
+                    tagReduceKind === "toggle" ? (
+                      <div className="flex flex-wrap gap-1">
+                        {tagReduceEntries.map((entry, idx) => (
+                          <span
+                            key={`${entry.label}-${idx}`}
+                            className="rounded-md border border-amber-500/30 bg-amber-950/30 px-2 py-0.5"
+                          >
+                            {entry.label}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {tagReduceEntries.map((entry, idx) => (
+                          <span
+                            key={`${entry.label}-${idx}`}
+                            className="rounded-md border border-amber-500/30 bg-amber-950/30 px-2 py-0.5"
+                          >
+                            {entry.label}
+                            {typeof entry.stacks === "number"
+                              ? ` (${entry.stacks})`
+                              : ""}
+                          </span>
+                        ))}
+                      </div>
+                    )
+                  ) : tagReduceKind === "stack" &&
+                    typeof tagReduceEntries[0]?.stacks === "number" ? (
+                    <div>잔여 스택: ({tagReduceEntries[0].stacks})</div>
+                  ) : null}
+                </div>
+              )}
             </div>
           )}
 
@@ -640,6 +767,33 @@ export default function ControlPanel(props: {
               >
                 <option value="spend">감소</option>
                 <option value="recover">증가</option>
+              </select>
+            </div>
+          )}
+
+          {mode === "MAX_HP" && (
+            <div className="mt-3 flex items-center gap-2">
+              <select
+                value={maxHpScope}
+                onChange={(e) =>
+                  setMaxHpScope(e.target.value as "both" | "max")
+                }
+                disabled={disabled || !canControlAction}
+                className="h-9 flex-1 rounded-xl border border-zinc-800 bg-zinc-950 px-2 text-xs font-semibold text-zinc-100 outline-none focus:border-zinc-600 disabled:border-zinc-800/60 disabled:bg-zinc-900/40 disabled:text-zinc-500"
+              >
+                <option value="both">현재 체력도</option>
+                <option value="max">최대 체력만</option>
+              </select>
+              <select
+                value={maxHpDelta}
+                onChange={(e) =>
+                  setMaxHpDelta(e.target.value as "inc" | "dec")
+                }
+                disabled={disabled || !canControlAction}
+                className="h-9 w-24 rounded-xl border border-zinc-800 bg-zinc-950 px-2 text-xs font-semibold text-zinc-100 outline-none focus:border-zinc-600 disabled:border-zinc-800/60 disabled:bg-zinc-900/40 disabled:text-zinc-500"
+              >
+                <option value="inc">증가</option>
+                <option value="dec">감소</option>
               </select>
             </div>
           )}

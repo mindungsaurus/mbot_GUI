@@ -5,6 +5,7 @@ import {
   useState,
   useRef,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import {
   authLogin,
@@ -31,6 +32,7 @@ import type {
   TagPreset,
   TagPresetFolder,
   TurnEntry,
+  TurnEndSnapshot,
   TurnGroup,
   Unit,
   UnitPatch,
@@ -74,6 +76,8 @@ type AnsiSegment = {
   color?: number | string;
   bold?: boolean;
 };
+
+type TurnReminderCategory = "slots" | "consumables" | "toggle" | "stack";
 
 function normalizeAnsiMemo(raw: string | null | undefined) {
   let text = String(raw ?? "");
@@ -563,6 +567,10 @@ export default function App() {
   const [amount, setAmount] = useState<number>(5);
   const [panelSlotLevel, setPanelSlotLevel] = useState<number>(1);
   const [panelSlotDelta, setPanelSlotDelta] = useState<"spend" | "recover">("spend");
+  const [panelMaxHpDelta, setPanelMaxHpDelta] = useState<"inc" | "dec">("inc");
+  const [panelMaxHpScope, setPanelMaxHpScope] = useState<"both" | "max">(
+    "both"
+  );
   const [panelIdentifierScheme, setPanelIdentifierScheme] = useState<string>(
     () => IDENTIFIER_SCHEME_OPTIONS[0].id
   );
@@ -649,7 +657,8 @@ export default function App() {
   }, [sideMemoOpen, sideMemoTab]);
   // Status tag grant modal
   const [tagGrantOpen, setTagGrantOpen] = useState(false);
-  const [tagGrantName, setTagGrantName] = useState("");
+  const tagGrantNameRef = useRef("");
+  const tagGrantNameInputRef = useRef<HTMLInputElement | null>(null);
   const [tagGrantType, setTagGrantType] = useState<"toggle" | "stack">(
     "toggle"
   );
@@ -681,6 +690,38 @@ export default function App() {
       after?: string;
     }>;
   } | null>(null);
+  const [maxHpNotice, setMaxHpNotice] = useState<{
+    amount: number;
+    delta: "inc" | "dec";
+    rows: Array<{
+      label: string;
+      status: "missing" | "applied" | "unchanged";
+      before?: number;
+      after?: number;
+      beforeCur?: number;
+      afterCur?: number;
+    }>;
+  } | null>(null);
+  const [tagReduceNotice, setTagReduceNotice] = useState<{
+    name: string;
+    kind: "toggle" | "stack";
+    rows: Array<{
+      label: string;
+      status: "missing" | "applied";
+      before?: number;
+      after?: number;
+    }>;
+  } | null>(null);
+  const [turnReminderNotice, setTurnReminderNotice] = useState<{
+    header: ReactNode;
+    isGroup: boolean;
+    items: Array<{
+      label: ReactNode;
+      category: TurnReminderCategory;
+      before: ReactNode;
+    }>;
+  } | null>(null);
+  const [pendingNextTurn, setPendingNextTurn] = useState(false);
 
   const units: Unit[] = useMemo(() => state?.units ?? [], [state]);
   const markers: Marker[] = useMemo(() => state?.markers ?? [], [state]);
@@ -740,39 +781,105 @@ export default function App() {
   const panelConsumableDisabled =
     !selectedId || panelConsumableOptions.length === 0;
 
-  const panelTagReduceOptions = useMemo(() => {
-    const out = new Map<
+  const panelTagReduceTargets = useMemo(
+    () => (selectedIds.length ? selectedIds : selectedId ? [selectedId] : []),
+    [selectedIds, selectedId]
+  );
+  const panelTagReduceDetailMap = useMemo(() => {
+    const map = new Map<
       string,
-      { name: string; kind: "toggle" | "stack"; stacks?: number }
+      {
+        name: string;
+        kind: "toggle" | "stack";
+        count: number;
+        holders: Array<{ label: string; stacks?: number }>;
+        unitIds: Set<string>;
+      }
     >();
-    const tags = Array.isArray(selected?.tags) ? selected?.tags : [];
-    for (const raw of tags) {
-      const name = String(raw ?? "").trim();
-      if (!name) continue;
-      if (!out.has(name)) out.set(name, { name, kind: "toggle" });
-    }
-    const tagStates = selected?.tagStates ?? {};
-    for (const [nameRaw, st] of Object.entries(tagStates)) {
-      const name = String(nameRaw ?? "").trim();
-      if (!name) continue;
-      const stacks = Math.max(
-        0,
-        Math.trunc(Number((st as any)?.stacks ?? 0))
-      );
-      if (Number.isFinite(stacks)) {
-        out.set(name, { name, kind: "stack", stacks });
+    const targetSet = new Set(panelTagReduceTargets);
+    for (const unit of units) {
+      if (!targetSet.has(unit.id)) continue;
+      const label = unit.alias ? unit.alias : unit.name;
+      const tagStates = unit.tagStates ?? {};
+      const stackNames = new Set(Object.keys(tagStates));
+
+      for (const [rawName, st] of Object.entries(tagStates)) {
+        const name = String(rawName ?? "").trim();
+        if (!name) continue;
+        const stacks = Math.max(
+          0,
+          Math.trunc(Number((st as any)?.stacks ?? 0))
+        );
+        if (!Number.isFinite(stacks)) continue;
+        const entry =
+          map.get(name) ??
+          {
+            name,
+            kind: "stack",
+            count: 0,
+            holders: [],
+            unitIds: new Set<string>(),
+          };
+        entry.kind = "stack";
+        if (!entry.unitIds.has(unit.id)) {
+          entry.unitIds.add(unit.id);
+          entry.count += 1;
+          entry.holders.push({ label, stacks });
+        }
+        map.set(name, entry);
+      }
+
+      const tags = Array.isArray(unit.tags) ? unit.tags : [];
+      for (const raw of tags) {
+        const name = String(raw ?? "").trim();
+        if (!name) continue;
+        if (stackNames.has(name)) continue;
+        const entry =
+          map.get(name) ??
+          {
+            name,
+            kind: "toggle",
+            count: 0,
+            holders: [],
+            unitIds: new Set<string>(),
+          };
+        if (entry.kind !== "stack") entry.kind = "toggle";
+        if (!entry.unitIds.has(unit.id)) {
+          entry.unitIds.add(unit.id);
+          entry.count += 1;
+          entry.holders.push({ label });
+        }
+        map.set(name, entry);
       }
     }
-    return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
-  }, [selected?.tags, selected?.tagStates]);
+    return map;
+  }, [panelTagReduceTargets, units]);
+  const panelTagReduceOptions = useMemo(() => {
+    return [...panelTagReduceDetailMap.values()]
+      .map((entry) => ({
+        name: entry.name,
+        kind: entry.kind,
+        count: entry.count,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [panelTagReduceDetailMap]);
   const panelTagReduceDisabled =
-    !selectedId || panelTagReduceOptions.length === 0;
+    panelTagReduceTargets.length === 0 || panelTagReduceOptions.length === 0;
   const panelTagReduceSelected = useMemo(
     () =>
       panelTagReduceOptions.find((opt) => opt.name === panelTagReduceName) ??
       null,
     [panelTagReduceOptions, panelTagReduceName]
   );
+  const panelTagReduceDetails = useMemo(() => {
+    if (!panelTagReduceName) return null;
+    const entry = panelTagReduceDetailMap.get(panelTagReduceName);
+    if (!entry) return null;
+    return {
+      kind: entry.kind,
+      holders: entry.holders,
+    };
+  }, [panelTagReduceDetailMap, panelTagReduceName]);
 
   useEffect(() => {
     if (!selectedId || panelConsumableOptions.length === 0) {
@@ -786,7 +893,7 @@ export default function App() {
   }, [selectedId, panelConsumableOptions, panelConsumableName]);
 
   useEffect(() => {
-    if (!selectedId || panelTagReduceOptions.length === 0) {
+    if (panelTagReduceTargets.length === 0 || panelTagReduceOptions.length === 0) {
       if (panelTagReduceName !== "") setPanelTagReduceName("");
       return;
     }
@@ -794,7 +901,7 @@ export default function App() {
       (entry) => entry.name === panelTagReduceName
     );
     if (!exists) setPanelTagReduceName(panelTagReduceOptions[0].name);
-  }, [selectedId, panelTagReduceOptions, panelTagReduceName]);
+  }, [panelTagReduceTargets, panelTagReduceOptions, panelTagReduceName]);
 
   const canControlMove = selectedIds.length > 0 || !!selectedId;
   const tagGrantTargetCount = selectedIds.length
@@ -1127,7 +1234,7 @@ export default function App() {
   async function run(action: any) {
     if (!encounterId) {
       setErr("선택된 전투 세션이 없습니다.");
-      return;
+      return null;
     }
     try {
       setErr(null);
@@ -1143,8 +1250,10 @@ export default function App() {
         const exists = (next?.units ?? []).some((u) => u.id === selectedId);
         if (!exists) setSelectedId(firstId);
       }
+      return next;
     } catch (e: any) {
       setErr(String(e?.message ?? e));
+      return null;
     } finally {
       setBusy(false);
     }
@@ -1404,7 +1513,10 @@ export default function App() {
 
   useEffect(() => {
     if (!tagGrantOpen) {
-      setTagGrantName("");
+      tagGrantNameRef.current = "";
+      if (tagGrantNameInputRef.current) {
+        tagGrantNameInputRef.current.value = "";
+      }
       setTagGrantType("toggle");
       setTagGrantStacks(1);
       setTagGrantDecStart(false);
@@ -1576,6 +1688,157 @@ export default function App() {
     );
   }
 
+  function formatConsumablesSummary(consumables?: Record<string, number>) {
+    const entries = Object.entries(consumables ?? {}).filter(
+      ([, value]) => typeof value === "number"
+    );
+    if (entries.length === 0) return "없음";
+    return entries
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([name, value]) => `${name} ${value}`)
+      .join(", ");
+  }
+
+  function extractManualTagSummary(unit: Unit | null) {
+    const tagStates = unit?.tagStates ?? {};
+    const stackNames = new Set(Object.keys(tagStates));
+    const toggleTags = (unit?.tags ?? [])
+      .map((raw) => String(raw ?? "").trim())
+      .filter((name) => name && !stackNames.has(name));
+
+    const manualStacks = Object.entries(tagStates)
+      .map(([name, st]) => {
+        const stacks = Math.max(
+          0,
+          Math.trunc(Number((st as any)?.stacks ?? 0))
+        );
+        return {
+          name: String(name ?? "").trim(),
+          stacks,
+          decStart: !!(st as any)?.decOnTurnStart,
+          decEnd: !!(st as any)?.decOnTurnEnd,
+        };
+      })
+      .filter(
+        (entry) =>
+          entry.name &&
+          Number.isFinite(entry.stacks) &&
+          !entry.decStart &&
+          !entry.decEnd
+      )
+      .map((entry) => ({ name: entry.name, stacks: entry.stacks }));
+
+    return {
+      toggleTags: toggleTags.sort((a, b) => a.localeCompare(b)),
+      manualStacks: manualStacks.sort((a, b) => a.name.localeCompare(b.name)),
+    };
+  }
+
+  function collectTurnReminderItemsFromSummary(
+    prevSummary: TurnEndSnapshot,
+    unit: Unit
+  ): Array<{ category: TurnReminderCategory; before: ReactNode }> {
+    const items: Array<{
+      category: TurnReminderCategory;
+      before: ReactNode;
+    }> = [];
+
+    if (prevSummary.spellSlots) {
+      const afterSummary = formatSpellSlotsSummary(unit.spellSlots ?? {});
+      if (prevSummary.spellSlots === afterSummary) {
+        items.push({
+          category: "slots",
+          before: renderSlotSummary(prevSummary.spellSlots),
+        });
+      }
+    }
+
+    if (prevSummary.consumables) {
+      const afterSummary = formatConsumablesSummary(unit.consumables);
+      if (prevSummary.consumables === afterSummary) {
+        items.push({
+          category: "consumables",
+          before: prevSummary.consumables,
+        });
+      }
+    }
+
+    if (prevSummary.toggleTags !== undefined) {
+      const afterTags = extractManualTagSummary(unit).toggleTags.join(", ");
+      if (prevSummary.toggleTags === afterTags) {
+        items.push({
+          category: "toggle",
+          before: prevSummary.toggleTags || "없음",
+        });
+      }
+    }
+
+    if (prevSummary.manualStacks !== undefined) {
+      const afterTags = extractManualTagSummary(unit)
+        .manualStacks.map((entry) => `${entry.name} x${entry.stacks}`)
+        .join(", ");
+      if (prevSummary.manualStacks === afterTags) {
+        items.push({
+          category: "stack",
+          before: prevSummary.manualStacks || "없음",
+        });
+      }
+    }
+
+    return items;
+  }
+
+  function getUnitsForTurnEntry(
+    source: EncounterState,
+    entry: TurnEntry | null | undefined
+  ): Unit[] {
+    if (!entry) return [];
+    if (entry.kind === "unit") {
+      const unit = source.units.find((u) => u.id === entry.unitId) ?? null;
+      return unit ? [unit] : [];
+    }
+    if (entry.kind === "group") {
+      const group =
+        source.turnGroups?.find((g) => g.id === entry.groupId) ?? null;
+      if (!group) return [];
+      return group.unitIds
+        .map((id) => source.units.find((u) => u.id === id) ?? null)
+        .filter((unit): unit is Unit => !!unit);
+    }
+    return [];
+  }
+
+  function renderUnitLabel(unit: Unit) {
+    const label = unit.alias ? `${unit.name} (${unit.alias})` : unit.name;
+    const color = ansiColorCodeToCss(unit.colorCode ?? undefined);
+    return (
+      <span style={color ? { color } : undefined} className="font-semibold">
+        {label}
+      </span>
+    );
+  }
+
+  function categoryLabel(category: TurnReminderCategory) {
+    switch (category) {
+      case "slots":
+        return "주문 슬롯";
+      case "consumables":
+        return "고유 소모값";
+      case "toggle":
+        return "토글형 태그";
+      case "stack":
+        return "수동 스택 태그";
+      default:
+        return "상태";
+    }
+  }
+
+  function categoryColorClass(category: TurnReminderCategory) {
+    if (category === "slots") return "text-sky-300";
+    if (category === "consumables") return "text-amber-300";
+    return "text-purple-300";
+  }
+
   async function applySpellSlotDelta(
     kind: "spend" | "recover",
     level: number,
@@ -1648,9 +1911,99 @@ export default function App() {
     setSlotUseNotice({ level: safeLevel, kind, rows: results });
   }
 
+  async function applyMaxHpDelta(
+    delta: "inc" | "dec",
+    count: number,
+    scope: "both" | "max"
+  ) {
+    const safeCount = Number.isFinite(count)
+      ? Math.max(1, Math.trunc(count))
+      : 1;
+    const targets = selectedIds.length
+      ? selectedIds
+      : selectedId
+        ? [selectedId]
+        : [];
+    if (targets.length === 0) return;
+
+    const results: Array<{
+      label: string;
+      status: "missing" | "applied" | "unchanged";
+      before?: number;
+      after?: number;
+      beforeCur?: number;
+      afterCur?: number;
+    }> = [];
+    const actions: any[] = [];
+
+    for (const unitId of targets) {
+      const unit = units.find((u) => u.id === unitId);
+      if (!unit) continue;
+      const label = unit.alias ? `${unit.name} (${unit.alias})` : unit.name;
+      const curMax = unit.hp?.max;
+      const curCur = unit.hp?.cur;
+      if (typeof curMax !== "number") {
+        results.push({ label, status: "missing" });
+        continue;
+      }
+
+      const deltaValue = delta === "inc" ? safeCount : -safeCount;
+      const nextMax = Math.max(0, curMax + deltaValue);
+
+      let nextCur = curCur;
+      if (typeof curCur === "number") {
+        if (scope === "both") {
+          nextCur = Math.max(0, Math.min(nextMax, curCur + deltaValue));
+        } else {
+          nextCur = Math.min(curCur, nextMax);
+        }
+      }
+
+      const maxChanged = nextMax !== curMax;
+      const curChanged =
+        typeof curCur === "number" && typeof nextCur === "number"
+          ? nextCur !== curCur
+          : false;
+
+      if (!maxChanged && !curChanged) {
+        results.push({
+          label,
+          status: "unchanged",
+          before: curMax,
+          after: nextMax,
+          beforeCur: curCur,
+          afterCur: nextCur,
+        });
+        continue;
+      }
+
+      actions.push({
+        type: "EDIT_MAX_HP",
+        unitId,
+        delta: deltaValue,
+        applyToCur: scope === "both",
+      });
+
+      results.push({
+        label,
+        status: "applied",
+        before: curMax,
+        after: nextMax,
+        beforeCur: curCur,
+        afterCur: nextCur,
+      });
+    }
+
+    if (actions.length > 0) await run(actions);
+    setMaxHpNotice({ amount: safeCount, delta, rows: results });
+  }
+
   function openTagGrantModal() {
     setTagGrantErr(null);
     setTagGrantOpen(true);
+    if (tagGrantNameInputRef.current) {
+      tagGrantNameInputRef.current.value = tagGrantNameRef.current;
+    }
   }
 
   function closeTagGrantModal() {
@@ -1667,7 +2020,11 @@ export default function App() {
       return;
     }
     setTagGrantErr(null);
-    setTagGrantName(preset.name ?? "");
+    const nextName = preset.name ?? "";
+    tagGrantNameRef.current = nextName;
+    if (tagGrantNameInputRef.current) {
+      tagGrantNameInputRef.current.value = nextName;
+    }
     setTagGrantType(preset.kind === "stack" ? "stack" : "toggle");
     setTagGrantStacks(1);
     setTagGrantDecStart(!!preset.decOnTurnStart);
@@ -1676,7 +2033,7 @@ export default function App() {
 
   async function applyStatusTagGrant() {
     if (busy) return;
-    const name = normalizeTagName(tagGrantName);
+    const name = normalizeTagName(tagGrantNameRef.current);
     if (!name) {
       setTagGrantErr("태그 이름을 입력해줘.");
       return;
@@ -1772,8 +2129,85 @@ export default function App() {
     run(actions);
   }
 
+  async function confirmNextTurn() {
+    setPendingNextTurn(false);
+    setTurnReminderNotice(null);
+    await run({ type: "NEXT_TURN" });
+  }
+
   async function applyPanelAction(mode: ControlActionMode) {
     if (mode === "NEXT_TURN") {
+      if (pendingNextTurn) return;
+      const currentState = state;
+      if (!currentState) return;
+
+      const currentEntry =
+        currentState.turnOrder?.[currentState.turnIndex ?? 0] ?? null;
+      const turnUnits = getUnitsForTurnEntry(currentState, currentEntry);
+
+      const items: Array<{
+        label: ReactNode;
+        category: TurnReminderCategory;
+        before: ReactNode;
+      }> = [];
+      const entryIsGroup = currentEntry?.kind === "group";
+
+      const snapshotMap = currentState.turnEndSnapshots ?? {};
+      for (const unit of turnUnits) {
+        const prevSummary = snapshotMap[unit.id];
+        if (!prevSummary) continue;
+        const unitLabel = renderUnitLabel(unit);
+        const unitItems = collectTurnReminderItemsFromSummary(
+          prevSummary,
+          unit
+        );
+        for (const item of unitItems) {
+          items.push({
+            category: item.category,
+            before: item.before,
+            label: entryIsGroup ? (
+              <span className="flex flex-wrap items-center gap-1">
+                {unitLabel}
+                <span className="text-zinc-500">·</span>
+                <span className={categoryColorClass(item.category)}>
+                  {categoryLabel(item.category)}
+                </span>
+              </span>
+            ) : (
+              <span className={categoryColorClass(item.category)}>
+                {categoryLabel(item.category)}
+              </span>
+            ),
+          });
+        }
+      }
+
+      if (items.length > 0) {
+        let headerNode: ReactNode = "턴";
+        if (currentEntry?.kind === "unit") {
+          const unit =
+            currentState.units.find((u) => u.id === currentEntry.unitId) ?? null;
+          if (unit) {
+            headerNode = renderUnitLabel(unit);
+          }
+        } else if (currentEntry?.kind === "group") {
+          const group =
+            currentState.turnGroups?.find(
+              (g) => g.id === currentEntry.groupId
+            ) ?? null;
+          const name = group?.name ? group.name : "그룹";
+          const color = ansiColorCodeToCss(turnUnits[0]?.colorCode ?? undefined);
+          headerNode = (
+            <span style={color ? { color } : undefined} className="font-semibold">
+              {name}
+            </span>
+          );
+        }
+        setTurnReminderNotice({ header: headerNode, items, isGroup: entryIsGroup });
+        setPendingNextTurn(true);
+        return;
+      }
+
       await run({ type: "NEXT_TURN" });
       return;
     }
@@ -1784,34 +2218,79 @@ export default function App() {
     }
 
     if (mode === "REMOVE_TAG") {
-      const unitId = selectedId;
-      if (!unitId) return;
+      const targets = panelTagReduceTargets;
+      if (targets.length === 0) return;
       const entry = panelTagReduceSelected;
       if (!entry) return;
-      if (entry.kind === "toggle") {
-        await run({
+      const deltaRaw = Math.max(1, Math.trunc(Number(amount)));
+      const safeDelta = Number.isFinite(deltaRaw) ? deltaRaw : 1;
+
+      const results: Array<{
+        label: string;
+        status: "missing" | "applied";
+        before?: number;
+        after?: number;
+      }> = [];
+      const actions: any[] = [];
+
+      for (const unitId of targets) {
+        const unit = units.find((u) => u.id === unitId);
+        if (!unit) continue;
+        const label = unit.alias ? `${unit.name} (${unit.alias})` : unit.name;
+        const hasToggle = Array.isArray(unit.tags)
+          ? unit.tags.includes(entry.name)
+          : false;
+        const stackState = unit.tagStates?.[entry.name];
+        const stacks =
+          typeof (stackState as any)?.stacks === "number"
+            ? Math.max(0, Math.trunc(Number((stackState as any).stacks)))
+            : null;
+
+        if (entry.kind === "toggle") {
+          if (!hasToggle) {
+            results.push({ label, status: "missing" });
+            continue;
+          }
+          actions.push({
+            type: "PATCH_UNIT",
+            unitId,
+            patch: {
+              tags: { remove: [entry.name] },
+              tagStates: { [entry.name]: null },
+            },
+          });
+          results.push({ label, status: "applied" });
+          continue;
+        }
+
+        if (stacks === null) {
+          results.push({ label, status: "missing" });
+          continue;
+        }
+        const delta = Math.max(1, safeDelta);
+        const appliedDelta = Math.min(delta, stacks);
+        const after = Math.max(0, stacks - appliedDelta);
+        actions.push({
           type: "PATCH_UNIT",
           unitId,
           patch: {
             tags: { remove: [entry.name] },
-            tagStates: { [entry.name]: null },
+            tagStates: { [entry.name]: { stacks: { delta: -appliedDelta } } },
           },
         });
-        return;
+        results.push({
+          label,
+          status: "applied",
+          before: stacks,
+          after,
+        });
       }
-      const deltaRaw = Math.max(1, Math.trunc(Number(amount)));
-      if (!Number.isFinite(deltaRaw) || deltaRaw <= 0) return;
-      const delta =
-        typeof entry.stacks === "number"
-          ? Math.min(deltaRaw, entry.stacks)
-          : deltaRaw;
-      await run({
-        type: "PATCH_UNIT",
-        unitId,
-        patch: {
-          tags: { remove: [entry.name] },
-          tagStates: { [entry.name]: { stacks: { delta: -delta } } },
-        },
+
+      if (actions.length > 0) await run(actions);
+      setTagReduceNotice({
+        name: entry.name,
+        kind: entry.kind,
+        rows: results,
       });
       return;
     }
@@ -1883,6 +2362,11 @@ export default function App() {
         unitId,
         patch: { consumables: { [name]: nextValue } },
       });
+      return;
+    }
+
+    if (mode === "MAX_HP") {
+      await applyMaxHpDelta(panelMaxHpDelta, amount, panelMaxHpScope);
       return;
     }
 
@@ -3073,8 +3557,11 @@ export default function App() {
                     태그 이름
                   </label>
                   <input
-                    value={tagGrantName}
-                    onChange={(e) => setTagGrantName(e.target.value)}
+                    ref={tagGrantNameInputRef}
+                    defaultValue={tagGrantNameRef.current}
+                    onChange={(e) => {
+                      tagGrantNameRef.current = e.target.value;
+                    }}
                     disabled={busy}
                     className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-zinc-600"
                     placeholder="예: 중독"
@@ -3388,6 +3875,222 @@ export default function App() {
                   className="rounded-lg bg-amber-700 px-3 py-2 text-xs text-white hover:bg-amber-600"
                 >
                   OK
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {maxHpNotice && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Max HP result modal"
+          >
+            <div className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
+
+            <div className="relative z-10 w-[min(640px,92vw)] rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-base font-semibold text-zinc-100">
+                    최대 체력{" "}
+                    {maxHpNotice.delta === "inc" ? "증가" : "감소"} 결과
+                  </div>
+                </div>
+              </div>
+
+              <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1 text-sm text-zinc-200">
+                {maxHpNotice.rows.map((row, idx) => (
+                  <div
+                    key={`${row.label}-${idx}`}
+                    className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2"
+                  >
+                    <div className="text-sm font-semibold text-zinc-100">
+                      {row.label}
+                    </div>
+                    {row.status === "missing" && (
+                      <div className="text-xs text-amber-200">
+                        최대 체력 정보가 없습니다.
+                      </div>
+                    )}
+                    {row.status === "unchanged" && (
+                      <div className="text-xs text-zinc-400">변경 없음.</div>
+                    )}
+                    {row.status === "applied" && (
+                      <div className="text-xs text-emerald-200">
+                        정상 적용됨.{" "}
+                        <span className="ml-1 text-zinc-400">
+                          {row.before ?? "-"}
+                        </span>
+                        <span className="mx-1 text-zinc-500">→</span>
+                        <span className="text-zinc-400">
+                          {row.after ?? "-"}
+                        </span>
+                        {typeof row.beforeCur === "number" &&
+                          typeof row.afterCur === "number" && (
+                            <span className="ml-2 text-zinc-500">
+                              (현재 {row.beforeCur}→{row.afterCur})
+                            </span>
+                          )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setMaxHpNotice(null)}
+                  className="rounded-lg bg-amber-700 px-3 py-2 text-xs text-white hover:bg-amber-600"
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tagReduceNotice && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Tag reduce result modal"
+          >
+            <div className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
+
+            <div className="relative z-10 w-[min(640px,92vw)] rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-base font-semibold text-zinc-100">
+                    상태 감소 결과 - {tagReduceNotice.name}
+                  </div>
+                </div>
+              </div>
+
+              <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1 text-sm text-zinc-200">
+                {tagReduceNotice.rows.map((row, idx) => (
+                  <div
+                    key={`${row.label}-${idx}`}
+                    className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2"
+                  >
+                    <div className="text-sm font-semibold text-zinc-100">
+                      {row.label}
+                    </div>
+                    {row.status === "missing" && (
+                      <div className="text-xs text-amber-200">
+                        해당 상태 없음.
+                      </div>
+                    )}
+                    {row.status === "applied" && (
+                      <div className="text-xs text-emerald-200">
+                        {tagReduceNotice.kind === "toggle" ? (
+                          "제거됨."
+                        ) : (
+                          <>
+                            스택{" "}
+                            <span className="text-zinc-400">
+                              {row.before ?? "-"}
+                            </span>
+                            <span className="mx-1 text-zinc-500">→</span>
+                            <span className="text-zinc-400">
+                              {row.after ?? "-"}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setTagReduceNotice(null)}
+                  className="rounded-lg bg-amber-700 px-3 py-2 text-xs text-white hover:bg-amber-600"
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {turnReminderNotice && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Turn reminder modal"
+          >
+            <div
+              className="absolute inset-0 bg-black/35"
+              onClick={() => {
+                setTurnReminderNotice(null);
+                setPendingNextTurn(false);
+              }}
+            />
+
+            <div className="relative z-10 w-[min(700px,92vw)] rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-base font-semibold text-red-500">
+                    의도한 부분이 맞나요? 변경되지 않은 부분이 있습니다.
+                  </div>
+                  <div className="mt-1 text-sm text-zinc-200">
+                    {turnReminderNotice.header}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTurnReminderNotice(null);
+                    setPendingNextTurn(false);
+                  }}
+                  className="rounded-md border border-zinc-800 px-2 py-1 text-[10px] text-zinc-300 hover:bg-zinc-800/60"
+                >
+                  닫기
+                </button>
+              </div>
+
+              <div className="max-h-[50vh] space-y-3 overflow-y-auto pr-1 text-sm text-zinc-200">
+                {turnReminderNotice.items.map((item, idx) => (
+                  <div
+                    key={`turn-reminder-${idx}`}
+                    className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2"
+                  >
+                  <div className="text-sm font-semibold">
+                    {item.label}
+                  </div>
+                    <div className="mt-1 text-xs text-zinc-400">
+                      이전 턴의 종료 시점에{" "}
+                      <span
+                        className={
+                          item.category === "slots"
+                            ? "text-sky-300"
+                            : item.category === "consumables"
+                              ? "text-amber-300"
+                              : "text-purple-300"
+                        }
+                      >
+                        {item.before}
+                      </span>{" "}
+                      이었습니다.
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4">
+                <button
+                  type="button"
+                  onClick={confirmNextTurn}
+                  className="w-full rounded-lg bg-amber-700 px-3 py-2 text-sm text-white hover:bg-amber-600"
+                >
+                  네, 의도한 것이 맞습니다
                 </button>
               </div>
             </div>
@@ -3795,6 +4498,10 @@ export default function App() {
           setSlotLevel={setPanelSlotLevel}
           slotDelta={panelSlotDelta}
           setSlotDelta={setPanelSlotDelta}
+          maxHpDelta={panelMaxHpDelta}
+          setMaxHpDelta={setPanelMaxHpDelta}
+          maxHpScope={panelMaxHpScope}
+          setMaxHpScope={setPanelMaxHpScope}
           identifierOptions={[...IDENTIFIER_SCHEME_OPTIONS]}
           identifierScheme={panelIdentifierScheme}
           setIdentifierScheme={setPanelIdentifierScheme}
@@ -3806,10 +4513,11 @@ export default function App() {
           consumableRemaining={panelConsumableRemaining}
           consumableDisabled={panelConsumableDisabled}
           tagReduceOptions={panelTagReduceOptions}
+          tagReduceShowCount={panelTagReduceTargets.length > 1}
           tagReduceName={panelTagReduceName}
           setTagReduceName={setPanelTagReduceName}
           tagReduceKind={panelTagReduceSelected?.kind ?? null}
-          tagReduceStacks={panelTagReduceSelected?.stacks ?? null}
+          tagReduceEntries={panelTagReduceDetails?.holders ?? []}
           tagReduceDisabled={panelTagReduceDisabled}
         />
       </div>
