@@ -14,6 +14,7 @@ import {
   authClaimAdmin,
   authRegister,
   createEncounter,
+  deleteEncounter,
   fetchState,
   listEncounters,
   listTagPresets,
@@ -702,6 +703,16 @@ export default function App() {
       afterCur?: number;
     }>;
   } | null>(null);
+  const [consumableNotice, setConsumableNotice] = useState<{
+    name: string;
+    delta: "dec" | "inc";
+    rows: Array<{
+      label: string;
+      status: "missing" | "applied" | "unchanged";
+      before?: number;
+      after?: number;
+    }>;
+  } | null>(null);
   const [tagReduceNotice, setTagReduceNotice] = useState<{
     name: string;
     kind: "toggle" | "stack";
@@ -719,6 +730,7 @@ export default function App() {
       label: ReactNode;
       category: TurnReminderCategory;
       before: ReactNode;
+      source: "prev" | "start";
     }>;
   } | null>(null);
   const [pendingNextTurn, setPendingNextTurn] = useState(false);
@@ -764,22 +776,61 @@ export default function App() {
     "dec"
   );
   const [panelTagReduceName, setPanelTagReduceName] = useState("");
+  const panelConsumableTargets = useMemo(
+    () => (selectedIds.length ? selectedIds : selectedId ? [selectedId] : []),
+    [selectedIds, selectedId]
+  );
+  const panelConsumableDetailMap = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        name: string;
+        count: number;
+        holders: Array<{ label: string; remaining?: number }>;
+        unitIds: Set<string>;
+      }
+    >();
+    const targetSet = new Set(panelConsumableTargets);
+    for (const unit of units) {
+      if (!targetSet.has(unit.id)) continue;
+      const label = unit.alias ? unit.alias : unit.name;
+      for (const [rawName, rawValue] of Object.entries(unit.consumables ?? {})) {
+        const name = String(rawName ?? "").trim();
+        if (!name) continue;
+        if (typeof rawValue !== "number" || !Number.isFinite(rawValue)) continue;
+        const entry =
+          map.get(name) ??
+          {
+            name,
+            count: 0,
+            holders: [],
+            unitIds: new Set<string>(),
+          };
+        if (!entry.unitIds.has(unit.id)) {
+          entry.unitIds.add(unit.id);
+          entry.count += 1;
+          entry.holders.push({ label, remaining: rawValue });
+        }
+        map.set(name, entry);
+      }
+    }
+    return map;
+  }, [panelConsumableTargets, units]);
   const panelConsumableOptions = useMemo(() => {
-    const entries = Object.entries(selected?.consumables ?? {}).filter(
-      ([, value]) => typeof value === "number"
-    );
-    return entries.map(([name, value]) => ({
-      name,
-      value: value ?? 0,
-    }));
-  }, [selected?.consumables]);
-  const panelConsumableRemaining = useMemo(() => {
-    if (!panelConsumableName) return null;
-    const value = selected?.consumables?.[panelConsumableName];
-    return typeof value === "number" ? value : null;
-  }, [panelConsumableName, selected?.consumables]);
+    return [...panelConsumableDetailMap.values()]
+      .sort((a, b) => a.name.localeCompare(b.name, "ko"))
+      .map((entry) => ({
+        name: entry.name,
+        count: entry.count,
+      }));
+  }, [panelConsumableDetailMap]);
+  const panelConsumableEntries = useMemo(() => {
+    if (!panelConsumableName) return [];
+    const entry = panelConsumableDetailMap.get(panelConsumableName);
+    return entry?.holders ?? [];
+  }, [panelConsumableDetailMap, panelConsumableName]);
   const panelConsumableDisabled =
-    !selectedId || panelConsumableOptions.length === 0;
+    panelConsumableTargets.length === 0 || panelConsumableOptions.length === 0;
 
   const panelTagReduceTargets = useMemo(
     () => (selectedIds.length ? selectedIds : selectedId ? [selectedId] : []),
@@ -882,7 +933,7 @@ export default function App() {
   }, [panelTagReduceDetailMap, panelTagReduceName]);
 
   useEffect(() => {
-    if (!selectedId || panelConsumableOptions.length === 0) {
+    if (panelConsumableTargets.length === 0 || panelConsumableOptions.length === 0) {
       if (panelConsumableName !== "") setPanelConsumableName("");
       return;
     }
@@ -890,7 +941,7 @@ export default function App() {
       (entry) => entry.name === panelConsumableName
     );
     if (!exists) setPanelConsumableName(panelConsumableOptions[0].name);
-  }, [selectedId, panelConsumableOptions, panelConsumableName]);
+  }, [panelConsumableTargets, panelConsumableOptions, panelConsumableName]);
 
   useEffect(() => {
     if (panelTagReduceTargets.length === 0 || panelTagReduceOptions.length === 0) {
@@ -916,6 +967,7 @@ export default function App() {
     !settingsOpen &&
     !reorderOpen &&
     !slotUseNotice &&
+    !consumableNotice &&
     !registerOpen &&
     !sideMemoOpen &&
     !editUnitId &&
@@ -1047,6 +1099,7 @@ export default function App() {
     setTagGrantOpen(false);
     setMarkerCreateOpen(false);
     setSlotUseNotice(null);
+    setConsumableNotice(null);
   }, [sessionSelected]);
 
   function isEditableTarget(target: EventTarget | null) {
@@ -1091,7 +1144,8 @@ export default function App() {
         tagGrantOpen ||
         settingsOpen ||
         reorderOpen ||
-        slotUseNotice
+        slotUseNotice ||
+        consumableNotice
       )
         return;
       if (isEditableTarget(e.target)) return;
@@ -1139,6 +1193,7 @@ export default function App() {
     settingsOpen,
     reorderOpen,
     slotUseNotice,
+    consumableNotice,
     selectedIds,
     selectedId,
   ]);
@@ -1688,6 +1743,29 @@ export default function App() {
     );
   }
 
+  async function handleDeleteEncounter(enc: EncounterSummary) {
+    if (busy) return;
+    const displayName = enc.name || enc.id;
+    const confirmed = window.confirm(
+      `세션 \"${displayName}\"을(를) 삭제할까요?`,
+    );
+    if (!confirmed) return;
+    try {
+      setErr(null);
+      setBusy(true);
+      await deleteEncounter(enc.id);
+      if (encounterId === enc.id) {
+        setEncounterId("");
+        setState(null);
+      }
+      await loadEncounters(encounterId === enc.id ? undefined : encounterId);
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function formatConsumablesSummary(consumables?: Record<string, number>) {
     const entries = Object.entries(consumables ?? {}).filter(
       ([, value]) => typeof value === "number"
@@ -1735,52 +1813,110 @@ export default function App() {
   }
 
   function collectTurnReminderItemsFromSummary(
-    prevSummary: TurnEndSnapshot,
+    prevSummary: TurnEndSnapshot | null | undefined,
+    startSummary: TurnEndSnapshot | null | undefined,
     unit: Unit
-  ): Array<{ category: TurnReminderCategory; before: ReactNode }> {
+  ): Array<{ category: TurnReminderCategory; before: ReactNode; source: "prev" | "start" }> {
     const items: Array<{
       category: TurnReminderCategory;
       before: ReactNode;
+      source: "prev" | "start";
     }> = [];
 
-    if (prevSummary.spellSlots) {
-      const afterSummary = formatSpellSlotsSummary(unit.spellSlots ?? {});
-      if (prevSummary.spellSlots === afterSummary) {
+    const tagSummary = extractManualTagSummary(unit);
+    const currentSlots = formatSpellSlotsSummary(unit.spellSlots ?? {});
+    const currentConsumables = formatConsumablesSummary(unit.consumables);
+    const currentToggle = tagSummary.toggleTags.join(", ");
+    const currentStacks = tagSummary.manualStacks
+      .map((entry) => `${entry.name} x${entry.stacks}`)
+      .join(", ");
+
+    const shouldWarn = (
+      prevValue: string | undefined,
+      startValue: string | undefined,
+      currentValue: string
+    ): "prev" | "start" | null => {
+      if (prevValue !== undefined) {
+        if (prevValue === currentValue) return "prev";
+        if (startValue !== undefined && startValue === currentValue) return "start";
+        return null;
+      }
+      if (startValue !== undefined && startValue === currentValue) return "start";
+      return null;
+    };
+
+    if (prevSummary?.spellSlots !== undefined || startSummary?.spellSlots !== undefined) {
+      const source = shouldWarn(
+        prevSummary?.spellSlots,
+        startSummary?.spellSlots,
+        currentSlots,
+      );
+      if (source) {
+        const before =
+          source === "prev"
+            ? prevSummary?.spellSlots ?? ""
+            : startSummary?.spellSlots ?? "";
         items.push({
           category: "slots",
-          before: renderSlotSummary(prevSummary.spellSlots),
+          before: renderSlotSummary(before),
+          source,
         });
       }
     }
 
-    if (prevSummary.consumables) {
-      const afterSummary = formatConsumablesSummary(unit.consumables);
-      if (prevSummary.consumables === afterSummary) {
+    if (prevSummary?.consumables !== undefined || startSummary?.consumables !== undefined) {
+      const source = shouldWarn(
+        prevSummary?.consumables,
+        startSummary?.consumables,
+        currentConsumables,
+      );
+      if (source) {
+        const before =
+          source === "prev"
+            ? prevSummary?.consumables ?? ""
+            : startSummary?.consumables ?? "";
         items.push({
           category: "consumables",
-          before: prevSummary.consumables,
+          before,
+          source,
         });
       }
     }
 
-    if (prevSummary.toggleTags !== undefined) {
-      const afterTags = extractManualTagSummary(unit).toggleTags.join(", ");
-      if (prevSummary.toggleTags === afterTags) {
+    if (prevSummary?.toggleTags !== undefined || startSummary?.toggleTags !== undefined) {
+      const source = shouldWarn(
+        prevSummary?.toggleTags,
+        startSummary?.toggleTags,
+        currentToggle,
+      );
+      if (source) {
+        const before =
+          source === "prev"
+            ? prevSummary?.toggleTags ?? ""
+            : startSummary?.toggleTags ?? "";
         items.push({
           category: "toggle",
-          before: prevSummary.toggleTags || "없음",
+          before: before || "없음",
+          source,
         });
       }
     }
 
-    if (prevSummary.manualStacks !== undefined) {
-      const afterTags = extractManualTagSummary(unit)
-        .manualStacks.map((entry) => `${entry.name} x${entry.stacks}`)
-        .join(", ");
-      if (prevSummary.manualStacks === afterTags) {
+    if (prevSummary?.manualStacks !== undefined || startSummary?.manualStacks !== undefined) {
+      const source = shouldWarn(
+        prevSummary?.manualStacks,
+        startSummary?.manualStacks,
+        currentStacks,
+      );
+      if (source) {
+        const before =
+          source === "prev"
+            ? prevSummary?.manualStacks ?? ""
+            : startSummary?.manualStacks ?? "";
         items.push({
           category: "stack",
-          before: prevSummary.manualStacks || "없음",
+          before: before || "없음",
+          source,
         });
       }
     }
@@ -2149,22 +2285,27 @@ export default function App() {
         label: ReactNode;
         category: TurnReminderCategory;
         before: ReactNode;
+        source: "prev" | "start";
       }> = [];
       const entryIsGroup = currentEntry?.kind === "group";
 
       const snapshotMap = currentState.turnEndSnapshots ?? {};
+      const startSnapshotMap = (currentState as any).turnStartSnapshots ?? {};
       for (const unit of turnUnits) {
         const prevSummary = snapshotMap[unit.id];
-        if (!prevSummary) continue;
+        const startSummary = startSnapshotMap[unit.id];
+        if (!prevSummary && !startSummary) continue;
         const unitLabel = renderUnitLabel(unit);
         const unitItems = collectTurnReminderItemsFromSummary(
           prevSummary,
+          startSummary,
           unit
         );
         for (const item of unitItems) {
           items.push({
             category: item.category,
             before: item.before,
+            source: item.source,
             label: entryIsGroup ? (
               <span className="flex flex-wrap items-center gap-1">
                 {unitLabel}
@@ -2346,22 +2487,59 @@ export default function App() {
     }
 
     if (mode === "CONSUMABLE") {
-      const unitId = selectedId;
-      if (!unitId) return;
-      const unit = units.find((u) => u.id === unitId);
-      if (!unit) return;
+      const targets = panelConsumableTargets.length
+        ? panelConsumableTargets
+        : selectedId
+          ? [selectedId]
+          : [];
+      if (targets.length === 0) return;
       const name = panelConsumableName;
       if (!name) return;
-      const current = unit.consumables?.[name];
-      if (typeof current !== "number") return;
       if (!Number.isFinite(amount) || amount === 0) return;
       const delta = panelConsumableDelta === "inc" ? amount : -amount;
-      const nextValue = Math.max(0, current + delta);
-      await run({
-        type: "PATCH_UNIT",
-        unitId,
-        patch: { consumables: { [name]: nextValue } },
-      });
+      const results: Array<{
+        label: string;
+        status: "missing" | "applied" | "unchanged";
+        before?: number;
+        after?: number;
+      }> = [];
+      const actions: Array<{
+        type: "PATCH_UNIT";
+        unitId: string;
+        patch: UnitPatch;
+      }> = [];
+      for (const unit of units) {
+        if (!targets.includes(unit.id)) continue;
+        const label = unit.alias ? `${unit.name} (${unit.alias})` : unit.name;
+        const current = unit.consumables?.[name];
+        if (typeof current !== "number") {
+          results.push({ label, status: "missing" });
+          continue;
+        }
+        const nextValue = Math.max(0, current + delta);
+        if (nextValue === current) {
+          results.push({
+            label,
+            status: "unchanged",
+            before: current,
+            after: nextValue,
+          });
+        } else {
+          actions.push({
+            type: "PATCH_UNIT",
+            unitId: unit.id,
+            patch: { consumables: { [name]: nextValue } },
+          });
+          results.push({
+            label,
+            status: "applied",
+            before: current,
+            after: nextValue,
+          });
+        }
+      }
+      if (actions.length > 0) await run(actions);
+      setConsumableNotice({ name, delta: panelConsumableDelta, rows: results });
       return;
     }
 
@@ -3026,6 +3204,14 @@ export default function App() {
                             disabled={busy}
                           >
                             Open
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-md border border-red-900/60 px-2 py-1 text-xs text-red-200 hover:border-red-800/70 hover:text-red-100"
+                            onClick={() => handleDeleteEncounter(enc)}
+                            disabled={busy}
+                          >
+                            삭제
                           </button>
                         </div>
                       </div>
@@ -3881,6 +4067,77 @@ export default function App() {
           </div>
         )}
 
+        {consumableNotice && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Consumable result modal"
+          >
+            <div className="absolute inset-0 bg-black/35 backdrop-blur-[2px]" />
+
+            <div className="relative z-10 w-[min(640px,92vw)] rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-base font-semibold text-zinc-100">
+                    고유 소모값{" "}
+                    {consumableNotice.delta === "inc" ? "증가" : "감소"} 결과 -{" "}
+                    {consumableNotice.name}
+                  </div>
+                </div>
+              </div>
+
+              <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1 text-sm text-zinc-200">
+                {consumableNotice.rows.map((row, idx) => (
+                  <div
+                    key={`${row.label}-${idx}`}
+                    className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2"
+                  >
+                    <div className="text-sm font-semibold text-zinc-100">
+                      {row.label}
+                    </div>
+                    {row.status === "missing" && (
+                      <div className="text-xs text-amber-200">
+                        해당 고유 소모값이 없습니다.
+                      </div>
+                    )}
+                    {row.status === "unchanged" && (
+                      <div className="text-xs text-zinc-400">
+                        변경 없음.{" "}
+                        <span className="text-zinc-500">
+                          {row.before ?? "-"}
+                        </span>
+                      </div>
+                    )}
+                    {row.status === "applied" && (
+                      <div className="text-xs text-emerald-200">
+                        정상 적용됨.{" "}
+                        <span className="text-zinc-400">
+                          {row.before ?? "-"}
+                        </span>
+                        <span className="mx-1 text-zinc-500">→</span>
+                        <span className="text-zinc-400">
+                          {row.after ?? "-"}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setConsumableNotice(null)}
+                  className="rounded-lg bg-amber-700 px-3 py-2 text-xs text-white hover:bg-amber-600"
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {maxHpNotice && (
           <div
             className="fixed inset-0 z-50 flex items-center justify-center"
@@ -4066,7 +4323,19 @@ export default function App() {
                     {item.label}
                   </div>
                     <div className="mt-1 text-xs text-zinc-400">
-                      이전 턴의 종료 시점에{" "}
+                      <span
+                        className={[
+                          "font-semibold",
+                          item.source === "prev"
+                            ? "text-red-300"
+                            : "text-lime-400",
+                        ].join(" ")}
+                      >
+                        {item.source === "prev"
+                          ? "저번 턴 종료"
+                          : "이번 턴 시작"}
+                      </span>
+                      {" 시점에 "}
                       <span
                         className={
                           item.category === "slots"
@@ -4510,8 +4779,9 @@ export default function App() {
           setConsumableName={setPanelConsumableName}
           consumableDelta={panelConsumableDelta}
           setConsumableDelta={setPanelConsumableDelta}
-          consumableRemaining={panelConsumableRemaining}
           consumableDisabled={panelConsumableDisabled}
+          consumableEntries={panelConsumableEntries}
+          consumableShowCount={panelConsumableTargets.length > 0}
           tagReduceOptions={panelTagReduceOptions}
           tagReduceShowCount={panelTagReduceTargets.length > 1}
           tagReduceName={panelTagReduceName}

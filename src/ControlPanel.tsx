@@ -119,13 +119,14 @@ export default function ControlPanel(props: {
   identifierOptions: Array<{ id: string; label: string }>;
   identifierScheme: string;
   setIdentifierScheme: (value: string) => void;
-  consumableOptions: Array<{ name: string; value: number }>;
+  consumableOptions: Array<{ name: string; count?: number }>;
+  consumableShowCount?: boolean;
   consumableName: string;
   setConsumableName: (name: string) => void;
   consumableDelta: "dec" | "inc";
   setConsumableDelta: (delta: "dec" | "inc") => void;
-  consumableRemaining?: number | null;
   consumableDisabled?: boolean;
+  consumableEntries?: Array<{ label: string; remaining?: number }>;
   tagReduceOptions: Array<{
     name: string;
     kind: "toggle" | "stack";
@@ -159,12 +160,13 @@ export default function ControlPanel(props: {
     identifierScheme,
     setIdentifierScheme,
     consumableOptions,
+    consumableShowCount = false,
     consumableName,
     setConsumableName,
     consumableDelta,
     setConsumableDelta,
-    consumableRemaining,
     consumableDisabled = false,
+    consumableEntries = [],
     tagReduceOptions,
     tagReduceShowCount = false,
     tagReduceName,
@@ -191,6 +193,8 @@ export default function ControlPanel(props: {
   const prevModeRef = useRef<ControlActionMode | null>(null);
   const [collapsed, setCollapsed] = useState<boolean>(() => loadCollapsed());
   const [amountInput, setAmountInput] = useState<string>(() => String(amount));
+  const [consumableMenuOpen, setConsumableMenuOpen] = useState(false);
+  const consumableMenuRef = useRef<HTMLDivElement | null>(null);
   const [tagReduceMenuOpen, setTagReduceMenuOpen] = useState(false);
   const tagReduceMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -225,6 +229,18 @@ export default function ControlPanel(props: {
 
   useEffect(() => saveMode(mode), [mode]);
   useEffect(() => saveCollapsed(collapsed), [collapsed]);
+  useEffect(() => {
+    if (!consumableMenuOpen) return;
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!consumableMenuRef.current || !target) return;
+      if (!consumableMenuRef.current.contains(target)) {
+        setConsumableMenuOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", handleClick);
+    return () => window.removeEventListener("mousedown", handleClick);
+  }, [consumableMenuOpen]);
   useEffect(() => {
     if (!tagReduceMenuOpen) return;
     const handleClick = (event: MouseEvent) => {
@@ -818,26 +834,86 @@ export default function ControlPanel(props: {
           {mode === "CONSUMABLE" && (
             <div className="mt-3 space-y-2">
               <div className="flex items-center gap-2">
-                <select
-                  value={consumableName}
-                  onChange={(e) => setConsumableName(e.target.value)}
-                  disabled={disabled || consumableDisabled}
-                  className={[
-                    "h-9 flex-1 rounded-xl border bg-zinc-950 px-3 text-xs font-semibold text-zinc-100 outline-none focus:border-zinc-600",
-                    "border-zinc-800",
-                    "disabled:border-zinc-800/60 disabled:bg-zinc-900/40 disabled:text-zinc-500",
-                  ].join(" ")}
-                >
-                  {consumableOptions.length === 0 ? (
-                    <option value="">없음</option>
-                  ) : (
-                    consumableOptions.map((entry) => (
-                      <option key={entry.name} value={entry.name}>
-                        {entry.name}
-                      </option>
-                    ))
-                  )}
-                </select>
+                <div className="relative flex-1" ref={consumableMenuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setConsumableMenuOpen((prev) => !prev)}
+                    disabled={disabled || consumableDisabled}
+                    className={[
+                      "flex h-9 w-full items-center justify-between rounded-xl border bg-zinc-950 px-3 text-xs font-semibold text-zinc-100 outline-none focus:border-zinc-600",
+                      "border-zinc-800",
+                      "disabled:border-zinc-800/60 disabled:bg-zinc-900/40 disabled:text-zinc-500",
+                    ].join(" ")}
+                  >
+                    <span className="truncate">
+                      {consumableOptions.length === 0 ? (
+                        "없음"
+                      ) : (
+                        (() => {
+                          const current = consumableOptions.find(
+                            (opt) => opt.name === consumableName
+                          );
+                          if (!current) return consumableName || "-";
+                          if (
+                            consumableShowCount &&
+                            typeof current.count === "number"
+                          ) {
+                            return (
+                              <span>
+                                [
+                                <span className="text-sky-300">
+                                  {current.count}
+                                </span>
+                                ] {current.name}
+                              </span>
+                            );
+                          }
+                          return current.name;
+                        })()
+                      )}
+                    </span>
+                    <span className="text-zinc-500">▾</span>
+                  </button>
+                  {consumableMenuOpen &&
+                    !disabled &&
+                    !consumableDisabled &&
+                    consumableOptions.length > 0 && (
+                      <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-48 overflow-auto rounded-xl border border-zinc-800 bg-zinc-950 p-1 text-xs text-zinc-100 shadow-2xl">
+                        {consumableOptions.map((entry) => {
+                          const active = entry.name === consumableName;
+                          return (
+                            <button
+                              key={entry.name}
+                              type="button"
+                              onClick={() => {
+                                setConsumableName(entry.name);
+                                setConsumableMenuOpen(false);
+                              }}
+                              className={[
+                                "flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left",
+                                active
+                                  ? "bg-amber-900/40 text-amber-100"
+                                  : "hover:bg-zinc-800/70",
+                              ].join(" ")}
+                            >
+                              {consumableShowCount &&
+                              typeof entry.count === "number" ? (
+                                <>
+                                  [
+                                  <span className="text-sky-300">
+                                    {entry.count}
+                                  </span>
+                                  ] {entry.name}
+                                </>
+                              ) : (
+                                entry.name
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                </div>
                 <select
                   value={consumableDelta}
                   onChange={(e) =>
@@ -855,11 +931,20 @@ export default function ControlPanel(props: {
                 </select>
               </div>
               <div className="text-[11px] text-amber-300">
-                {consumableName && consumableRemaining != null ? (
-                  <>
-                    {consumableName} 잔여:{" "}
-                    <span className="font-semibold">{consumableRemaining}</span>
-                  </>
+                {consumableEntries.length > 0 ? (
+                  <div className="flex flex-wrap gap-1">
+                    {consumableEntries.map((entry, idx) => (
+                      <span
+                        key={`${entry.label}-${idx}`}
+                        className="rounded-md border border-amber-500/30 bg-amber-950/30 px-2 py-0.5"
+                      >
+                        {entry.label}
+                        {typeof entry.remaining === "number"
+                          ? ` (${entry.remaining})`
+                          : ""}
+                      </span>
+                    ))}
+                  </div>
                 ) : (
                   "없음"
                 )}

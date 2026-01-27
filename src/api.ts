@@ -52,6 +52,16 @@ export async function createEncounter(name?: string) {
   return res.json();
 }
 
+export async function deleteEncounter(encounterId: string) {
+  const res = await fetch(`${API_BASE}/encounters/${encounterId}`, {
+    method: "DELETE",
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  if (res.status === 204) return null;
+  return res.json();
+}
+
 export async function authRegister(username: string, password: string) {
   const res = await fetch(`${API_BASE}/auth/register`, {
     method: "POST",
@@ -381,6 +391,24 @@ export async function useInventoryItem(body: {
     method: "POST",
     headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createItemCatalog(payload: {
+  itemName: string;
+  quality: string;
+  type: string;
+  unit: string;
+}) {
+  const res = await fetch(`${API_BASE}/items/catalog/add`, {
+    method: "POST",
+    headers: {
+      ...getAuthHeaders(),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

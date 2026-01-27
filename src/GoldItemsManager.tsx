@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import type {
   AuthUser,
   GoldCharacter,
@@ -7,6 +7,7 @@ import type {
 } from "./types";
 import {
   addInventoryItem,
+  createItemCatalog,
   listGoldCharacters,
   listInventory,
   listItemCatalog,
@@ -21,27 +22,51 @@ type Props = {
 const numberFormat = new Intl.NumberFormat("ko-KR");
 
 const ITEM_TYPE_OPTIONS = [
-  "전체",
-  "장비",
-  "소모품",
-  "식품",
-  "광물",
-  "수렵품",
-  "채집물",
-  "기타아이템",
-  "매개체",
+  "\uc804\uccb4",
+  "\uc7a5\ube44",
+  "\uc18c\ubaa8\ud488",
+  "\uc2dd\ud488",
+  "\uad11\ubb3c",
+  "\uc218\ub835\ud488",
+  "\ucc44\uc9d1\ubb3c",
+  "\uae30\ud0c0\uc544\uc774\ud15c",
+  "\ub9e4\uac1c\uccb4",
 ] as const;
 
 const QUALITY_ORDER = [
-  "유일",
-  "전설",
-  "서사",
-  "진귀",
-  "영웅",
-  "희귀",
-  "고급",
-  "일반",
+  "\uc9c4\uadc0",
+  "\uc11c\uc0ac",
+  "\uc804\uc124",
+  "\uc720\uc77c",
+  "\uc601\uc6c5",
+  "\ud76c\uadc0",
+  "\uace0\uae09",
+  "\uc77c\ubc18",
 ] as const;
+
+const QUALITY_OPTIONS = [
+  "\uc77c\ubc18",
+  "\uace0\uae09",
+  "\ud76c\uadc0",
+  "\uc601\uc6c5",
+  "\uc9c4\uadc0",
+  "\uc11c\uc0ac",
+  "\uc804\uc124",
+  "\uc720\uc77c",
+] as const;
+
+const ITEM_TYPE_PICKER = [
+  "\uc7a5\ube44",
+  "\uc18c\ubaa8\ud488",
+  "\uc2dd\ud488",
+  "\uad11\ubb3c",
+  "\uc218\ub835\ud488",
+  "\ucc44\uc9d1\ubb3c",
+  "\uae30\ud0c0\uc544\uc774\ud15c",
+  "\ub9e4\uac1c\uccb4",
+] as const;
+
+const CATALOG_PAGE_SIZE = 12;
 
 function formatNumber(value: number | null | undefined): string {
   if (value === null || value === undefined) return "0";
@@ -53,50 +78,71 @@ function formatGold(value: number | null | undefined): string {
 }
 
 function formatDay(value: number | null | undefined): string {
-  return `${formatNumber(value)}日`;
+  return `${formatNumber(value)}\u65e5`;
 }
 
 function qualityLabelFromNumber(value: number | null | undefined): string {
   switch (value) {
     case 8:
-      return "유일";
+      return "\uc720\uc77c";
     case 7:
-      return "전설";
+      return "\uc804\uc124";
     case 6:
-      return "서사";
+      return "\uc11c\uc0ac";
     case 5:
-      return "진귀";
+      return "\uc9c4\uadc0";
     case 4:
-      return "영웅";
+      return "\uc601\uc6c5";
     case 3:
-      return "희귀";
+      return "\ud76c\uadc0";
     case 2:
-      return "고급";
+      return "\uace0\uae09";
     case 1:
-      return "일반";
+      return "\uc77c\ubc18";
     default:
-      return "일반";
+      return "\uc77c\ubc18";
   }
 }
 
 function qualityColorClass(label: string): string {
   switch (label) {
-    case "유일":
+    case "\uc720\uc77c":
       return "text-teal-300";
-    case "전설":
+    case "\uc804\uc124":
       return "text-yellow-300";
-    case "서사":
+    case "\uc11c\uc0ac":
       return "text-red-300";
-    case "진귀":
+    case "\uc9c4\uadc0":
       return "text-zinc-300";
-    case "영웅":
+    case "\uc601\uc6c5":
       return "text-fuchsia-300";
-    case "희귀":
+    case "\ud76c\uadc0":
       return "text-sky-300";
-    case "고급":
+    case "\uace0\uae09":
       return "text-lime-300";
     default:
       return "text-zinc-100";
+  }
+}
+
+function qualityColorValue(label: string): string {
+  switch (label) {
+    case "\uc720\uc77c":
+      return "#5eead4";
+    case "\uc804\uc124":
+      return "#fde047";
+    case "\uc11c\uc0ac":
+      return "#fca5a5";
+    case "\uc9c4\uadc0":
+      return "#d4d4d8";
+    case "\uc601\uc6c5":
+      return "#f0abfc";
+    case "\ud76c\uadc0":
+      return "#7dd3fc";
+    case "\uace0\uae09":
+      return "#bef264";
+    default:
+      return "#e4e4e7";
   }
 }
 
@@ -118,6 +164,13 @@ function formatItemAmount(amount: number, unit?: string | null): string {
   return `${amount}${unit}`;
 }
 
+function getEulReul(word: string): string {
+  if (!word) return "\ub97c";
+  const code = word.charCodeAt(word.length - 1);
+  if (code < 0xac00 || code > 0xd7a3) return "\ub97c";
+  return (code - 0xac00) % 28 === 0 ? "\ub97c" : "\uc744";
+}
+
 export default function GoldItemsManager({ authUser, onBack }: Props) {
   const isAdmin = !!authUser.isAdmin;
   const [busy, setBusy] = useState(false);
@@ -134,7 +187,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
     "none" | "consume" | "acquire"
   >("none");
   const [inventoryType, setInventoryType] =
-    useState<(typeof ITEM_TYPE_OPTIONS)[number]>("전체");
+    useState<(typeof ITEM_TYPE_OPTIONS)[number]>(ITEM_TYPE_OPTIONS[0]);
   const [inventorySearch, setInventorySearch] = useState("");
   const [selectedInventoryName, setSelectedInventoryName] = useState<
     string | null
@@ -142,6 +195,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
   const [selectedCatalogName, setSelectedCatalogName] = useState<string | null>(
     null,
   );
+  const [catalogPage, setCatalogPage] = useState(0);
   const [inventoryAmount, setInventoryAmount] = useState("1");
   const [inventoryResult, setInventoryResult] = useState<{
     title: string;
@@ -162,6 +216,25 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
     message: string;
     detail: string;
   } | null>(null);
+  const [newItemOpen, setNewItemOpen] = useState(false);
+  const [newItemName, setNewItemName] = useState("");
+  const [newItemUnit, setNewItemUnit] = useState("");
+  const [newItemAmount, setNewItemAmount] = useState("1");
+  const [newItemQuality, setNewItemQuality] = useState<
+    (typeof QUALITY_OPTIONS)[number]
+  >(QUALITY_OPTIONS[0]);
+  const [newItemType, setNewItemType] = useState<
+    (typeof ITEM_TYPE_PICKER)[number]
+  >(ITEM_TYPE_PICKER[0]);
+
+  const [inventoryConfirm, setInventoryConfirm] = useState<{
+    mode: "consume" | "acquire";
+    itemName: string;
+    amount: number;
+    qualityLabel: string;
+    unit?: string | null;
+  } | null>(null);
+
 
   const selected = useMemo(
     () => characters.find((c) => c.name === selectedName) ?? null,
@@ -170,7 +243,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
 
   const companions = useMemo(() => {
     if (!selected) return [];
-    return characters.filter(
+return characters.filter(
       (c) => c.friend && c.friend === selected.name && c.name !== selected.name,
     );
   }, [characters, selected]);
@@ -191,7 +264,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
     return new Map(catalog.map((entry) => [entry.name, entry]));
   }, [catalog]);
 
-  const catalogResults = useMemo(() => {
+  const catalogFiltered = useMemo(() => {
     const rankMap = new Map<string, number>();
     QUALITY_ORDER.forEach((label, idx) => rankMap.set(label, idx));
     const term = inventorySearch.trim().toLowerCase();
@@ -205,7 +278,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
         };
       })
       .filter((entry) => {
-        if (inventoryType !== "전체" && entry.type !== inventoryType) return false;
+        if (inventoryType !== ITEM_TYPE_OPTIONS[0] && entry.type !== inventoryType) return false;
         if (term && !entry.name.toLowerCase().includes(term)) return false;
         return true;
       })
@@ -214,9 +287,28 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
           return a.qualityRank - b.qualityRank;
         }
         return a.name.localeCompare(b.name, "ko");
-      })
-      .slice(0, 12);
+      });
   }, [catalog, inventorySearch, inventoryType]);
+
+  const catalogPageCount = useMemo(() => {
+    return Math.max(1, Math.ceil(catalogFiltered.length / CATALOG_PAGE_SIZE));
+  }, [catalogFiltered.length]);
+
+  const catalogPageItems = useMemo(() => {
+    const start = catalogPage * CATALOG_PAGE_SIZE;
+    return catalogFiltered.slice(start, start + CATALOG_PAGE_SIZE);
+  }, [catalogFiltered, catalogPage]);
+
+  useEffect(() => {
+    setCatalogPage(0);
+  }, [inventorySearch, inventoryType, catalog, inventoryMode]);
+
+  useEffect(() => {
+    if (!selectedCatalogName) return;
+    if (!catalogFiltered.some((item) => item.name === selectedCatalogName)) {
+      setSelectedCatalogName(null);
+    }
+  }, [catalogFiltered, selectedCatalogName]);
 
   const inventoryRows = useMemo(() => {
     const rankMap = new Map<string, number>();
@@ -226,7 +318,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
       .map((item) => {
         const meta = catalogByName.get(item.itemName);
         const qualityLabel = qualityLabelFromNumber(meta?.quality);
-        const type = meta?.type ?? "기타아이템";
+        const type = meta?.type ?? "\uae30\ud0c0\uc544\uc774\ud15c";
         const unit = meta?.unit ?? "-";
         return {
           ...item,
@@ -237,7 +329,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
         };
       })
       .filter((item) => {
-        if (inventoryType !== "전체" && item.type !== inventoryType) return false;
+        if (inventoryType !== ITEM_TYPE_OPTIONS[0] && item.type !== inventoryType) return false;
         if (term && !item.itemName.toLowerCase().includes(term)) return false;
         return true;
       })
@@ -329,113 +421,82 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
     return Math.trunc(value);
   };
 
-  const handleConsume = async () => {
+  const openInventoryConfirm = (mode: "consume" | "acquire") => {
     if (!selected) return;
-    if (!selectedInventoryName) {
-      setErr("소모할 아이템을 선택해 주세요.");
+    const itemName =
+      mode === "consume" ? selectedInventoryName : selectedCatalogName;
+    if (!itemName) {
+      setErr(
+        mode === "consume"
+          ? "\uc544\uc774\ud15c \uc18c\ubaa8\ud560 \uc544\uc774\ud15c\uc744 \uc120\ud0dd\ud574 \uc8fc\uc138\uc694."
+          : "\uc544\uc774\ud15c \ud68d\ub4dd\ud560 \uc544\uc774\ud15c\uc744 \uc120\ud0dd\ud574 \uc8fc\uc138\uc694.",
+      );
       return;
     }
     const amount = parseAmount(inventoryAmount);
     if (!amount) {
-      setErr("소모 수량을 입력해 주세요.");
+      setErr(
+        mode === "consume"
+          ? "\uc18c\ubaa8 \uc218\ub7c9\uc744 \uc785\ub825\ud574 \uc8fc\uc138\uc694."
+          : "\ud68d\ub4dd \uc218\ub7c9\uc744 \uc785\ub825\ud574 \uc8fc\uc138\uc694.",
+      );
       return;
     }
-    const beforeItem = inventory.find(
-      (item) => item.itemName === selectedInventoryName,
-    );
-    if (!beforeItem) {
-      setErr("선택한 아이템이 인벤토리에 없습니다.");
-      return;
-    }
-    const before = beforeItem.amount;
     const qualityLabel = qualityLabelFromNumber(
-      catalogByName.get(selectedInventoryName)?.quality,
+      catalogByName.get(itemName)?.quality,
     );
-    const unit = catalogByName.get(selectedInventoryName)?.unit ?? null;
-    try {
-      setErr(null);
-      setBusy(true);
-      await useInventoryItem({
-        owner: selected.name,
-        itemName: selectedInventoryName,
-        amount,
-      });
-      await reloadInventory(selected.name);
-      const delta = Math.min(before, amount);
-      const after = Math.max(0, before - delta);
-      setInventoryResult({
-        title: "아이템 소모 결과",
-        ownerName: selected.name,
-        itemName: selectedInventoryName,
-        before,
-        after,
-        qualityLabel,
-        unit,
-        action: "consume",
-        delta,
-      });
-    } catch (e: any) {
-      const msg = String(e?.message ?? e);
-      if (msg.toLowerCase().includes("insufficient")) {
-        setInventoryNotice({
-          title: "아이템 소모 실패",
-          ownerName: selected.name,
-          itemName: selectedInventoryName,
-          qualityLabel,
-          message: `보유 수량이 부족합니다.`,
-          detail: `(요청: ${formatItemAmount(amount, unit)}, 보유: ${formatItemAmount(
-            before,
-            unit,
-          )})`,
-        });
-        return;
-      }
-      setErr(msg);
-    } finally {
-      setBusy(false);
-    }
+    const unit = catalogByName.get(itemName)?.unit ?? null;
+    setInventoryConfirm({
+      mode,
+      itemName,
+      amount,
+      qualityLabel,
+      unit,
+    });
   };
 
-  const handleAcquire = async () => {
-    if (!selected) return;
-    if (!selectedCatalogName) {
-      setErr("획득할 아이템을 선택해 주세요.");
+  const handleCreateCatalog = async () => {
+    if (!selected) {
+      setErr("\uce90\ub9ad\ud130\ub97c \uc120\ud0dd\ud574 \uc8fc\uc138\uc694.");
       return;
     }
-    const amount = parseAmount(inventoryAmount);
+    if (!isAdmin) {
+      setErr("\uad00\ub9ac\uc790 \uad8c\ud55c\uc774 \ud544\uc694\ud569\ub2c8\ub2e4.");
+      return;
+    }
+    const name = newItemName.trim();
+    const unit = newItemUnit.trim();
+    if (!name) {
+      setErr("\uc544\uc774\ud15c \uc774\ub984\uc744 \uc785\ub825\ud574 \uc8fc\uc138\uc694.");
+      return;
+    }
+    if (!unit) {
+      setErr("\ub2e8\uc704\ub97c \uc785\ub825\ud574 \uc8fc\uc138\uc694.");
+      return;
+    }
+    const amount = parseAmount(newItemAmount);
     if (!amount) {
-      setErr("획득 수량을 입력해 주세요.");
+      setErr("\uc218\ub7c9\uc744 \uc785\ub825\ud574 \uc8fc\uc138\uc694.");
       return;
     }
-    const beforeItem = inventory.find(
-      (item) => item.itemName === selectedCatalogName,
-    );
-    const before = beforeItem?.amount ?? 0;
-    const qualityLabel = qualityLabelFromNumber(
-      catalogByName.get(selectedCatalogName)?.quality,
-    );
-    const unit = catalogByName.get(selectedCatalogName)?.unit ?? null;
     try {
       setErr(null);
       setBusy(true);
-      await addInventoryItem({
-        owner: selected.name,
-        itemName: selectedCatalogName,
-        amount,
-      });
-      await reloadInventory(selected.name);
-      const delta = amount;
-      const after = before + delta;
-      setInventoryResult({
-        title: "아이템 획득 결과",
-        ownerName: selected.name,
-        itemName: selectedCatalogName,
-        before,
-        after,
-        qualityLabel,
+      await createItemCatalog({
+        itemName: name,
+        quality: newItemQuality,
+        type: newItemType,
         unit,
-        action: "acquire",
-        delta,
+      });
+      await reloadCatalog();
+      setSelectedCatalogName(name);
+      setNewItemOpen(false);
+      setInventoryConfirm({
+        mode: "acquire",
+        itemName: name,
+        amount,
+        qualityLabel: newItemQuality,
+        unit,
       });
     } catch (e: any) {
       setErr(String(e?.message ?? e));
@@ -443,7 +504,127 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
       setBusy(false);
     }
   };
-  useEffect(() => {
+
+
+
+  const handleConsume = async () => {
+  if (!selected) return;
+  if (!selectedInventoryName) {
+    setErr("\uc18c\ubaa8\ud560 \uc544\uc774\ud15c\uc744 \uc120\ud0dd\ud574 \uc8fc\uc138\uc694.");
+    return;
+  }
+  const amount = parseAmount(inventoryAmount);
+  if (!amount) {
+    setErr("\uc18c\ubaa8 \uc218\ub7c9\uc744 \uc785\ub825\ud574 \uc8fc\uc138\uc694.");
+    return;
+  }
+  const beforeItem = inventory.find(
+    (item) => item.itemName === selectedInventoryName,
+  );
+  if (!beforeItem) {
+    setErr("\uc120\ud0dd\ud55c \uc544\uc774\ud15c\uc774 \uc778\ubca4\ud1a0\ub9ac\uc5d0 \uc5c6\uc2b5\ub2c8\ub2e4.");
+    return;
+  }
+  const before = beforeItem.amount;
+  const qualityLabel = qualityLabelFromNumber(
+    catalogByName.get(selectedInventoryName)?.quality,
+  );
+  const unit = catalogByName.get(selectedInventoryName)?.unit ?? null;
+  try {
+    setErr(null);
+    setBusy(true);
+    setInventoryNotice(null);
+    await useInventoryItem({
+      owner: selected.name,
+      itemName: selectedInventoryName,
+      amount,
+    });
+    await reloadInventory(selected.name);
+    const delta = Math.min(before, amount);
+    const after = Math.max(0, before - delta);
+    setInventoryResult({
+      title: "\uc544\uc774\ud15c \uc18c\ubaa8 \uacb0\uacfc",
+      ownerName: selected.name,
+      itemName: selectedInventoryName,
+      before,
+      after,
+      qualityLabel,
+      unit,
+      action: "consume",
+      delta,
+    });
+  } catch (e: any) {
+    const msg = String(e?.message ?? e);
+    if (msg.toLowerCase().includes("insufficient")) {
+      setInventoryResult(null);
+      setInventoryNotice({
+        title: "\uc544\uc774\ud15c \uc18c\ubaa8 \uc2e4\ud328",
+        ownerName: selected.name,
+        itemName: selectedInventoryName,
+        qualityLabel,
+        message: `\ubcf4\uc720 \uc218\ub7c9\uc774 \ubd80\uc871\ud569\ub2c8\ub2e4.`,
+        detail: `(\uc694\uccad: ${formatItemAmount(amount, unit)}, \ubcf4\uc720: ${formatItemAmount(
+          before,
+          unit,
+        )})`,
+      });
+      return;
+    }
+    setErr(msg);
+  } finally {
+    setBusy(false);
+  }
+};
+
+const handleAcquire = async () => {
+  if (!selected) return;
+  if (!selectedCatalogName) {
+    setErr("\ud68d\ub4dd\ud560 \uc544\uc774\ud15c\uc744 \uc120\ud0dd\ud574 \uc8fc\uc138\uc694.");
+    return;
+  }
+  const amount = parseAmount(inventoryAmount);
+  if (!amount) {
+    setErr("\ud68d\ub4dd \uc218\ub7c9\uc744 \uc785\ub825\ud574 \uc8fc\uc138\uc694.");
+    return;
+  }
+  const beforeItem = inventory.find(
+    (item) => item.itemName === selectedCatalogName,
+  );
+  const before = beforeItem?.amount ?? 0;
+  const qualityLabel = qualityLabelFromNumber(
+    catalogByName.get(selectedCatalogName)?.quality,
+  );
+  const unit = catalogByName.get(selectedCatalogName)?.unit ?? null;
+  try {
+    setErr(null);
+    setBusy(true);
+    setInventoryNotice(null);
+    await addInventoryItem({
+      owner: selected.name,
+      itemName: selectedCatalogName,
+      amount,
+    });
+    await reloadInventory(selected.name);
+    const delta = amount;
+    const after = before + delta;
+    setInventoryResult({
+      title: "\uc544\uc774\ud15c \ud68d\ub4dd \uacb0\uacfc",
+      ownerName: selected.name,
+      itemName: selectedCatalogName,
+      before,
+      after,
+      qualityLabel,
+      unit,
+      action: "acquire",
+      delta,
+    });
+  } catch (e: any) {
+    setErr(String(e?.message ?? e));
+  } finally {
+    setBusy(false);
+  }
+};
+useEffect(() => {
     if (!selectedInventoryName) return;
     if (!inventory.some((item) => item.itemName === selectedInventoryName)) {
       setSelectedInventoryName(null);
@@ -457,8 +638,8 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
           <div>
             <div className="text-xl font-semibold">Gold / Items</div>
             <div className="text-xs text-zinc-400">
-              {isAdmin ? "관리자 모드" : "조회 전용"}
-            </div>
+                        {"\uc120\ud0dd\ud55c \uc544\uc774\ud15c"}:
+                      </div>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -474,9 +655,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
               className="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-200 hover:border-zinc-600"
               onClick={() => reloadCharacters(true)}
               disabled={busy}
-            >
-              새로고침
-            </button>
+            >{"\uc0c8\ub85c\uace0\uce68"}</button>
           </div>
         </header>
 
@@ -489,17 +668,13 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
         <div className="grid grid-cols-[240px_1fr] gap-4">
           <section className="flex min-h-[calc(100vh-180px)] flex-col rounded-2xl border border-zinc-800 bg-zinc-900/40 p-3">
             <div className="mb-2 flex items-center justify-between">
-              <div className="text-sm font-semibold text-zinc-200">
-                캐릭터 목록
-              </div>
+              <div className="text-sm font-semibold text-zinc-200">{"\uce90\ub9ad\ud130 \ubaa9\ub85d"}</div>
               <button
                 type="button"
                 className="rounded-md border border-zinc-700 px-2 py-1 text-[10px] text-zinc-200 hover:border-zinc-600"
                 onClick={() => reloadCharacters(true)}
                 disabled={busy}
-              >
-                새로고침
-              </button>
+              >{"\uc0c8\ub85c\uace0\uce68"}</button>
             </div>
 
             <input
@@ -538,8 +713,8 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
               })}
               {filteredCharacters.length === 0 ? (
                 <div className="rounded-md border border-dashed border-zinc-800 p-3 text-xs text-zinc-500">
-                  표시할 캐릭터가 없습니다.
-                </div>
+                    {"\ub4f1\ub85d\ub41c \uc544\uc774\ud15c\uc774 \uc5c6\uc2b5\ub2c8\ub2e4."}
+                  </div>
               ) : null}
             </div>
           </section>
@@ -575,7 +750,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
             {activeTab === "gold" ? (
               <section className="flex-1 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
                 <div className="mb-3 text-sm font-semibold text-zinc-200">
-                  캐릭터 정보
+                  {"\uce90\ub9ad\ud130 \uc815\ubcf4"}
                 </div>
 
                 {selected ? (
@@ -587,7 +762,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                         </div>
                         <div className="text-xs text-zinc-400">
                           {selected.isNpc ? "NPC" : "PC"}
-                          {selected.friend ? ` · friend: ${selected.friend}` : ""}
+                          {selected.friend ? ` / friend: ${selected.friend}` : ""}
                         </div>
                       </div>
                     </div>
@@ -595,7 +770,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                     <div className="flex flex-col gap-3 md:flex-row">
                       <div className="flex-1 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
                         <div className="mb-2 text-xs font-semibold text-zinc-300">
-                          소지금
+                          {"\uc18c\uc9c0\uae08"}
                         </div>
                         <div className="text-2xl font-semibold text-amber-200">
                           {formatGold(selected.gold)}
@@ -603,7 +778,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                       </div>
                       <div className="flex-1 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
                         <div className="mb-2 text-xs font-semibold text-zinc-300">
-                          일일 골드 증감
+                          {"\uc77c\uc77c \uace8\ub4dc \uc99d\uac10"}
                         </div>
                         {(() => {
                           const delta = getDailyDeltaDisplay(
@@ -623,7 +798,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                       </div>
                       <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3 md:w-24">
                         <div className="mb-2 text-xs font-semibold text-zinc-300">
-                          일수
+                          {"\uc77c\uc218"}
                         </div>
                         <div className="text-base font-semibold text-zinc-200">
                           {formatDay(selected.day ?? 0)}
@@ -633,19 +808,21 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
 
                     <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
                       <div className="mb-2 text-xs font-semibold text-zinc-300">
-                        동료 목록
+                        {"\ub3d9\ub8cc \ubaa9\ub85d"}
                       </div>
                       {companions.length === 0 ? (
                         <div className="text-xs text-zinc-500">
-                          등록된 동료가 없습니다.
+                          {"\ub4f1\ub85d\ub41c \ub3d9\ub8cc\uac00 \uc5c6\uc2b5\ub2c8\ub2e4."}
                         </div>
                       ) : (
                         <div className="overflow-hidden rounded-md border border-zinc-800">
                           <div className="grid grid-cols-[1fr_110px_130px_70px] bg-zinc-950/60 px-3 py-2 text-[11px] font-semibold text-zinc-400">
-                            <span>이름</span>
-                            <span className="text-right">소지금</span>
-                            <span className="text-right">일일 골드 증감</span>
-                            <span className="text-right">일수</span>
+                            <span>{"\uc774\ub984"}</span>
+                            <span className="text-right">{"\uc18c\uc9c0\uae08"}</span>
+                            <span className="text-right">
+                              {"\uc77c\uc77c \uace8\ub4dc \uc99d\uac10"}
+                            </span>
+                            <span className="text-right">{"\uc77c\uc218"}</span>
                           </div>
                           <div className="divide-y divide-zinc-800">
                             {companions.map((c) => {
@@ -682,7 +859,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                   </div>
                 ) : (
                   <div className="rounded-lg border border-dashed border-zinc-800 p-4 text-sm text-zinc-500">
-                    캐릭터를 선택해 주세요.
+                    {"\uce90\ub9ad\ud130\ub97c \uc120\ud0dd\ud574 \uc8fc\uc138\uc694."}
                   </div>
                 )}
               </section>
@@ -690,9 +867,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
             {activeTab === "inventory" ? (
               <section className="flex-1 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
                 <div className="mb-3 flex items-center justify-between">
-                  <div className="text-sm font-semibold text-zinc-200">
-                    인벤토리
-                  </div>
+                  <div className="text-sm font-semibold text-zinc-200">{"\uce90\ub9ad\ud130 \ubaa9\ub85d"}</div>
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
@@ -708,7 +883,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                         )
                       }
                     >
-                      아이템 획득
+                      {"\uc544\uc774\ud15c \ud68d\ub4dd"}
                     </button>
                     <button
                       type="button"
@@ -724,7 +899,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                         )
                       }
                     >
-                      아이템 소모
+                      {"\uc544\uc774\ud15c \uc18c\ubaa8"}
                     </button>
                   </div>
                 </div>
@@ -754,42 +929,54 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                 <input
                   value={inventorySearch}
                   onChange={(e) => setInventorySearch(e.target.value)}
-                  placeholder="아이템 검색"
+                  placeholder={"아이템 검색"}
                   className="mb-3 h-8 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
                 />
 
                 {inventoryMode !== "none" ? (
                   <div className="mb-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
                     <div className="mb-2 text-xs font-semibold text-zinc-300">
-                      {inventoryMode === "consume"
-                        ? "아이템 소모"
-                        : "아이템 획득"}
+                      {inventoryMode === "consume" ? "\uc544\uc774\ud15c \uc18c\ubaa8" : "\uc544\uc774\ud15c \ud68d\ub4dd"}
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="text-xs text-zinc-400">
-                        {inventoryMode === "consume"
-                          ? "선택한 아이템"
-                          : "선택한 아이템"}
-                        :
+                        {"\uc120\ud0dd\ud55c \uc544\uc774\ud15c"}:
                       </div>
-                      <div className="text-sm font-semibold text-zinc-100">
+                      <div
+                        className={[
+                          "text-sm font-semibold",
+                          inventoryMode === "consume"
+                            ? qualityColorClass(
+                                qualityLabelFromNumber(
+                                  catalogByName.get(selectedInventoryName ?? "")
+                                    ?.quality,
+                                ),
+                              )
+                            : qualityColorClass(
+                                qualityLabelFromNumber(
+                                  catalogByName.get(selectedCatalogName ?? "")
+                                    ?.quality,
+                                ),
+                              ),
+                        ].join(" ")}
+                      >
                         {inventoryMode === "consume"
-                          ? selectedInventoryName ?? "없음"
-                          : selectedCatalogName ?? "없음"}
+                          ? selectedInventoryName ?? "\uc5c6\uc74c"
+                          : selectedCatalogName ?? "\uc5c6\uc74c"}
                       </div>
                       <input
                         value={inventoryAmount}
                         onChange={(e) => setInventoryAmount(e.target.value)}
-                        placeholder="수량"
+                        placeholder={"수량"}
                         className="h-8 w-24 rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
                       />
                       <button
                         type="button"
                         className="rounded-md bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
-                        onClick={
-                          inventoryMode === "consume"
-                            ? handleConsume
-                            : handleAcquire
+                        onClick={() =>
+                          openInventoryConfirm(
+                            inventoryMode === "consume" ? "consume" : "acquire",
+                          )
                         }
                         disabled={
                           busy ||
@@ -799,67 +986,122 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                           !inventoryAmount.trim()
                         }
                       >
-                        적용
+                        {"\uc801\uc6a9"}
                       </button>
                     </div>
 
                     {inventoryMode === "acquire" ? (
-                      <div className="mt-2 grid grid-cols-2 gap-2">
-                        {catalogResults.length === 0 ? (
-                          <div className="col-span-2 text-xs text-zinc-500">
-                            검색 결과가 없습니다.
-                          </div>
-                        ) : (
-                          catalogResults.map((entry) => {
-                            const active =
-                              entry.name === selectedCatalogName;
-                            return (
-                              <button
-                                key={entry.name}
-                                type="button"
-                                className={[
-                                  "rounded-md border px-2 py-1 text-left text-xs",
-                                  active
-                                    ? "border-amber-500/70 bg-amber-950/30 text-amber-100"
-                                    : "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:border-zinc-700",
-                                ].join(" ")}
-                                onClick={() => setSelectedCatalogName(entry.name)}
-                              >
-                                <div
-                                  className={qualityColorClass(
-                                    entry.qualityLabel,
-                                  )}
-                                >
-                                  {entry.name}
-                                </div>
-                                <div className="text-[10px] text-zinc-500">
-                                  {entry.type}
-                                </div>
-                              </button>
-                            );
-                          })
-                        )}
+                      <div className="mt-2 text-xs text-zinc-500">
+                        {"\uc544\ub798 \ubaa9\ub85d\uc5d0\uc11c \uc544\uc774\ud15c\uc744 \uc120\ud0dd\ud558\uc138\uc694."}
                       </div>
                     ) : null}
                   </div>
                 ) : null}
 
-                {!selected ? (
+                {inventoryMode === "acquire" ? (
+                  <>
+                    <button
+                      type="button"
+                      className="mb-2 w-full rounded-lg border border-amber-500/60 bg-amber-700/70 px-4 py-2 text-center text-xs font-semibold text-amber-50 hover:bg-amber-600/80"
+                      onClick={() => {
+                        setNewItemName("");
+                        setNewItemUnit("");
+                        setNewItemAmount(inventoryAmount || "1");
+                        setNewItemQuality(QUALITY_OPTIONS[0]);
+                        setNewItemType(ITEM_TYPE_PICKER[0]);
+                        setNewItemOpen(true);
+                      }}
+                    >
+                      {"\uc0c8 \uc544\uc774\ud15c \ub4f1\ub85d \ud6c4 \ud68d\ub4dd\ud558\uae30"}
+                    </button>
+                    <div className="overflow-visible rounded-lg border border-zinc-800">
+                      <div className="grid grid-cols-[minmax(0,1fr)_90px_90px_70px] gap-2 bg-zinc-950/60 px-4 py-2 text-xs font-semibold text-zinc-400">
+                      <span>{"\ud56d\ubaa9"}</span>
+                      <span>{"\ub4f1\uae09"}</span>
+                      <span>{"\uc885\ub958"}</span>
+                      <span className="text-right">{"\ub2e8\uc704"}</span>
+                    </div>
+                    <div className="divide-y divide-zinc-800">
+                      {catalogPageItems.length === 0 ? (
+                        <div className="px-4 py-3 text-xs text-zinc-500">
+                        {"\uac80\uc0c9 \uacb0\uacfc\uac00 \uc5c6\uc2b5\ub2c8\ub2e4."}
+                      </div>
+                      ) : (
+                        catalogPageItems.map((entry) => {
+                          const active = entry.name === selectedCatalogName;
+                          return (
+                            <button
+                              key={entry.name}
+                              type="button"
+                              className={[
+                                "grid w-full grid-cols-[minmax(0,1fr)_90px_90px_70px] items-center gap-2 px-4 py-2 text-left text-sm",
+                                active
+                                  ? "bg-amber-950/30 ring-1 ring-amber-500/60"
+                                  : "bg-zinc-950/20 hover:bg-zinc-900/40",
+                              ].join(" ")}
+                              onClick={() => setSelectedCatalogName(entry.name)}
+                            >
+                              <span className={qualityColorClass(entry.qualityLabel)}>
+                                {entry.name}
+                              </span>
+                              <span className={qualityColorClass(entry.qualityLabel)}>
+                                {entry.qualityLabel}
+                              </span>
+                              <span className={qualityColorClass(entry.qualityLabel)}>{entry.type}</span>
+                              <span className={"text-right " + qualityColorClass(entry.qualityLabel)}>
+
+                                {entry.unit ?? "-"}
+                              </span>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                    <div className="flex items-center justify-center gap-3 border-t border-zinc-800 bg-zinc-950/40 px-4 py-2 text-sm text-zinc-300">
+                      <button
+                        type="button"
+                        className="rounded-md border border-zinc-700 px-2 py-1 text-lg leading-none disabled:opacity-40"
+                        onClick={() =>
+                          setCatalogPage((prev) => Math.max(0, prev - 1))
+                        }
+                        disabled={catalogPage <= 0}
+                      >
+                        {"\u2B05\uFE0F"}
+                      </button>
+                      <span className="text-xs text-zinc-400">
+                        {catalogPage + 1} / {catalogPageCount}
+                      </span>
+                      <button
+                        type="button"
+                        className="rounded-md border border-zinc-700 px-2 py-1 text-lg leading-none disabled:opacity-40"
+                        onClick={() =>
+                          setCatalogPage((prev) =>
+                            Math.min(catalogPageCount - 1, prev + 1),
+                          )
+                        }
+                        disabled={catalogPage >= catalogPageCount - 1}
+                      >
+                        {"\u27A1\uFE0F"}
+                      </button>
+                    </div>
+                  </div>
+                  </>
+                ) : !selected ? (
                   <div className="rounded-lg border border-dashed border-zinc-800 p-4 text-sm text-zinc-500">
-                    캐릭터를 선택해 주세요.
+                    {"\uce90\ub9ad\ud130\ub97c \uc120\ud0dd\ud574 \uc8fc\uc138\uc694."}
                   </div>
                 ) : inventoryRows.length === 0 ? (
                   <div className="rounded-md border border-dashed border-zinc-800 p-3 text-xs text-zinc-500">
-                    등록된 아이템이 없습니다.
+                    {"\ub4f1\ub85d\ub41c \uc544\uc774\ud15c\uc774 \uc5c6\uc2b5\ub2c8\ub2e4."}
                   </div>
                 ) : (
                   <div className="overflow-visible rounded-lg border border-zinc-800">
                     <div className="grid grid-cols-[1fr_80px_4px_1fr_80px] bg-zinc-950/60 px-4 py-2 text-xs font-semibold text-zinc-400">
-                      <span>항목</span>
-                      <span className="pr-2 text-right">수량</span>
+                      <span>{"\ud56d\ubaa9"}</span>
+                      <span className="pr-2 text-right">{"\uc218\ub7c9"}</span>
                       <span className="bg-zinc-700/80" aria-hidden="true" />
-                      <span className="pl-2 text-right md:text-left">항목</span>
-                      <span className="text-right">수량</span>
+                      <span className="pl-2 text-right md:text-left">{"\ud56d\ubaa9"}</span>
+                      <span className="text-right">{"\uc218\ub7c9"}</span>
                     </div>
                     <div className="divide-y divide-zinc-800">
                       {inventoryRows.map((row, idx) => {
@@ -905,13 +1147,13 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                                       {left.itemName}
                                     </div>
                                     <div className="mt-1 text-zinc-400">
-                                      수량:{" "}
+                                      {"\uc218\ub7c9"}:{" "}
                                       <span className="font-semibold text-amber-200">
                                         {left.amount}
                                       </span>
                                     </div>
                                     <div className="mt-1 text-zinc-400">
-                                      등급:{" "}
+                                      {"\ub4f1\uae09"}:{" "}
                                       <span
                                         className={qualityColorClass(
                                           left.qualityLabel,
@@ -921,10 +1163,10 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                                       </span>
                                     </div>
                                     <div className="mt-1 text-zinc-400">
-                                      종류: {left.type}
+                                      {"\uc885\ub958"}: {left.type}
                                     </div>
                                     <div className="mt-1 text-zinc-400">
-                                      단위: {left.unit}
+                                      {"\ub2e8\uc704"}: {left.unit}
                                     </div>
                                   </div>
                                 ) : null}
@@ -973,13 +1215,13 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                                       {right.itemName}
                                     </div>
                                     <div className="mt-1 text-zinc-400">
-                                      수량:{" "}
+                                      {"\uc218\ub7c9"}:{" "}
                                       <span className="font-semibold text-amber-200">
                                         {right.amount}
                                       </span>
                                     </div>
                                     <div className="mt-1 text-zinc-400">
-                                      등급:{" "}
+                                      {"\ub4f1\uae09"}:{" "}
                                       <span
                                         className={qualityColorClass(
                                           right.qualityLabel,
@@ -989,10 +1231,10 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                                       </span>
                                     </div>
                                     <div className="mt-1 text-zinc-400">
-                                      종류: {right.type}
+                                      {"\uc885\ub958"}: {right.type}
                                     </div>
                                     <div className="mt-1 text-zinc-400">
-                                      단위: {right.unit}
+                                      {"\ub2e8\uc704"}: {right.unit}
                                     </div>
                                   </div>
                                 ) : null}
@@ -1009,6 +1251,193 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                     </div>
                   </div>
                 )}
+
+                {newItemOpen ? (
+                  <div
+                    className="fixed inset-0 z-40 flex items-center justify-center"
+                    role="dialog"
+                    aria-modal="true"
+                  >
+                    <div
+                      className="absolute inset-0 bg-black/40"
+                      onClick={() => setNewItemOpen(false)}
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Close overlay"
+                      onKeyDown={(e) =>
+                        e.key === "Enter" && setNewItemOpen(false)
+                      }
+                    />
+                    <div className="relative z-50 w-[min(480px,92vw)] rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
+                      <div className="mb-3 text-sm font-semibold text-zinc-100">
+                        {"\uc0c8 \uc544\uc774\ud15c \ub4f1\ub85d"}
+                      </div>
+                      <div className="grid gap-3">
+                        <label className="grid gap-1 text-xs text-zinc-400">
+                          {"\uc544\uc774\ud15c \uc774\ub984"}
+                          <input
+                            value={newItemName}
+                            onChange={(e) => setNewItemName(e.target.value)}
+                            className="h-8 rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
+                          />
+                        </label>
+                        <div className="grid grid-cols-2 gap-3">
+                          <label className="grid gap-1 text-xs text-zinc-400">
+                            {"\ub2e8\uc704"}
+                            <input
+                              value={newItemUnit}
+                              onChange={(e) => setNewItemUnit(e.target.value)}
+                              className="h-8 rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
+                            />
+                          </label>
+                          <label className="grid gap-1 text-xs text-zinc-400">
+                            {"\uc218\ub7c9"}
+                            <input
+                              value={newItemAmount}
+                              onChange={(e) => setNewItemAmount(e.target.value)}
+                              className="h-8 rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
+                            />
+                          </label>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <label className="grid gap-1 text-xs text-zinc-400">
+                            {"\ub4f1\uae09"}
+                            <select
+                              value={newItemQuality}
+                              onChange={(e) =>
+                                setNewItemQuality(
+                                  e.target.value as (typeof QUALITY_OPTIONS)[number],
+                                )
+                              }
+                              className={[
+                                "h-8 rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs outline-none focus:border-zinc-600",
+                                qualityColorClass(newItemQuality),
+                              ].join(" ")}
+                            >
+                              {QUALITY_OPTIONS.map((q) => (
+                                <option key={q} value={q} style={{ color: qualityColorValue(q) }}>
+                                  {q}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="grid gap-1 text-xs text-zinc-400">
+                            {"\uc885\ub958"}
+                            <select
+                              value={newItemType}
+                              onChange={(e) =>
+                                setNewItemType(
+                                  e.target.value as (typeof ITEM_TYPE_PICKER)[number],
+                                )
+                              }
+                              className="h-8 rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
+                            >
+                              {ITEM_TYPE_PICKER.map((t) => (
+                                <option key={t} value={t}>
+                                  {t}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                      </div>
+                      <div className="mt-4 flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs font-semibold text-zinc-100 hover:border-zinc-600"
+                          onClick={() => setNewItemOpen(false)}
+                        >
+                          {"\ucde8\uc18c"}
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600"
+                          onClick={handleCreateCatalog}
+                        >
+                          {"\ub4f1\ub85d \ud6c4 \ud68d\ub4dd"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {inventoryConfirm ? (
+                  <div
+                    className="fixed inset-0 z-40 flex items-center justify-center"
+                    role="dialog"
+                    aria-modal="true"
+                  >
+                    <div
+                      className="absolute inset-0 bg-black/40"
+                      onClick={() => setInventoryConfirm(null)}
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Close overlay"
+                      onKeyDown={(e) =>
+                        e.key === "Enter" && setInventoryConfirm(null)
+                      }
+                    />
+                    <div className="relative z-50 w-[min(360px,92vw)] rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
+                      <div className="mb-2 text-sm font-semibold text-zinc-100">
+                        {inventoryConfirm.mode === "consume"
+                          ? "\uc544\uc774\ud15c \uc18c\ubaa8 \ud655\uc778"
+                          : "\uc544\uc774\ud15c \ud68d\ub4dd \ud655\uc778"}
+                      </div>
+                      <div className="text-sm text-zinc-100">
+                        <span className="font-semibold">
+                          {"\u300c"}
+                          <span className="text-amber-200">{selected?.name ?? ""}</span>
+                          {"\u300d"}
+                        </span>
+                        {",  ["}
+                        <span
+                          className={[
+                            "font-semibold",
+                            qualityColorClass(inventoryConfirm.qualityLabel),
+                          ].join(" ")}
+                        >
+                          {inventoryConfirm.itemName}
+                        </span>
+                        {"]"}
+                        {getEulReul(inventoryConfirm.itemName)}
+                        {" "}
+                        {formatItemAmount(
+                          inventoryConfirm.amount,
+                          inventoryConfirm.unit,
+                        )}
+                        {"\ub9cc\ud07c "}
+                        {inventoryConfirm.mode === "consume"
+                          ? "\uc18c\ubaa8"
+                          : "\ud68d\ub4dd"}
+                        {"\ud569\ub2c8\ub2e4."}
+                      </div>
+                      <div className="mt-4 flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs font-semibold text-zinc-100 hover:border-zinc-600"
+                          onClick={() => setInventoryConfirm(null)}
+                        >
+                          {"\ucde8\uc18c"}
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600"
+                          onClick={() => {
+                            const mode = inventoryConfirm.mode;
+                            setInventoryConfirm(null);
+                            if (mode === "consume") {
+                              handleConsume();
+                            } else {
+                              handleAcquire();
+                            }
+                          }}
+                        >
+                          {"\uc801\uc6a9"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
 
                 {inventoryResult ? (
                   <div
@@ -1032,9 +1461,11 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                       </div>
                       <div className="text-sm text-zinc-100">
                         <span className="font-semibold">
-                          「{inventoryResult.ownerName}」
+                          {"\u300c"}
+                          <span className="text-amber-200">{inventoryResult.ownerName}</span>
+                          {"\u300d"}
                         </span>
-                        , [
+                        {",  ["}
                         <span
                           className={[
                             "font-semibold",
@@ -1043,34 +1474,39 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                         >
                           {inventoryResult.itemName}
                         </span>
-                        ] 을(를){" "}
+                        {"]"}
+                        {getEulReul(inventoryResult.itemName)}
+                        {" "}
                         {formatItemAmount(
                           inventoryResult.delta,
                           inventoryResult.unit,
                         )}
-                        만큼{" "}
+                        {"\ub9cc\ud07c "}
                         {inventoryResult.action === "acquire"
-                          ? "획득하였다."
-                          : "소모하였다."}
+                          ? "\ud68d\ub4dd\ud558\uc600\ub2e4."
+                          : "\uc18c\ubaa8\ud558\uc600\ub2e4."}
                       </div>
                       <div className="mt-1 text-sm text-zinc-300">
+                        {"(\ub0a8\uc740 \uc218\ub7c9: "}
                         {formatItemAmount(
                           inventoryResult.before,
                           inventoryResult.unit,
-                        )}{" "}
-                        →{" "}
+                        )}
+                        {" \u2192 "}
                         {formatItemAmount(
                           inventoryResult.after,
                           inventoryResult.unit,
                         )}
+                        {")"}
                       </div>
+
                       <div className="mt-4 flex justify-end">
                         <button
                           type="button"
                           className="rounded-md bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600"
                           onClick={() => setInventoryResult(null)}
                         >
-                          확인
+                          {"\ud655\uc778"}
                         </button>
                       </div>
                     </div>
@@ -1098,9 +1534,11 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                       </div>
                       <div className="text-sm text-zinc-100">
                         <span className="font-semibold">
-                          「{inventoryNotice.ownerName}」
+                          {"\u300c"}
+                          {inventoryNotice.ownerName}
+                          {"\u300d"}
                         </span>
-                        의 [
+                        , [
                         <span
                           className={[
                             "font-semibold",
@@ -1120,7 +1558,7 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
                           className="rounded-md bg-zinc-800 px-3 py-1.5 text-xs font-semibold text-zinc-100 hover:bg-zinc-700"
                           onClick={() => setInventoryNotice(null)}
                         >
-                          확인
+                          {"\ud655\uc778"}
                         </button>
                       </div>
                     </div>
@@ -1139,3 +1577,6 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
     </div>
   );
 }
+
+
+
