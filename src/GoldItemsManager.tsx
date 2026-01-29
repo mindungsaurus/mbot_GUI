@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   AuthUser,
   GoldCharacter,
@@ -67,6 +67,14 @@ const ITEM_TYPE_PICKER = [
 ] as const;
 
 const CATALOG_PAGE_SIZE = 12;
+const LS_ITEMS_CHANNEL = "gold_items_discord_channel";
+
+function sanitizeChannelId(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  const match = trimmed.match(/\d{5,}/);
+  return match ? match[0] : "";
+}
 
 function formatNumber(value: number | null | undefined): string {
   if (value === null || value === undefined) return "0";
@@ -234,6 +242,17 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
     qualityLabel: string;
     unit?: string | null;
   } | null>(null);
+
+  const [discordChannelOpen, setDiscordChannelOpen] = useState(false);
+  const [discordChannelDraft, setDiscordChannelDraft] = useState("");
+  const [discordChannelId, setDiscordChannelId] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem(LS_ITEMS_CHANNEL) ?? "";
+  });
+  const channelId = useMemo(
+    () => sanitizeChannelId(discordChannelId),
+    [discordChannelId],
+  );
 
 
   const selected = useMemo(
@@ -413,12 +432,32 @@ return characters.filter(
     setInventoryAmount("1");
   }, [inventoryMode]);
 
+  useEffect(() => {
+    if (!isAdmin && inventoryMode !== "none") {
+      setInventoryMode("none");
+    }
+  }, [isAdmin, inventoryMode]);
+
   const parseAmount = (raw: string): number | null => {
     const trimmed = raw.trim();
     if (!trimmed) return null;
     const value = Number(trimmed);
     if (!Number.isFinite(value) || value <= 0) return null;
     return Math.trunc(value);
+  };
+
+  const openDiscordSettings = () => {
+    setDiscordChannelDraft(discordChannelId);
+    setDiscordChannelOpen(true);
+  };
+
+  const saveDiscordSettings = () => {
+    const next = sanitizeChannelId(discordChannelDraft);
+    setDiscordChannelId(next);
+    if (typeof window !== "undefined") {
+      localStorage.setItem(LS_ITEMS_CHANNEL, next);
+    }
+    setDiscordChannelOpen(false);
   };
 
   const openInventoryConfirm = (mode: "consume" | "acquire") => {
@@ -487,6 +526,7 @@ return characters.filter(
         quality: newItemQuality,
         type: newItemType,
         unit,
+        channelId: channelId || undefined,
       });
       await reloadCatalog();
       setSelectedCatalogName(name);
@@ -538,6 +578,7 @@ return characters.filter(
       owner: selected.name,
       itemName: selectedInventoryName,
       amount,
+      channelId: channelId || undefined,
     });
     await reloadInventory(selected.name);
     const delta = Math.min(before, amount);
@@ -603,6 +644,7 @@ const handleAcquire = async () => {
       owner: selected.name,
       itemName: selectedCatalogName,
       amount,
+      channelId: channelId || undefined,
     });
     await reloadInventory(selected.name);
     const delta = amount;
@@ -656,6 +698,14 @@ useEffect(() => {
               onClick={() => reloadCharacters(true)}
               disabled={busy}
             >{"\uc0c8\ub85c\uace0\uce68"}</button>
+            <button
+              type="button"
+              className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-500"
+              onClick={openDiscordSettings}
+              disabled={busy}
+            >
+              {"\ub514\uc2a4\ucf54\ub4dc \uc124\uc815"}
+            </button>
           </div>
         </header>
 
@@ -680,7 +730,7 @@ useEffect(() => {
             <input
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="검색"
+              placeholder={"\uac80\uc0c9"}
               className="h-8 rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
             />
 
@@ -723,9 +773,9 @@ useEffect(() => {
             <div className="flex gap-2">
               {(
                 [
-                  { key: "gold", label: "골드 관리" },
-                  { key: "inventory", label: "인벤토리" },
-                  { key: "sheet", label: "캐릭터 시트" },
+                  { key: "gold", label: "\uace8\ub4dc \uad00\ub9ac" },
+                  { key: "inventory", label: "\uc778\ubca4\ud1a0\ub9ac" },
+                  { key: "sheet", label: "\uce90\ub9ad\ud130 \uc2dc\ud2b8" },
                 ] as const
               ).map((tab) => {
                 const active = activeTab === tab.key;
@@ -868,40 +918,42 @@ useEffect(() => {
               <section className="flex-1 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
                 <div className="mb-3 flex items-center justify-between">
                   <div className="text-sm font-semibold text-zinc-200">{"\uce90\ub9ad\ud130 \ubaa9\ub85d"}</div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      className={[
-                        "rounded-md border px-2.5 py-1 text-[11px] font-semibold",
-                        inventoryMode === "acquire"
-                          ? "border-amber-500/70 bg-amber-950/30 text-amber-100"
-                          : "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:border-zinc-700",
-                      ].join(" ")}
-                      onClick={() =>
-                        setInventoryMode(
-                          inventoryMode === "acquire" ? "none" : "acquire",
-                        )
-                      }
-                    >
-                      {"\uc544\uc774\ud15c \ud68d\ub4dd"}
-                    </button>
-                    <button
-                      type="button"
-                      className={[
-                        "rounded-md border px-2.5 py-1 text-[11px] font-semibold",
-                        inventoryMode === "consume"
-                          ? "border-amber-500/70 bg-amber-950/30 text-amber-100"
-                          : "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:border-zinc-700",
-                      ].join(" ")}
-                      onClick={() =>
-                        setInventoryMode(
-                          inventoryMode === "consume" ? "none" : "consume",
-                        )
-                      }
-                    >
-                      {"\uc544\uc774\ud15c \uc18c\ubaa8"}
-                    </button>
-                  </div>
+                  {isAdmin ? (
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        className={[
+                          "rounded-md border px-2.5 py-1 text-[11px] font-semibold",
+                          inventoryMode === "acquire"
+                            ? "border-amber-500/70 bg-amber-950/30 text-amber-100"
+                            : "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:border-zinc-700",
+                        ].join(" ")}
+                        onClick={() =>
+                          setInventoryMode(
+                            inventoryMode === "acquire" ? "none" : "acquire",
+                          )
+                        }
+                      >
+                        {"\uc544\uc774\ud15c \ud68d\ub4dd"}
+                      </button>
+                      <button
+                        type="button"
+                        className={[
+                          "rounded-md border px-2.5 py-1 text-[11px] font-semibold",
+                          inventoryMode === "consume"
+                            ? "border-amber-500/70 bg-amber-950/30 text-amber-100"
+                            : "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:border-zinc-700",
+                        ].join(" ")}
+                        onClick={() =>
+                          setInventoryMode(
+                            inventoryMode === "consume" ? "none" : "consume",
+                          )
+                        }
+                      >
+                        {"\uc544\uc774\ud15c \uc18c\ubaa8"}
+                      </button>
+                    </div>
+                   ) : null}
                 </div>
 
                 <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -929,7 +981,7 @@ useEffect(() => {
                 <input
                   value={inventorySearch}
                   onChange={(e) => setInventorySearch(e.target.value)}
-                  placeholder={"아이템 검색"}
+                  placeholder={"\uc544\uc774\ud15c \uac80\uc0c9"}
                   className="mb-3 h-8 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
                 />
 
@@ -967,27 +1019,9 @@ useEffect(() => {
                       <input
                         value={inventoryAmount}
                         onChange={(e) => setInventoryAmount(e.target.value)}
-                        placeholder={"수량"}
+                        placeholder={"\uc218\ub7c9"}
                         className="h-8 w-24 rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
                       />
-                      <button
-                        type="button"
-                        className="rounded-md bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
-                        onClick={() =>
-                          openInventoryConfirm(
-                            inventoryMode === "consume" ? "consume" : "acquire",
-                          )
-                        }
-                        disabled={
-                          busy ||
-                          (inventoryMode === "consume"
-                            ? !selectedInventoryName
-                            : !selectedCatalogName) ||
-                          !inventoryAmount.trim()
-                        }
-                      >
-                        {"\uc801\uc6a9"}
-                      </button>
                     </div>
 
                     {inventoryMode === "acquire" ? (
@@ -998,8 +1032,36 @@ useEffect(() => {
                   </div>
                 ) : null}
 
+                {inventoryMode === "consume" ? (
+                  <button
+                    type="button"
+                    className="mb-3 w-full rounded-lg bg-emerald-700 px-4 py-2 text-center text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+                    onClick={() => openInventoryConfirm("consume")}
+                    disabled={
+                      busy ||
+                      !selectedInventoryName ||
+                      !inventoryAmount.trim()
+                    }
+                  >
+                    {"\uc120\ud0dd\ud55c \uc544\uc774\ud15c \uc18c\ubaa8"}
+                  </button>
+                ) : null}
+
                 {inventoryMode === "acquire" ? (
                   <>
+                    <button
+                      type="button"
+                      className="mb-2 w-full rounded-lg bg-emerald-700 px-4 py-2 text-center text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+                      onClick={() => openInventoryConfirm("acquire")}
+                      disabled={
+                        busy || !selectedCatalogName || !inventoryAmount.trim()
+                      }
+                    >
+                      {"\uc120\ud0dd\ud55c \uc544\uc774\ud15c \ud68d\ub4dd"}
+                    </button>
+                    <div className="mb-2 text-center text-[11px] text-zinc-500">
+                      {"\ub610\ub294"}
+                    </div>
                     <button
                       type="button"
                       className="mb-2 w-full rounded-lg border border-amber-500/60 bg-amber-700/70 px-4 py-2 text-center text-xs font-semibold text-amber-50 hover:bg-amber-600/80"
@@ -1361,6 +1423,8 @@ useEffect(() => {
                   </div>
                 ) : null}
 
+                
+
                 {inventoryConfirm ? (
                   <div
                     className="fixed inset-0 z-40 flex items-center justify-center"
@@ -1571,6 +1635,61 @@ useEffect(() => {
                 <div className="min-h-[280px]" />
               </section>
             ) : null}
+
+        {discordChannelOpen ? (
+                  <div
+                    className="fixed inset-0 z-40 flex items-center justify-center"
+                    role="dialog"
+                    aria-modal="true"
+                  >
+                    <div
+                      className="absolute inset-0 bg-black/40"
+                      onClick={() => setDiscordChannelOpen(false)}
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Close overlay"
+                      onKeyDown={(e) =>
+                        e.key === "Enter" && setDiscordChannelOpen(false)
+                      }
+                    />
+                    <div className="relative z-50 w-[min(420px,92vw)] rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
+                      <div className="mb-2 flex items-center justify-between">
+                        <div className="text-sm font-semibold text-zinc-100">
+                          {"\ub514\uc2a4\ucf54\ub4dc \uc124\uc815"}
+                        </div>
+                        <button
+                          type="button"
+                          className="rounded-md border border-zinc-700 px-2.5 py-1 text-[11px] text-zinc-200 hover:border-zinc-600"
+                          onClick={() => setDiscordChannelOpen(false)}
+                        >
+                          {"\ub2eb\uae30"}
+                        </button>
+                      </div>
+                      <div className="text-xs text-zinc-400">
+                        {"\ucc44\ub110 ID\ub97c \uc785\ub825\ud574 \uc8fc\uc138\uc694. (\uc22b\uc790 \ub610\ub294 <#...> \ubd99\uc5ec\ub123\uae30)"}
+                      </div>
+                      <input
+                        value={discordChannelDraft}
+                        onChange={(e) => setDiscordChannelDraft(e.target.value)}
+                        placeholder={"\ucc44\ub110 ID \ub610\ub294 <#...>"}
+                        className="mt-2 h-9 w-full rounded-md border border-zinc-800 bg-zinc-950 px-3 text-xs text-zinc-100 outline-none focus:border-zinc-600"
+                      />
+                      <div className="mt-2 text-xs text-zinc-500">
+                        {"\ud604\uc7ac \ucc44\ub110: "}
+                        <span className="text-zinc-200">{channelId || "-"}</span>
+                      </div>
+                      <div className="mt-4 flex justify-end">
+                        <button
+                          type="button"
+                          className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+                          onClick={saveDiscordSettings}
+                        >
+                          {"\uc800\uc7a5"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
           </div>
         </div>
       </div>

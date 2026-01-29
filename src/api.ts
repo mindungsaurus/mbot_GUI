@@ -372,6 +372,7 @@ export async function addInventoryItem(body: {
   owner: string;
   itemName: string;
   amount: number;
+  channelId?: string;
 }) {
   const res = await fetch(`${API_BASE}/items/inventory/add`, {
     method: "POST",
@@ -386,6 +387,7 @@ export async function useInventoryItem(body: {
   owner: string;
   itemName: string;
   amount: number;
+  channelId?: string;
 }) {
   const res = await fetch(`${API_BASE}/items/inventory/use`, {
     method: "POST",
@@ -401,6 +403,7 @@ export async function createItemCatalog(payload: {
   quality: string;
   type: string;
   unit: string;
+  channelId?: string;
 }) {
   const res = await fetch(`${API_BASE}/items/catalog/add`, {
     method: "POST",
