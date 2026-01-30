@@ -437,16 +437,23 @@ export default function UnitsPanel(props: {
   const [presetFolderFilter, setPresetFolderFilter] = useState<string>("ALL");
   const [presetQuery, setPresetQuery] = useState("");
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
+  const [presetQuantities, setPresetQuantities] = useState<
+    Record<string, string>
+  >({});
   const [presetPos, setPresetPos] = useState<{ x: number; z: number }>({
     x: 0,
     z: 0,
   });
   const [presetMasterId, setPresetMasterId] = useState("");
-  const [presetFormulaParams, setPresetFormulaParams] = useState<
-    Record<string, string>
+  const [presetFormulaParamsById, setPresetFormulaParamsById] = useState<
+    Record<string, Record<string, string>>
   >({});
-  const [presetHpMinInput, setPresetHpMinInput] = useState("");
-  const [presetHpMaxInput, setPresetHpMaxInput] = useState("");
+  const [presetHpMinById, setPresetHpMinById] = useState<Record<string, string>>(
+    {}
+  );
+  const [presetHpMaxById, setPresetHpMaxById] = useState<Record<string, string>>(
+    {}
+  );
 
   const [panelMode, setPanelMode] = useState<"units" | "markers">("units");
   const isMarkerMode = panelMode === "markers";
@@ -488,6 +495,18 @@ export default function UnitsPanel(props: {
     for (const name of Object.keys(presetFormulaDefaults)) keys.add(name);
     return Array.from(keys);
   }, [presetFormulaExpr, presetFormulaDefaults]);
+  const activePresetParams = useMemo(() => {
+    if (!selectedPresetId) return {};
+    return presetFormulaParamsById[selectedPresetId] ?? {};
+  }, [presetFormulaParamsById, selectedPresetId]);
+  const activeHpMinInput = useMemo(() => {
+    if (!selectedPresetId) return "";
+    return presetHpMinById[selectedPresetId] ?? "";
+  }, [presetHpMinById, selectedPresetId]);
+  const activeHpMaxInput = useMemo(() => {
+    if (!selectedPresetId) return "";
+    return presetHpMaxById[selectedPresetId] ?? "";
+  }, [presetHpMaxById, selectedPresetId]);
   const presetDefaultRange = useMemo(() => {
     if (!presetFormulaExpr) return null;
     const params = buildFormulaParamValues(
@@ -544,6 +563,12 @@ export default function UnitsPanel(props: {
     }
     return [...list].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   }, [presetList, presetFolderFilter, presetQuery]);
+  const presetSelectedCount = useMemo(() => {
+    return presetList.reduce((sum, preset) => {
+      const qty = clampInt(presetQuantities[preset.id] ?? "", 0);
+      return sum + (qty > 0 ? qty : 0);
+    }, 0);
+  }, [presetList, presetQuantities]);
   const normalUnits = useMemo(
     () => units.filter((u) => (u.unitType ?? "NORMAL") === "NORMAL"),
     [units]
@@ -570,24 +595,55 @@ export default function UnitsPanel(props: {
 
   useEffect(() => {
     if (!presetOpen) return;
+    if (!selectedPresetId) return;
+    const existingParams = presetFormulaParamsById[selectedPresetId];
+    const existingMin = presetHpMinById[selectedPresetId];
+    const existingMax = presetHpMaxById[selectedPresetId];
     if (!presetFormulaExpr) {
-      setPresetFormulaParams({});
-      setPresetHpMinInput("");
-      setPresetHpMaxInput("");
+      setPresetFormulaParamsById((prev) => ({
+        ...prev,
+        [selectedPresetId]: {},
+      }));
+      setPresetHpMinById((prev) => ({ ...prev, [selectedPresetId]: "" }));
+      setPresetHpMaxById((prev) => ({ ...prev, [selectedPresetId]: "" }));
       return;
     }
-    const next: Record<string, string> = {};
-    const keys = new Set<string>(presetFormulaParamKeys);
-    for (const name of keys) {
-      const raw = presetFormulaDefaults[name];
-      next[name] = typeof raw === "number" ? String(raw) : "";
+    if (!existingParams || Object.keys(existingParams).length === 0) {
+      const next: Record<string, string> = {};
+      const keys = new Set<string>(presetFormulaParamKeys);
+      for (const name of keys) {
+        const raw = presetFormulaDefaults[name];
+        next[name] = typeof raw === "number" ? String(raw) : "";
+      }
+      setPresetFormulaParamsById((prev) => ({
+        ...prev,
+        [selectedPresetId]: next,
+      }));
     }
-    setPresetFormulaParams(next);
-    const minRaw = selectedPreset?.data?.hpFormula?.min;
-    const maxRaw = selectedPreset?.data?.hpFormula?.max;
-    setPresetHpMinInput(typeof minRaw === "number" ? String(minRaw) : "");
-    setPresetHpMaxInput(typeof maxRaw === "number" ? String(maxRaw) : "");
-  }, [presetOpen, selectedPresetId, presetFormulaExpr, presetFormulaParamKeys, presetFormulaDefaults]);
+    if (existingMin === undefined) {
+      const minRaw = selectedPreset?.data?.hpFormula?.min;
+      setPresetHpMinById((prev) => ({
+        ...prev,
+        [selectedPresetId]: typeof minRaw === "number" ? String(minRaw) : "",
+      }));
+    }
+    if (existingMax === undefined) {
+      const maxRaw = selectedPreset?.data?.hpFormula?.max;
+      setPresetHpMaxById((prev) => ({
+        ...prev,
+        [selectedPresetId]: typeof maxRaw === "number" ? String(maxRaw) : "",
+      }));
+    }
+  }, [
+    presetOpen,
+    selectedPresetId,
+    presetFormulaExpr,
+    presetFormulaParamKeys,
+    presetFormulaDefaults,
+    presetFormulaParamsById,
+    presetHpMinById,
+    presetHpMaxById,
+  ]);
 
 
   useEffect(() => {
@@ -659,6 +715,34 @@ export default function UnitsPanel(props: {
       const nextPresets = Array.isArray(res.presets) ? res.presets : [];
       setPresetFolders(nextFolders);
       setPresetList(nextPresets);
+      setPresetFormulaParamsById((prev) => {
+        const next: Record<string, Record<string, string>> = {};
+        for (const preset of nextPresets) {
+          next[preset.id] = prev[preset.id] ?? {};
+        }
+        return next;
+      });
+      setPresetHpMinById((prev) => {
+        const next: Record<string, string> = {};
+        for (const preset of nextPresets) {
+          next[preset.id] = prev[preset.id] ?? "";
+        }
+        return next;
+      });
+      setPresetHpMaxById((prev) => {
+        const next: Record<string, string> = {};
+        for (const preset of nextPresets) {
+          next[preset.id] = prev[preset.id] ?? "";
+        }
+        return next;
+      });
+      setPresetQuantities((prev) => {
+        const next: Record<string, string> = {};
+        for (const preset of nextPresets) {
+          next[preset.id] = prev[preset.id] ?? "";
+        }
+        return next;
+      });
       if (!selectedPresetId && nextPresets.length > 0) {
         setSelectedPresetId(nextPresets[0].id);
       }
@@ -675,6 +759,10 @@ export default function UnitsPanel(props: {
     setPresetFolderFilter("ALL");
     setPresetQuery("");
     setSelectedPresetId(null);
+    setPresetQuantities({});
+    setPresetFormulaParamsById({});
+    setPresetHpMinById({});
+    setPresetHpMaxById({});
     setPresetOpen(true);
     setCreateOpen(false);
   }
@@ -757,23 +845,25 @@ export default function UnitsPanel(props: {
   }
 
   async function submitPresetCreate() {
-    if (!selectedPreset) {
-      setPresetErr("프리셋을 선택해줘.");
+    setPresetErr(null);
+    const entries = presetList
+      .map((preset) => ({
+        preset,
+        qty: clampInt(presetQuantities[preset.id] ?? "", 0),
+      }))
+      .filter((entry) => entry.qty > 0);
+
+    if (entries.length === 0) {
+      setPresetErr("불러올 프리셋 수량을 입력해줘.");
       return;
     }
-    const data = selectedPreset.data ?? {};
-    const rawPresetNote =
-      typeof data.note === "string"
-        ? data.note
-        : typeof (data as any).memo === "string"
-          ? (data as any).memo
-          : typeof (selectedPreset as any).note === "string"
-            ? (selectedPreset as any).note
-            : "";
-    const presetNote = rawPresetNote.trim();
-    const unitType = (data.unitType ?? "NORMAL") as UnitKind;
+
+    const needsMaster = entries.some((entry) => {
+      const unitType = (entry.preset.data?.unitType ?? "NORMAL") as UnitKind;
+      return unitType === "SERVANT";
+    });
     const masterUnitId = presetMasterId.trim();
-    if (unitType === "SERVANT") {
+    if (needsMaster) {
       if (!masterUnitId) {
         setPresetErr("서번트는 사역자를 지정해야 해.");
         return;
@@ -786,165 +876,202 @@ export default function UnitsPanel(props: {
       }
     }
 
-    const unitId =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `preset_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-
-    const hpMax = Math.max(0, Math.floor(Number(data.hp?.max ?? 0)));
-    const acBase = Math.max(0, Math.floor(Number(data.acBase ?? 0)));
     const x = clampInt(presetPos.x, 0);
     const z = clampInt(presetPos.z, 0);
-    const hpFormulaExpr =
-      typeof data.hpFormula?.expr === "string"
-        ? data.hpFormula.expr.trim()
-        : "";
-    let hpFormula: CreateUnitPayload["hpFormula"] | undefined = undefined;
-    if (hpFormulaExpr) {
-      const defaultParams = data.hpFormula?.params ?? {};
-      const paramValues: Record<string, number> = {};
-      const requiredParams = extractHpFormulaParams(hpFormulaExpr);
-      const allKeys = new Set<string>([
-        ...requiredParams,
-        ...Object.keys(defaultParams),
-        ...Object.keys(presetFormulaParams),
-      ]);
-      for (const rawName of allKeys) {
-        const name = String(rawName ?? "").trim();
-        if (!name) continue;
-        const rawInput = (presetFormulaParams[name] ?? "").trim();
-        if (rawInput === "") {
-          const fallback = defaultParams[name];
-          if (typeof fallback === "number") {
-            paramValues[name] = fallback;
+
+    setPresetLoading(true);
+    try {
+      for (const entry of entries) {
+        const preset = entry.preset;
+        const isSelected = preset.id === selectedPresetId;
+        const data = preset.data ?? {};
+        const rawPresetNote =
+          typeof data.note === "string"
+            ? data.note
+            : typeof (data as any).memo === "string"
+              ? (data as any).memo
+              : typeof (preset as any).note === "string"
+                ? (preset as any).note
+                : "";
+        const presetNote = rawPresetNote.trim();
+        const unitType = (data.unitType ?? "NORMAL") as UnitKind;
+
+        const hpMax = Math.max(0, Math.floor(Number(data.hp?.max ?? 0)));
+        const acBase = Math.max(0, Math.floor(Number(data.acBase ?? 0)));
+        const hpFormulaExpr =
+          typeof data.hpFormula?.expr === "string"
+            ? data.hpFormula.expr.trim()
+            : "";
+        let hpFormula: CreateUnitPayload["hpFormula"] | undefined = undefined;
+        if (hpFormulaExpr) {
+          const defaultParams = data.hpFormula?.params ?? {};
+          const paramValues: Record<string, number> = {};
+          const requiredParams = extractHpFormulaParams(hpFormulaExpr);
+          const overrideSource = isSelected
+            ? presetFormulaParamsById[preset.id] ?? {}
+            : presetFormulaParamsById[preset.id] ?? {};
+          const allKeys = new Set<string>([
+            ...requiredParams,
+            ...Object.keys(defaultParams),
+            ...Object.keys(overrideSource),
+          ]);
+          for (const rawName of allKeys) {
+            const name = String(rawName ?? "").trim();
+            if (!name) continue;
+            const rawInput = (overrideSource[name] ?? "").trim();
+            if (rawInput === "") {
+              const fallback = defaultParams[name];
+              if (typeof fallback === "number") {
+                paramValues[name] = fallback;
+              }
+              continue;
+            }
+            const parsed = Number(rawInput);
+            if (!Number.isFinite(parsed)) {
+              setPresetErr(`HP 공식 파라미터 "${name}" 값이 숫자가 아니야.`);
+              return;
+            }
+            paramValues[name] = parsed;
           }
-          continue;
-        }
-        const parsed = Number(rawInput);
-        if (!Number.isFinite(parsed)) {
-          setPresetErr(`HP 공식 파라미터 "${name}" 값이 숫자가 아니야.`);
-          return;
-        }
-        paramValues[name] = parsed;
-      }
-      const missing = requiredParams.filter(
-        (name) => paramValues[name] === undefined
-      );
-      if (missing.length > 0) {
-        setPresetErr(`HP 공식 파라미터가 누락됐어: ${missing.join(", ")}`);
-        return;
-      }
-      const rawMin = presetHpMinInput.trim();
-      const rawMax = presetHpMaxInput.trim();
-      let minValue: number | undefined = undefined;
-      let maxValue: number | undefined = undefined;
-      if (rawMin) {
-        const parsed = Number(rawMin);
-        if (!Number.isFinite(parsed)) {
-          setPresetErr("HP 공식 최소값이 숫자가 아니야.");
-          return;
-        }
-        minValue = parsed;
-      } else if (typeof data.hpFormula?.min === "number") {
-        minValue = data.hpFormula.min;
-      }
-      if (rawMax) {
-        const parsed = Number(rawMax);
-        if (!Number.isFinite(parsed)) {
-          setPresetErr("HP 공식 최대값이 숫자가 아니야.");
-          return;
-        }
-        maxValue = parsed;
-      } else if (typeof data.hpFormula?.max === "number") {
-        maxValue = data.hpFormula.max;
-      }
-      hpFormula = {
-        expr: hpFormulaExpr,
-        ...(Object.keys(paramValues).length > 0 ? { params: paramValues } : {}),
-        ...(typeof minValue === "number" ? { min: minValue } : {}),
-        ...(typeof maxValue === "number" ? { max: maxValue } : {}),
-      };
-    }
-
-    const payload: CreateUnitPayload = {
-      unitId,
-      name: (data.name ?? selectedPreset.name ?? "유닛").trim(),
-      side: (data.side ?? "TEAM") as Side,
-      unitType,
-      ...(unitType === "SERVANT" ? { masterUnitId } : {}),
-      ...(data.alias ? { alias: data.alias } : {}),
-      ...(presetNote ? { note: presetNote } : {}),
-      hpMax,
-      ...(hpFormula ? { hpFormula } : {}),
-      acBase,
-      x,
-      z,
-      ...(typeof data.colorCode === "number" ? { colorCode: data.colorCode } : {}),
-      turnOrderIndex: turnOrderLen,
-    };
-
-    const patch: UnitPatch = {};
-    const tempValue =
-      typeof data.hp?.temp === "number" ? Number(data.hp.temp) : undefined;
-    if (!hpFormulaExpr && data.hp && typeof data.hp.max === "number") {
-      const max = Math.max(0, Math.floor(Number(data.hp.max)));
-      const cur = Math.max(0, Math.floor(Number(data.hp.cur ?? max)));
-      patch.hp = {
-        cur,
-        max,
-        ...(typeof tempValue === "number" ? { temp: tempValue } : {}),
-      };
-    } else if (typeof tempValue === "number") {
-      patch.hp = { temp: tempValue };
-    }
-    if (typeof data.integrityBase === "number") {
-      patch.integrity = Math.max(0, Math.floor(Number(data.integrityBase)));
-    }
-    if (Array.isArray(data.tags)) {
-      patch.tags = { set: data.tags };
-    }
-    if (data.tagStates && Object.keys(data.tagStates).length > 0) {
-      const nextTagStates: Record<string, any> = {};
-      for (const [key, st] of Object.entries(data.tagStates)) {
-        if (!st) continue;
-        nextTagStates[key] = {
-          stacks: Math.max(1, Math.floor(Number(st.stacks ?? 1))),
-          decOnTurnStart: !!st.decOnTurnStart,
-          decOnTurnEnd: !!st.decOnTurnEnd,
-        };
-      }
-      if (Object.keys(nextTagStates).length > 0) patch.tagStates = nextTagStates;
-    }
-    if (data.spellSlots && Object.keys(data.spellSlots).length > 0) {
-      patch.spellSlots = data.spellSlots as Record<number, number>;
-    }
-    if (data.consumables && Object.keys(data.consumables).length > 0) {
-      patch.consumables = data.consumables as Record<string, number>;
-    }
-    if (presetNote) patch.note = presetNote;
-    if (typeof data.colorCode === "number") patch.colorCode = data.colorCode;
-    if (typeof data.hidden === "boolean") patch.hidden = data.hidden;
-    if (typeof data.turnDisabled === "boolean") {
-      patch.turnDisabled = data.turnDisabled;
-    }
-
-    const deathSaves =
-      data.deathSaves &&
-      (Number(data.deathSaves.success) > 0 ||
-        Number(data.deathSaves.failure) > 0)
-        ? {
-            success: Math.max(0, Math.floor(Number(data.deathSaves.success ?? 0))),
-            failure: Math.max(0, Math.floor(Number(data.deathSaves.failure ?? 0))),
+          const missing = requiredParams.filter(
+            (name) => paramValues[name] === undefined
+          );
+          if (missing.length > 0) {
+            setPresetErr(`HP 공식 파라미터가 누락됐어: ${missing.join(", ")}`);
+            return;
           }
-        : undefined;
+          const rawMin = (presetHpMinById[preset.id] ?? "").trim();
+          const rawMax = (presetHpMaxById[preset.id] ?? "").trim();
+          let minValue: number | undefined = undefined;
+          let maxValue: number | undefined = undefined;
+          if (rawMin) {
+            const parsed = Number(rawMin);
+            if (!Number.isFinite(parsed)) {
+              setPresetErr("HP 공식 최소값이 숫자가 아니야.");
+              return;
+            }
+            minValue = parsed;
+          } else if (typeof data.hpFormula?.min === "number") {
+            minValue = data.hpFormula.min;
+          }
+          if (rawMax) {
+            const parsed = Number(rawMax);
+            if (!Number.isFinite(parsed)) {
+              setPresetErr("HP 공식 최대값이 숫자가 아니야.");
+              return;
+            }
+            maxValue = parsed;
+          } else if (typeof data.hpFormula?.max === "number") {
+            maxValue = data.hpFormula.max;
+          }
+          hpFormula = {
+            expr: hpFormulaExpr,
+            ...(Object.keys(paramValues).length > 0
+              ? { params: paramValues }
+              : {}),
+            ...(typeof minValue === "number" ? { min: minValue } : {}),
+            ...(typeof maxValue === "number" ? { max: maxValue } : {}),
+          };
+        }
 
-    await onCreateUnitFromPreset(
-      payload,
-      Object.keys(patch).length > 0 ? patch : null,
-      deathSaves
-    );
+        const patch: UnitPatch = {};
+        const tempValue =
+          typeof data.hp?.temp === "number" ? Number(data.hp.temp) : undefined;
+        if (!hpFormulaExpr && data.hp && typeof data.hp.max === "number") {
+          const max = Math.max(0, Math.floor(Number(data.hp.max)));
+          const cur = Math.max(0, Math.floor(Number(data.hp.cur ?? max)));
+          patch.hp = {
+            cur,
+            max,
+            ...(typeof tempValue === "number" ? { temp: tempValue } : {}),
+          };
+        } else if (typeof tempValue === "number") {
+          patch.hp = { temp: tempValue };
+        }
+        if (typeof data.integrityBase === "number") {
+          patch.integrity = Math.max(0, Math.floor(Number(data.integrityBase)));
+        }
+        if (Array.isArray(data.tags)) {
+          patch.tags = { set: data.tags };
+        }
+        if (data.tagStates && Object.keys(data.tagStates).length > 0) {
+          const nextTagStates: Record<string, any> = {};
+          for (const [key, st] of Object.entries(data.tagStates)) {
+            if (!st) continue;
+            nextTagStates[key] = {
+              stacks: Math.max(1, Math.floor(Number(st.stacks ?? 1))),
+              decOnTurnStart: !!st.decOnTurnStart,
+              decOnTurnEnd: !!st.decOnTurnEnd,
+            };
+          }
+          if (Object.keys(nextTagStates).length > 0)
+            patch.tagStates = nextTagStates;
+        }
+        if (data.spellSlots && Object.keys(data.spellSlots).length > 0) {
+          patch.spellSlots = data.spellSlots as Record<number, number>;
+        }
+        if (data.consumables && Object.keys(data.consumables).length > 0) {
+          patch.consumables = data.consumables as Record<string, number>;
+        }
+        if (presetNote) patch.note = presetNote;
+        if (typeof data.colorCode === "number") patch.colorCode = data.colorCode;
+        if (typeof data.hidden === "boolean") patch.hidden = data.hidden;
+        if (typeof data.turnDisabled === "boolean") {
+          patch.turnDisabled = data.turnDisabled;
+        }
 
-    closePresetPicker();
+        const deathSaves =
+          data.deathSaves &&
+          (Number(data.deathSaves.success) > 0 ||
+            Number(data.deathSaves.failure) > 0)
+            ? {
+                success: Math.max(
+                  0,
+                  Math.floor(Number(data.deathSaves.success ?? 0))
+                ),
+                failure: Math.max(
+                  0,
+                  Math.floor(Number(data.deathSaves.failure ?? 0))
+                ),
+              }
+            : undefined;
+
+        for (let i = 0; i < entry.qty; i += 1) {
+          const unitId =
+            typeof crypto !== "undefined" && "randomUUID" in crypto
+              ? crypto.randomUUID()
+              : `preset_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+          const payload: CreateUnitPayload = {
+            unitId,
+            name: (data.name ?? preset.name ?? "유닛").trim(),
+            side: (data.side ?? "TEAM") as Side,
+            unitType,
+            ...(unitType === "SERVANT" ? { masterUnitId } : {}),
+            ...(data.alias ? { alias: data.alias } : {}),
+            ...(presetNote ? { note: presetNote } : {}),
+            hpMax,
+            ...(hpFormula ? { hpFormula } : {}),
+            acBase,
+            x,
+            z,
+            ...(typeof data.colorCode === "number"
+              ? { colorCode: data.colorCode }
+              : {}),
+            turnOrderIndex: turnOrderLen,
+          };
+
+          await onCreateUnitFromPreset(
+            payload,
+            Object.keys(patch).length > 0 ? patch : null,
+            deathSaves
+          );
+        }
+      }
+
+      closePresetPicker();
+    } finally {
+      setPresetLoading(false);
+    }
   }
 
   function handlePlusClick() {
@@ -1030,9 +1157,18 @@ export default function UnitsPanel(props: {
   );
 
   async function handleRemove(u: Unit) {
-    const ok = window.confirm(`Remove unit: ${u.name}?`);
+    const ok = window.confirm(`총 1개의 유닛을 삭제합니다.`);
     if (!ok) return;
     await onRemoveUnit(u.id);
+  }
+
+  async function handleRemoveMany(unitIds: string[]) {
+    if (unitIds.length === 0) return;
+    const ok = window.confirm(`총 ${unitIds.length}개의 유닛을 삭제합니다.`);
+    if (!ok) return;
+    for (const id of unitIds) {
+      await onRemoveUnit(id);
+    }
   }
 
   function handleDragStart(unitId: string, e: DragEvent<HTMLDivElement>) {
@@ -1761,6 +1897,10 @@ export default function UnitsPanel(props: {
                   placeholder="프리셋 검색"
                   className="mb-2 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-zinc-600"
                 />
+                <div className="mb-1 flex items-center justify-between text-[10px] text-zinc-500">
+                  <span>프리셋 목록</span>
+                  <span className="pr-1">수량</span>
+                </div>
                 <div className="max-h-60 space-y-1 overflow-auto">
                   {filteredPresets.length === 0 ? (
                     <div className="rounded-md border border-zinc-800 bg-zinc-950/30 p-2 text-xs text-zinc-500">
@@ -1768,29 +1908,53 @@ export default function UnitsPanel(props: {
                     </div>
                   ) : (
                     filteredPresets.map((preset) => (
-                      <button
+                      <div
                         key={preset.id}
-                        type="button"
-                        onClick={() => setSelectedPresetId(preset.id)}
-                        className={[
-                          "w-full rounded-md border px-2 py-1 text-left text-xs",
-                          preset.id === selectedPresetId
-                            ? "border-amber-700/70 bg-amber-950/30 text-amber-100"
-                            : "border-zinc-800 bg-zinc-950/30 text-zinc-300 hover:bg-zinc-800/60",
-                        ].join(" ")}
+                        className="flex items-stretch gap-2"
                       >
-                        <div className="font-semibold">{preset.name}</div>
-                        <div
-                          className="text-[10px]"
-                          style={
-                            typeof preset.data?.colorCode === "number"
-                              ? { color: ansiColorCodeToCss(preset.data.colorCode) }
-                              : undefined
-                          }
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPresetId(preset.id)}
+                          className={[
+                            "flex-1 rounded-md border px-2 py-1 text-left text-xs",
+                            preset.id === selectedPresetId
+                              ? "border-amber-700/70 bg-amber-950/30 text-amber-100"
+                              : "border-zinc-800 bg-zinc-950/30 text-zinc-300 hover:bg-zinc-800/60",
+                          ].join(" ")}
                         >
-                          {preset.data?.name ?? "유닛"}
-                        </div>
-                      </button>
+                          <div className="font-semibold">{preset.name}</div>
+                          <div
+                            className="text-[10px]"
+                            style={
+                              typeof preset.data?.colorCode === "number"
+                                ? {
+                                    color: ansiColorCodeToCss(
+                                      preset.data.colorCode
+                                    ),
+                                  }
+                                : undefined
+                            }
+                          >
+                            {preset.data?.name ?? "유닛"}
+                          </div>
+                        </button>
+                        <input
+                          value={presetQuantities[preset.id] ?? ""}
+                          onChange={(e) => {
+                            const nextValue = e.target.value.replace(
+                              /[^0-9]/g,
+                              ""
+                            );
+                            setPresetQuantities((prev) => ({
+                              ...prev,
+                              [preset.id]: nextValue,
+                            }));
+                          }}
+                          placeholder="0"
+                          inputMode="numeric"
+                          className="w-12 rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-right text-xs font-semibold text-amber-200 outline-none focus:border-zinc-600"
+                        />
+                      </div>
                     ))
                   )}
                 </div>
@@ -2051,13 +2215,18 @@ export default function UnitsPanel(props: {
                           <input
                             type="text"
                             inputMode="decimal"
-                            value={presetFormulaParams[name] ?? ""}
+                            value={activePresetParams[name] ?? ""}
                             placeholder={placeholder}
                             onChange={(e) =>
-                              setPresetFormulaParams((prev) => ({
-                                ...prev,
-                                [name]: e.target.value,
-                              }))
+                              selectedPresetId
+                                ? setPresetFormulaParamsById((prev) => ({
+                                    ...prev,
+                                    [selectedPresetId]: {
+                                      ...(prev[selectedPresetId] ?? {}),
+                                      [name]: e.target.value,
+                                    },
+                                  }))
+                                : undefined
                             }
                             className="mt-1 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-sky-300 placeholder:text-sky-300/70 outline-none focus:border-zinc-600"
                           />
@@ -2072,13 +2241,20 @@ export default function UnitsPanel(props: {
                     <input
                       type="text"
                       inputMode="decimal"
-                      value={presetHpMinInput}
+                      value={activeHpMinInput}
                       placeholder={
                         typeof selectedPreset?.data?.hpFormula?.min === "number"
                           ? `기본값 ${selectedPreset.data.hpFormula.min}`
                           : ""
                       }
-                      onChange={(e) => setPresetHpMinInput(e.target.value)}
+                      onChange={(e) =>
+                        selectedPresetId
+                          ? setPresetHpMinById((prev) => ({
+                              ...prev,
+                              [selectedPresetId]: e.target.value,
+                            }))
+                          : undefined
+                      }
                       className="mt-1 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-red-300/80 placeholder:text-red-300/60 outline-none focus:border-zinc-600"
                     />
                   </label>
@@ -2087,13 +2263,20 @@ export default function UnitsPanel(props: {
                     <input
                       type="text"
                       inputMode="decimal"
-                      value={presetHpMaxInput}
+                      value={activeHpMaxInput}
                       placeholder={
                         typeof selectedPreset?.data?.hpFormula?.max === "number"
                           ? `기본값 ${selectedPreset.data.hpFormula.max}`
                           : ""
                       }
-                      onChange={(e) => setPresetHpMaxInput(e.target.value)}
+                      onChange={(e) =>
+                        selectedPresetId
+                          ? setPresetHpMaxById((prev) => ({
+                              ...prev,
+                              [selectedPresetId]: e.target.value,
+                            }))
+                          : undefined
+                      }
                       className="mt-1 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-red-300/80 placeholder:text-red-300/60 outline-none focus:border-zinc-600"
                     />
                   </label>
@@ -2110,10 +2293,19 @@ export default function UnitsPanel(props: {
                   현재 HP 범위
                 </div>
                 <div className="mt-2 text-sm text-zinc-200">
-                  {formatRangeLabel(estimateFormulaRange(presetFormulaExpr, buildFormulaParamValues(presetFormulaExpr, presetFormulaDefaults, presetFormulaParams) ?? {}))}
+                  {formatRangeLabel(
+                    estimateFormulaRange(
+                      presetFormulaExpr,
+                      buildFormulaParamValues(
+                        presetFormulaExpr,
+                        presetFormulaDefaults,
+                        activePresetParams
+                      ) ?? {}
+                    )
+                  )}
                 </div>
-                {(presetHpMinInput.trim() ||
-                  presetHpMaxInput.trim() ||
+                {(activeHpMinInput.trim() ||
+                  activeHpMaxInput.trim() ||
                   typeof selectedPreset?.data?.hpFormula?.min === "number" ||
                   typeof selectedPreset?.data?.hpFormula?.max === "number") && (
                   <div className="mt-1 text-[11px] text-zinc-500">
@@ -2127,7 +2319,7 @@ export default function UnitsPanel(props: {
               <button
                 type="button"
                 onClick={submitPresetCreate}
-                disabled={presetLoading || !selectedPreset}
+                disabled={presetLoading || presetSelectedCount === 0}
                 className="rounded-lg border border-amber-700/60 bg-amber-950/30 px-3 py-1.5 text-xs text-amber-200 hover:bg-amber-900/40 disabled:opacity-50"
               >
                 불러오기
@@ -2324,7 +2516,11 @@ export default function UnitsPanel(props: {
                 const target = unitById.get(unitMenu.id);
                 setUnitMenu(null);
                 if (!target || busy) return;
-                handleRemove(target);
+                const ids =
+                  selectedIds.length > 1 && selectedIds.includes(target.id)
+                    ? selectedIds
+                    : [target.id];
+                handleRemoveMany(ids);
               }}
             >
               유닛 삭제

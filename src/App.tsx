@@ -2663,6 +2663,15 @@ export default function App() {
     await run({ type: "REMOVE_UNIT", unitId });
   }
 
+  async function removeUnits(unitIds: string[]) {
+    if (unitIds.length === 0) return;
+    const ok = window.confirm(`총 ${unitIds.length}개의 유닛을 삭제합니다.`);
+    if (!ok) return;
+    for (const id of unitIds) {
+      await removeUnit(id);
+    }
+  }
+
   async function patchUnit(unitId: string, patch: UnitPatch) {
     await run({ type: "PATCH_UNIT", unitId, patch });
   }
@@ -4634,7 +4643,11 @@ export default function App() {
                   const target = units.find((u) => u.id === boardMenu.id);
                   setBoardMenu(null);
                   if (!target || busy) return;
-                  removeUnit(target.id);
+                  const ids =
+                    selectedIds.length > 1 && selectedIds.includes(target.id)
+                      ? selectedIds
+                      : [target.id];
+                  removeUnits(ids);
                 }}
               >
                 유닛 삭제
