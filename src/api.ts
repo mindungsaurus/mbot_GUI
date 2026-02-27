@@ -417,6 +417,22 @@ export async function createItemCatalog(payload: {
   return res.json();
 }
 
+export async function transferInventoryItem(body: {
+  fromName: string;
+  toName: string;
+  itemName: string;
+  amount: number;
+  channelId?: string;
+}) {
+  const res = await fetch(`${API_BASE}/items/inventory/give`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function listItemCatalog() {
   const res = await fetch(`${API_BASE}/items/catalog`, {
     headers: { ...getAuthHeaders() },

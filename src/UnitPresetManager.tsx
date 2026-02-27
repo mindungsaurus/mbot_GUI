@@ -196,7 +196,7 @@ function buildEmptyPreset(): UnitPresetData {
     tagStates: {},
     spellSlots: {},
     consumables: {},
-    deathSaves: { success: 0, failure: 0 },
+    deathSaves: { success: 0, failure: -1 },
   };
 }
 
@@ -278,7 +278,7 @@ export default function UnitPresetManager(props: {
 
   const [spellSlots, setSpellSlots] = useState<number[]>([]);
   const [deathSaveSuccess, setDeathSaveSuccess] = useState(0);
-  const [deathSaveFailure, setDeathSaveFailure] = useState(0);
+  const [deathSaveFailure, setDeathSaveFailure] = useState(-1);
   const [consumables, setConsumables] = useState<ConsumableDraft[]>([]);
   const [newConsumableName, setNewConsumableName] = useState("");
   const [newConsumableCount, setNewConsumableCount] = useState(1);
@@ -523,7 +523,9 @@ export default function UnitPresetManager(props: {
     setSpellSlots(nextSlots);
 
     setDeathSaveSuccess(normalizeCount(data.deathSaves?.success ?? 0, 0));
-    setDeathSaveFailure(normalizeCount(data.deathSaves?.failure ?? 0, 0));
+    setDeathSaveFailure(
+      normalizeCount(data.deathSaves?.failure ?? -1, -1, -1)
+    );
 
     const nextConsumables = Object.entries(data.consumables ?? {})
       .map(([raw, count]) => ({
@@ -961,10 +963,10 @@ export default function UnitPresetManager(props: {
           ? desiredConsumables
           : {},
       deathSaves:
-        deathSaveSuccess || deathSaveFailure
+        deathSaveSuccess !== 0 || deathSaveFailure !== -1
           ? {
               success: normalizeCount(deathSaveSuccess, 0),
-              failure: normalizeCount(deathSaveFailure, 0),
+              failure: normalizeCount(deathSaveFailure, -1, -1),
             }
           : undefined,
     };
@@ -1081,7 +1083,7 @@ export default function UnitPresetManager(props: {
     if (kind === "success") {
       setDeathSaveSuccess((prev) => Math.max(0, prev + delta));
     } else {
-      setDeathSaveFailure((prev) => Math.max(0, prev + delta));
+      setDeathSaveFailure((prev) => Math.max(-1, prev + delta));
     }
   }
 

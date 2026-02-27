@@ -108,7 +108,7 @@ export default function EditUnitModal(props: {
 
   const [spellSlots, setSpellSlots] = useState<number[]>([]);
   const [deathSaveSuccess, setDeathSaveSuccess] = useState(0);
-  const [deathSaveFailure, setDeathSaveFailure] = useState(0);
+  const [deathSaveFailure, setDeathSaveFailure] = useState(-1);
   const [consumables, setConsumables] = useState<
     { name: string; count: number }[]
   >([]);
@@ -186,7 +186,7 @@ export default function EditUnitModal(props: {
     setSpellSlots(nextSlots);
 
     setDeathSaveSuccess(normalizeCount(unit.deathSaves?.success ?? 0, 0));
-    setDeathSaveFailure(normalizeCount(unit.deathSaves?.failure ?? 0, 0));
+    setDeathSaveFailure(normalizeCount(unit.deathSaves?.failure ?? -1, -1, -1));
 
     const nextConsumables = Object.entries(unit.consumables ?? {})
       .map(([raw, count]) => ({
@@ -310,7 +310,7 @@ export default function EditUnitModal(props: {
       setDeathSaveSuccess((prev) => Math.max(0, prev + delta));
       return;
     }
-    setDeathSaveFailure((prev) => Math.max(0, prev + delta));
+    setDeathSaveFailure((prev) => Math.max(-1, prev + delta));
   }
 
   function addConsumable() {
@@ -591,9 +591,13 @@ export default function EditUnitModal(props: {
 
     // Death saves
     const currentDeathSuccess = normalizeCount(u.deathSaves?.success ?? 0, 0);
-    const currentDeathFailure = normalizeCount(u.deathSaves?.failure ?? 0, 0);
+    const currentDeathFailure = normalizeCount(
+      u.deathSaves?.failure ?? -1,
+      -1,
+      -1,
+    );
     const nextDeathSuccess = normalizeCount(deathSaveSuccess, 0);
-    const nextDeathFailure = normalizeCount(deathSaveFailure, 0);
+    const nextDeathFailure = normalizeCount(deathSaveFailure, -1, -1);
     const deathChanged =
       currentDeathSuccess !== nextDeathSuccess ||
       currentDeathFailure !== nextDeathFailure;

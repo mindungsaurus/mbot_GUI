@@ -214,7 +214,8 @@ export default function UnitCard(props: {
   const tagsList = tagsText === "-" ? [] : tagsText.split(", ");
   const hasHidden = !!u.hidden;
   const deathSuccess = Math.max(0, Math.trunc(u.deathSaves?.success ?? 0));
-  const deathFailure = Math.max(0, Math.trunc(u.deathSaves?.failure ?? 0));
+  const deathFailure = Math.max(-1, Math.trunc(u.deathSaves?.failure ?? -1));
+  const showDeathSaves = !(deathSuccess === 0 && deathFailure === -1);
   const integrity =
     typeof u.integrityBase === "number" ? Math.trunc(u.integrityBase) : null;
   const unitType = u.unitType ?? "NORMAL";
@@ -305,7 +306,7 @@ export default function UnitCard(props: {
             <span className="text-yellow-300">AC -</span>
           )}
 
-          {(deathSuccess > 0 || deathFailure > 0) && (
+          {showDeathSaves && (
             <span className="text-zinc-400">
               (
               <span className="font-semibold text-green-400">{deathSuccess}</span>,{" "}
@@ -479,7 +480,7 @@ export default function UnitCard(props: {
           {u.alias ? (
             <span className="ml-1 text-sm opacity-80">({u.alias})</span>
           ) : null}
-          {(deathSuccess > 0 || deathFailure > 0) && (
+          {showDeathSaves && (
             <span className="ml-2 text-xs font-normal text-zinc-400">
               (
               <span className="font-semibold text-green-400">

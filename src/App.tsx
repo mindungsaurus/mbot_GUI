@@ -48,6 +48,7 @@ import TurnOrderReorderModal from "./TurnOrderReorderModal";
 import UnitPresetManager from "./UnitPresetManager";
 import TagPresetManager from "./TagPresetManager";
 import GoldItemsManager from "./GoldItemsManager";
+import ItemDbManager from "./ItemDbManager";
 import { ansiColorCodeToCss } from "./UnitColor";
 
 const LS_DEFAULT_CHANNEL = "operator.defaultChannelId";
@@ -383,6 +384,24 @@ function GoldItemsTabIcon(props: { className?: string }) {
   );
 }
 
+function ItemDbTabIcon(props: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      className={props.className}
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4 6h7a3 3 0 0 1 3 3v10H7a3 3 0 0 0-3 3V6z" />
+      <path d="M20 6h-7a3 3 0 0 0-3 3v10h7a3 3 0 0 1 3 3V6z" />
+    </svg>
+  );
+}
+
 
 function sanitizeChannelId(input: string): string {
   return (input ?? "").replace(/\D/g, "");
@@ -562,6 +581,10 @@ export default function App() {
   const [presetView, setPresetView] = useState(false);
   const [tagPresetView, setTagPresetView] = useState(false);
   const [goldItemsView, setGoldItemsView] = useState(false);
+  const [itemDbView, setItemDbView] = useState(false);
+  const [goldItemsTab, setGoldItemsTab] = useState<
+    "gold" | "inventory" | "db" | "sheet"
+  >("gold");
   const [encounters, setEncounters] = useState<EncounterSummary[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null); // primary(대표) 선택
@@ -1201,7 +1224,14 @@ export default function App() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (!authUser) return;
-    if (sessionSelected || presetView || tagPresetView || goldItemsView) return;
+    if (
+      sessionSelected ||
+      presetView ||
+      tagPresetView ||
+      goldItemsView ||
+      itemDbView
+    )
+      return;
 
     const pressed = adminHotkeyKeysRef.current;
     const hasCombo = () =>
@@ -1445,6 +1475,15 @@ export default function App() {
   async function startBattle() {
     if (!state) return;
     await run({ type: "BATTLE_START" });
+  }
+
+  async function resetRound() {
+    if (!state) return;
+    const ok = window.confirm(
+      "라운드를 초기화하고 전투 개시 전 상태로 되돌릴까요?\n(유닛/순서 정보는 유지됩니다.)"
+    );
+    if (!ok) return;
+    await run({ type: "RESET_ROUND" });
   }
 
   // 최초 1회: localStorage에서 채널 값/최근 목록 불러오기
@@ -2647,7 +2686,7 @@ export default function App() {
     }
     if (
       deathSaves &&
-      (deathSaves.success > 0 || deathSaves.failure > 0)
+      (deathSaves.success !== 0 || deathSaves.failure !== -1)
     ) {
       actions.push({
         type: "EDIT_DEATH_SAVES",
@@ -3048,11 +3087,18 @@ export default function App() {
     );
   }
 
+  if (itemDbView) {
+    return (
+      <ItemDbManager authUser={authUser} onBack={() => setItemDbView(false)} />
+    );
+  }
+
   if (goldItemsView) {
     return (
       <GoldItemsManager
         authUser={authUser}
         onBack={() => setGoldItemsView(false)}
+        initialTab={goldItemsTab}
       />
     );
   }
@@ -3102,6 +3148,7 @@ export default function App() {
                   onClick={() => {
                     setPresetView(false);
                     setTagPresetView(false);
+                    setItemDbView(false);
                     setGoldItemsView(false);
                   }}
                 >
@@ -3117,12 +3164,31 @@ export default function App() {
                   onClick={() => {
                     setPresetView(false);
                     setTagPresetView(false);
+                    setItemDbView(false);
+                    setGoldItemsTab("gold");
                     setGoldItemsView(true);
                   }}
                   disabled={busy}
                 >
                   <GoldItemsTabIcon className="h-4 w-4" />
                   Gold/Items
+                </button>
+                <button
+                  type="button"
+                  className={[
+                    "mt-2 flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold",
+                    "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:bg-zinc-800/60",
+                  ].join(" ")}
+                  onClick={() => {
+                    setPresetView(false);
+                    setTagPresetView(false);
+                    setGoldItemsView(false);
+                    setItemDbView(true);
+                  }}
+                  disabled={busy}
+                >
+                  <ItemDbTabIcon className="h-4 w-4" />
+                  아이템 DB
                 </button>
               </div>
             </nav>
@@ -3337,7 +3403,7 @@ export default function App() {
 
             <div className="flex gap-2">
               <button
-                className="rounded-lg bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-700 disabled:opacity-50"
+                className="rounded-lg bg-rose-700 px-3 py-2 text-sm text-white hover:bg-rose-600 disabled:opacity-50"
                 onClick={() => undoLast()}
                 disabled={busy || !encounterId}
               >
@@ -3435,6 +3501,7 @@ export default function App() {
             battleStarted={battleStarted}
             busy={busy}
             onReorder={() => setReorderOpen(true)}
+            onRoundReset={resetRound}
             onNextTurn={() => applyPanelAction("NEXT_TURN")}
             onBattleStart={startBattle}
             canTempTurn={!!selectedId}
@@ -4644,9 +4711,7 @@ export default function App() {
                   setBoardMenu(null);
                   if (!target || busy) return;
                   const ids =
-                    selectedIds.length > 1 && selectedIds.includes(target.id)
-                      ? selectedIds
-                      : [target.id];
+                    selectedIds.length > 1 ? selectedIds : [target.id];
                   removeUnits(ids);
                 }}
               >

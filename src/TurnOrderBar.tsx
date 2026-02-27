@@ -80,6 +80,7 @@ export default function TurnOrderBar(props: {
   battleStarted?: boolean;
   busy?: boolean;
   onReorder?: () => void;
+  onRoundReset?: () => void;
   onNextTurn?: () => void;
   onBattleStart?: () => void;
   onTempTurn: () => void;
@@ -98,6 +99,7 @@ export default function TurnOrderBar(props: {
     battleStarted,
     busy,
     onReorder,
+    onRoundReset,
     onNextTurn,
     onBattleStart,
     onTempTurn,
@@ -507,6 +509,22 @@ export default function TurnOrderBar(props: {
                 title="Reorder Turn"
               >
                 순서 조정
+              </button>
+            ) : null}
+            {isBattleStarted && onRoundReset ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onRoundReset}
+                className={[
+                  "whitespace-nowrap rounded-lg border px-2 py-1 text-[10px] font-semibold",
+                  "border-fuchsia-500/60 bg-fuchsia-950/35 text-fuchsia-200",
+                  "hover:bg-fuchsia-900/45 hover:text-fuchsia-100",
+                  "disabled:opacity-50",
+                ].join(" ")}
+                title="Reset Round"
+              >
+                라운드 초기화
               </button>
             ) : null}
             {!isBattleStarted && onBattleStart ? (

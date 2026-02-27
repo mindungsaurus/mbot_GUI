@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import type {
   AuthUser,
   GoldCharacter,
@@ -11,12 +11,14 @@ import {
   listGoldCharacters,
   listInventory,
   listItemCatalog,
+  transferInventoryItem,
   useInventoryItem,
 } from "./api";
 
 type Props = {
   authUser: AuthUser;
   onBack: () => void;
+  initialTab?: "gold" | "inventory" | "db" | "sheet";
 };
 
 const numberFormat = new Intl.NumberFormat("ko-KR");
@@ -179,7 +181,11 @@ function getEulReul(word: string): string {
   return (code - 0xac00) % 28 === 0 ? "\ub97c" : "\uc744";
 }
 
-export default function GoldItemsManager({ authUser, onBack }: Props) {
+export default function GoldItemsManager({
+  authUser,
+  onBack,
+  initialTab,
+}: Props) {
   const isAdmin = !!authUser.isAdmin;
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -188,21 +194,33 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [catalog, setCatalog] = useState<ItemCatalogEntry[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
-  const [activeTab, setActiveTab] = useState<"gold" | "inventory" | "sheet">(
-    "gold",
-  );
+  const [activeTab, setActiveTab] = useState<
+    "gold" | "inventory" | "db" | "sheet"
+  >(initialTab ?? "gold");
   const [inventoryMode, setInventoryMode] = useState<
-    "none" | "consume" | "acquire"
+    "none" | "consume" | "acquire" | "transfer"
   >("none");
   const [inventoryType, setInventoryType] =
     useState<(typeof ITEM_TYPE_OPTIONS)[number]>(ITEM_TYPE_OPTIONS[0]);
   const [inventorySearch, setInventorySearch] = useState("");
+  const [dbType, setDbType] =
+    useState<(typeof ITEM_TYPE_OPTIONS)[number]>(ITEM_TYPE_OPTIONS[0]);
+  const [dbSearch, setDbSearch] = useState("");
+  const [dbPage, setDbPage] = useState(0);
   const [selectedInventoryName, setSelectedInventoryName] = useState<
     string | null
   >(null);
   const [selectedCatalogName, setSelectedCatalogName] = useState<string | null>(
     null,
   );
+  const [transferFromQuery, setTransferFromQuery] = useState("");
+  const [transferToQuery, setTransferToQuery] = useState("");
+  const [transferFromName, setTransferFromName] = useState<string | null>(null);
+  const [transferToName, setTransferToName] = useState<string | null>(null);
+  const [transferInventory, setTransferInventory] = useState<InventoryItem[]>(
+    [],
+  );
+  const [transferItemQuery, setTransferItemQuery] = useState("");
   const [catalogPage, setCatalogPage] = useState(0);
   const [inventoryAmount, setInventoryAmount] = useState("1");
   const [inventoryResult, setInventoryResult] = useState<{
@@ -242,6 +260,26 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
     qualityLabel: string;
     unit?: string | null;
   } | null>(null);
+  const [transferConfirm, setTransferConfirm] = useState<{
+    fromName: string;
+    toName: string;
+    itemName: string;
+    amount: number;
+    qualityLabel: string;
+    unit?: string | null;
+  } | null>(null);
+  const [transferResult, setTransferResult] = useState<{
+    fromName: string;
+    toName: string;
+    itemName: string;
+    amount: number;
+    qualityLabel: string;
+    unit?: string | null;
+    fromBefore: number;
+    fromAfter: number;
+    toBefore: number;
+    toAfter: number;
+  } | null>(null);
 
   const [discordChannelOpen, setDiscordChannelOpen] = useState(false);
   const [discordChannelDraft, setDiscordChannelDraft] = useState("");
@@ -254,11 +292,43 @@ export default function GoldItemsManager({ authUser, onBack }: Props) {
     [discordChannelId],
   );
 
+  function selectInventoryItem(name: string | null) {
+    setSelectedInventoryName(name);
+    if (inventoryMode === "transfer") {
+      setTransferItemQuery(name ?? "");
+    }
+  }
+
 
   const selected = useMemo(
     () => characters.find((c) => c.name === selectedName) ?? null,
     [characters, selectedName],
   );
+  const transferToMatches = useMemo(() => {
+    const q = transferToQuery.trim().toLowerCase();
+    if (!q) return [];
+    return characters
+      .filter((c) => c.name.toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [characters, transferToQuery]);
+  const transferItemMatches = useMemo(() => {
+    const q = transferItemQuery.trim().toLowerCase();
+    if (!q) return [];
+    return transferInventory
+      .filter((item) => item.itemName.toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [transferInventory, transferItemQuery]);
+  const transferFromSelected = !!transferFromName;
+  const transferToSelected =
+    !!transferToName && transferToQuery.trim() === transferToName;
+  const transferItemSelected =
+    !!selectedInventoryName &&
+    transferItemQuery.trim() === selectedInventoryName;
+  const transferReady =
+    transferFromSelected &&
+    transferToSelected &&
+    transferItemSelected &&
+    !!inventoryAmount.trim();
 
   const companions = useMemo(() => {
     if (!selected) return [];
@@ -309,6 +379,42 @@ return characters.filter(
       });
   }, [catalog, inventorySearch, inventoryType]);
 
+  const dbFiltered = useMemo(() => {
+    const rankMap = new Map<string, number>();
+    QUALITY_ORDER.forEach((label, idx) => rankMap.set(label, idx));
+    const term = dbSearch.trim().toLowerCase();
+    return catalog
+      .map((entry) => {
+        const qualityLabel = qualityLabelFromNumber(entry.quality);
+        return {
+          ...entry,
+          qualityLabel,
+          qualityRank: rankMap.get(qualityLabel) ?? QUALITY_ORDER.length,
+        };
+      })
+      .filter((entry) => {
+        if (dbType !== ITEM_TYPE_OPTIONS[0] && entry.type !== dbType)
+          return false;
+        if (term && !entry.name.toLowerCase().includes(term)) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        if (a.qualityRank !== b.qualityRank) {
+          return a.qualityRank - b.qualityRank;
+        }
+        return a.name.localeCompare(b.name, "ko");
+      });
+  }, [catalog, dbSearch, dbType]);
+
+  const dbPageCount = useMemo(() => {
+    return Math.max(1, Math.ceil(dbFiltered.length / CATALOG_PAGE_SIZE));
+  }, [dbFiltered.length]);
+
+  const dbPageItems = useMemo(() => {
+    const start = dbPage * CATALOG_PAGE_SIZE;
+    return dbFiltered.slice(start, start + CATALOG_PAGE_SIZE);
+  }, [dbFiltered, dbPage]);
+
   const catalogPageCount = useMemo(() => {
     return Math.max(1, Math.ceil(catalogFiltered.length / CATALOG_PAGE_SIZE));
   }, [catalogFiltered.length]);
@@ -323,17 +429,29 @@ return characters.filter(
   }, [inventorySearch, inventoryType, catalog, inventoryMode]);
 
   useEffect(() => {
+    if (initialTab) setActiveTab(initialTab);
+  }, [initialTab]);
+
+  useEffect(() => {
+    setDbPage(0);
+  }, [dbSearch, dbType, catalog]);
+
+  useEffect(() => {
     if (!selectedCatalogName) return;
     if (!catalogFiltered.some((item) => item.name === selectedCatalogName)) {
       setSelectedCatalogName(null);
     }
   }, [catalogFiltered, selectedCatalogName]);
 
+  const activeInventory =
+    inventoryMode === "transfer" ? transferInventory : inventory;
+  const activeInventorySearch =
+    inventoryMode === "transfer" ? transferItemQuery : inventorySearch;
   const inventoryRows = useMemo(() => {
     const rankMap = new Map<string, number>();
     QUALITY_ORDER.forEach((label, idx) => rankMap.set(label, idx));
-    const term = inventorySearch.trim().toLowerCase();
-    const list = inventory
+    const term = activeInventorySearch.trim().toLowerCase();
+    const list = activeInventory
       .map((item) => {
         const meta = catalogByName.get(item.itemName);
         const qualityLabel = qualityLabelFromNumber(meta?.quality);
@@ -348,7 +466,11 @@ return characters.filter(
         };
       })
       .filter((item) => {
-        if (inventoryType !== ITEM_TYPE_OPTIONS[0] && item.type !== inventoryType) return false;
+        if (
+          inventoryType !== ITEM_TYPE_OPTIONS[0] &&
+          item.type !== inventoryType
+        )
+          return false;
         if (term && !item.itemName.toLowerCase().includes(term)) return false;
         return true;
       })
@@ -364,21 +486,28 @@ return characters.filter(
       rows.push(list.slice(i, i + 2));
     }
     return rows;
-  }, [catalogByName, inventory, inventorySearch, inventoryType]);
+  }, [catalogByName, activeInventory, activeInventorySearch, inventoryType]);
 
   const reloadCharacters = async (preserveSelection = true) => {
+    let nextSelected: string | null = selectedName;
     try {
       setErr(null);
       setBusy(true);
       const list = (await listGoldCharacters()) as GoldCharacter[];
       setCharacters(list);
       if (!preserveSelection || !selectedName) {
-        setSelectedName(list[0]?.name ?? null);
+        nextSelected = list[0]?.name ?? null;
+        setSelectedName(nextSelected);
       } else if (!list.some((c) => c.name === selectedName)) {
-        setSelectedName(list[0]?.name ?? null);
+        nextSelected = list[0]?.name ?? null;
+        setSelectedName(nextSelected);
+      } else {
+        nextSelected = selectedName ?? null;
       }
+      return { list, selectedName: nextSelected };
     } catch (e: any) {
       setErr(String(e?.message ?? e));
+      return null;
     } finally {
       setBusy(false);
     }
@@ -409,11 +538,33 @@ return characters.filter(
     }
   };
 
+  const reloadTransferInventory = async (owner: string | null) => {
+    if (!owner) {
+      setTransferInventory([]);
+      return;
+    }
+    try {
+      setErr(null);
+      const items = (await listInventory(owner)) as InventoryItem[];
+      setTransferInventory(items);
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    }
+  };
+
   useEffect(() => {
     reloadCharacters(false);
     reloadCatalog();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const refreshAll = async () => {
+    const result = await reloadCharacters(true);
+    await reloadCatalog();
+    const nextName =
+      result?.selectedName ?? selectedName ?? result?.list?.[0]?.name ?? null;
+    await reloadInventory(nextName);
+  };
 
   useEffect(() => {
     if (!selected) {
@@ -429,7 +580,33 @@ return characters.filter(
   }, [selected?.name]);
 
   useEffect(() => {
+    if (inventoryMode !== "transfer") return;
+    const name = selected?.name ?? null;
+    setTransferFromName(name);
+    setTransferFromQuery(name ?? "");
+    if (!name) {
+      setTransferInventory([]);
+      setSelectedInventoryName(null);
+      return;
+    }
+    setSelectedInventoryName(null);
+    reloadTransferInventory(name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inventoryMode, selected?.name]);
+
+  useEffect(() => {
     setInventoryAmount("1");
+  }, [inventoryMode]);
+
+  useEffect(() => {
+    if (inventoryMode !== "transfer") {
+      setTransferFromName(null);
+      setTransferToName(null);
+      setTransferFromQuery("");
+      setTransferToQuery("");
+      setTransferItemQuery("");
+      setTransferInventory([]);
+    }
   }, [inventoryMode]);
 
   useEffect(() => {
@@ -488,6 +665,38 @@ return characters.filter(
     setInventoryConfirm({
       mode,
       itemName,
+      amount,
+      qualityLabel,
+      unit,
+    });
+  };
+
+  const openTransferConfirm = () => {
+    if (!transferFromSelected || !transferToSelected) {
+      setErr("\uc8fc\ub294 \uc0ac\ub78c\uacfc \ubc1b\ub294 \uc0ac\ub78c\uc744 \uc120\ud0dd\ud574 \uc8fc\uc138\uc694.");
+      return;
+    }
+    if (transferFromName === transferToName) {
+      setErr("\uc8fc\ub294 \uc0ac\ub78c\uacfc \ubc1b\ub294 \uc0ac\ub78c\uc740 \ub2e4\ub978 \uce90\ub9ad\ud130\uc5ec\uc57c \ud569\ub2c8\ub2e4.");
+      return;
+    }
+    if (!transferItemSelected) {
+      setErr("\uc804\ub2ec\ud560 \uc544\uc774\ud15c\uc744 \uc120\ud0dd\ud574 \uc8fc\uc138\uc694.");
+      return;
+    }
+    const amount = parseAmount(inventoryAmount);
+    if (!amount) {
+      setErr("\uc804\ub2ec \uc218\ub7c9\uc744 \uc785\ub825\ud574 \uc8fc\uc138\uc694.");
+      return;
+    }
+    const qualityLabel = qualityLabelFromNumber(
+      catalogByName.get(selectedInventoryName)?.quality,
+    );
+    const unit = catalogByName.get(selectedInventoryName)?.unit ?? null;
+    setTransferConfirm({
+      fromName: transferFromName,
+      toName: transferToName,
+      itemName: selectedInventoryName,
       amount,
       qualityLabel,
       unit,
@@ -666,12 +875,87 @@ const handleAcquire = async () => {
     setBusy(false);
   }
 };
-useEffect(() => {
+
+const handleTransfer = async () => {
+  if (!transferConfirm) return;
+  const { fromName, toName, itemName, amount, qualityLabel, unit } =
+    transferConfirm;
+  const fromItem = transferInventory.find((item) => item.itemName === itemName);
+  const fromBefore = fromItem?.amount ?? 0;
+  if (fromBefore < amount) {
+    setTransferConfirm(null);
+    setTransferResult(null);
+    setInventoryNotice({
+      title: "\uc544\uc774\ud15c \uc804\ub2ec \uc2e4\ud328",
+      ownerName: fromName,
+      itemName,
+      qualityLabel,
+      message: `\ubcf4\uc720 \uc218\ub7c9\uc774 \ubd80\uc871\ud569\ub2c8\ub2e4.`,
+      detail: `(\uc694\uccad: ${formatItemAmount(
+        amount,
+        unit,
+      )}, \ubcf4\uc720: ${formatItemAmount(fromBefore, unit)})`,
+    });
+    return;
+  }
+
+  try {
+    setErr(null);
+    setBusy(true);
+    setInventoryNotice(null);
+    const toInventory = (await listInventory(toName)) as InventoryItem[];
+    const toItem = toInventory.find((item) => item.itemName === itemName);
+    const toBefore = toItem?.amount ?? 0;
+
+    const result = await transferInventoryItem({
+      fromName,
+      toName,
+      itemName,
+      amount,
+      channelId: channelId || undefined,
+    });
+
+    await reloadTransferInventory(fromName);
+    if (selected?.name === fromName || selected?.name === toName) {
+      await reloadInventory(selected.name);
+    }
+
+    const afterFrom =
+      typeof result?.fromRemaining === "number"
+        ? result.fromRemaining
+        : Math.max(0, fromBefore - amount);
+    const afterTo =
+      typeof result?.toTotal === "number" ? result.toTotal : toBefore + amount;
+    const itemLabel = result?.itemName ?? itemName;
+    const quality = result?.quality ?? qualityLabel;
+    const unitLabel = result?.unit ?? unit;
+
+    setTransferResult({
+      fromName,
+      toName,
+      itemName: itemLabel,
+      amount,
+      qualityLabel: quality,
+      unit: unitLabel,
+      fromBefore,
+      fromAfter: afterFrom,
+      toBefore,
+      toAfter: afterTo,
+    });
+  } catch (e: any) {
+    setErr(String(e?.message ?? e));
+  } finally {
+    setBusy(false);
+  }
+};
+  useEffect(() => {
     if (!selectedInventoryName) return;
-    if (!inventory.some((item) => item.itemName === selectedInventoryName)) {
+    const list =
+      inventoryMode === "transfer" ? transferInventory : inventory;
+    if (!list.some((item) => item.itemName === selectedInventoryName)) {
       setSelectedInventoryName(null);
     }
-  }, [inventory, selectedInventoryName]);
+  }, [inventory, transferInventory, selectedInventoryName, inventoryMode]);
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -679,9 +963,7 @@ useEffect(() => {
         <header className="mb-4 flex items-center justify-between gap-3">
           <div>
             <div className="text-xl font-semibold">Gold / Items</div>
-            <div className="text-xs text-zinc-400">
-                        {"\uc120\ud0dd\ud55c \uc544\uc774\ud15c"}:
-                      </div>
+            <div className="text-xs text-zinc-400">{"\uc120\ud0dd\ud55c \uc544\uc774\ud15c"}:</div>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -695,14 +977,13 @@ useEffect(() => {
             <button
               type="button"
               className="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-200 hover:border-zinc-600"
-              onClick={() => reloadCharacters(true)}
+              onClick={refreshAll}
               disabled={busy}
             >{"\uc0c8\ub85c\uace0\uce68"}</button>
             <button
               type="button"
               className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-500"
               onClick={openDiscordSettings}
-              disabled={busy}
             >
               {"\ub514\uc2a4\ucf54\ub4dc \uc124\uc815"}
             </button>
@@ -722,7 +1003,7 @@ useEffect(() => {
               <button
                 type="button"
                 className="rounded-md border border-zinc-700 px-2 py-1 text-[10px] text-zinc-200 hover:border-zinc-600"
-                onClick={() => reloadCharacters(true)}
+                onClick={refreshAll}
                 disabled={busy}
               >{"\uc0c8\ub85c\uace0\uce68"}</button>
             </div>
@@ -730,7 +1011,7 @@ useEffect(() => {
             <input
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder={"\uac80\uc0c9"}
+              placeholder={"검색"}
               className="h-8 rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
             />
 
@@ -917,9 +1198,12 @@ useEffect(() => {
             {activeTab === "inventory" ? (
               <section className="flex-1 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
                 <div className="mb-3 flex items-center justify-between">
-                  <div className="text-sm font-semibold text-zinc-200">{"\uce90\ub9ad\ud130 \ubaa9\ub85d"}</div>
-                  {isAdmin ? (
-                    <div className="flex items-center gap-2">
+                  <div className="text-sm font-semibold text-zinc-200">
+                    {"\uce90\ub9ad\ud130 \ubaa9\ub85d"}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {isAdmin ? (
+                      <>
                       <button
                         type="button"
                         className={[
@@ -952,8 +1236,25 @@ useEffect(() => {
                       >
                         {"\uc544\uc774\ud15c \uc18c\ubaa8"}
                       </button>
-                    </div>
-                   ) : null}
+                      <button
+                        type="button"
+                        className={[
+                          "rounded-md border px-2.5 py-1 text-[11px] font-semibold",
+                          inventoryMode === "transfer"
+                            ? "border-amber-500/70 bg-amber-950/30 text-amber-100"
+                            : "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:border-zinc-700",
+                        ].join(" ")}
+                        onClick={() =>
+                          setInventoryMode(
+                            inventoryMode === "transfer" ? "none" : "transfer",
+                          )
+                        }
+                      >
+                        {"\uc544\uc774\ud15c \uc804\ub2ec"}
+                      </button>
+                      </>
+                    ) : null}
+                  </div>
                 </div>
 
                 <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -978,17 +1279,114 @@ useEffect(() => {
                   })}
                 </div>
 
-                <input
-                  value={inventorySearch}
-                  onChange={(e) => setInventorySearch(e.target.value)}
-                  placeholder={"\uc544\uc774\ud15c \uac80\uc0c9"}
-                  className="mb-3 h-8 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
-                />
+                {inventoryMode !== "transfer" ? (
+                  <div className="relative mb-3">
+                  <input
+                    value={inventorySearch}
+                    onChange={(e) => {
+                      setInventorySearch(e.target.value);
+                    }}
+                    placeholder={"\uc544\uc774\ud15c \uac80\uc0c9"}
+                    className="h-8 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
+                  />
+                </div>
+                ) : null}
 
-                {inventoryMode !== "none" ? (
+                {inventoryMode === "transfer" ? (
                   <div className="mb-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
                     <div className="mb-2 text-xs font-semibold text-zinc-300">
-                      {inventoryMode === "consume" ? "\uc544\uc774\ud15c \uc18c\ubaa8" : "\uc544\uc774\ud15c \ud68d\ub4dd"}
+                      {"\uc544\uc774\ud15c \uc804\ub2ec"}
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                      <div className="relative">
+                        <label className="text-[11px] text-zinc-400">
+                          {"\uc8fc\ub294 \uc0ac\ub78c"}
+                        </label>
+                        <input
+                          value={transferFromQuery}
+                          placeholder={"\uc120\ud0dd\ub41c \uce90\ub9ad\ud130"}
+                          disabled
+                          className={[
+                            "mt-1 h-8 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs outline-none",
+                            "text-lime-300 opacity-80 cursor-not-allowed",
+                          ].join(" ")}
+                        />
+                      </div>
+                      <div className="relative">
+                        <label className="text-[11px] text-zinc-400">
+                          {"\ubc1b\ub294 \uc0ac\ub78c"}
+                        </label>
+                        <input
+                          value={transferToQuery}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setTransferToQuery(value);
+                            const match = characters.find(
+                              (c) => c.name === value.trim(),
+                            );
+                            setTransferToName(match?.name ?? null);
+                          }}
+                          placeholder={"\uac80\uc0c9"}
+                          className={[
+                            "mt-1 h-8 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs outline-none focus:border-zinc-600",
+                            transferToSelected ? "text-lime-300" : "text-zinc-100",
+                          ].join(" ")}
+                        />
+                        {transferToQuery.trim() &&
+                        transferToMatches.length > 0 &&
+                        !transferToSelected ? (
+                          <div className="absolute z-30 mt-1 w-full rounded-md border border-zinc-800 bg-zinc-950/95 text-xs text-zinc-100 shadow-xl">
+                            {transferToMatches.map((c) => (
+                              <button
+                                key={`to-${c.name}`}
+                                type="button"
+                                className="flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-zinc-800/70"
+                                onMouseDown={() => {
+                                  setTransferToName(c.name);
+                                  setTransferToQuery(c.name);
+                                }}
+                              >
+                                {c.name}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <div className="text-xs text-zinc-400">
+                        {"\uc120\ud0dd\ud55c \uc544\uc774\ud15c"}:
+                      </div>
+                      <div
+                        className={[
+                          "text-sm font-semibold",
+                          qualityColorClass(
+                            qualityLabelFromNumber(
+                              catalogByName.get(selectedInventoryName ?? "")
+                                ?.quality,
+                            ),
+                          ),
+                        ].join(" ")}
+                      >
+                        {selectedInventoryName ?? "\uc5c6\uc74c"}
+                      </div>
+                      <input
+                        value={inventoryAmount}
+                        onChange={(e) => setInventoryAmount(e.target.value)}
+                        placeholder={"수량"}
+                        className="h-8 w-24 rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
+                      />
+                    </div>
+                    <div className="mt-2 text-xs text-zinc-500">
+                      {"\uc544\ub798 \uc778\ubca4\ud1a0\ub9ac\uc5d0\uc11c \uc544\uc774\ud15c\uc744 \uc120\ud0dd\ud558\uc138\uc694."}
+                    </div>
+                  </div>
+                ) : inventoryMode !== "none" ? (
+                  <div className="mb-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+                    <div className="mb-2 text-xs font-semibold text-zinc-300">
+                      {inventoryMode === "consume"
+                        ? "\uc544\uc774\ud15c \uc18c\ubaa8"
+                        : "\uc544\uc774\ud15c \ud68d\ub4dd"}
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="text-xs text-zinc-400">
@@ -1019,7 +1417,7 @@ useEffect(() => {
                       <input
                         value={inventoryAmount}
                         onChange={(e) => setInventoryAmount(e.target.value)}
-                        placeholder={"\uc218\ub7c9"}
+                        placeholder={"수량"}
                         className="h-8 w-24 rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
                       />
                     </div>
@@ -1044,6 +1442,16 @@ useEffect(() => {
                     }
                   >
                     {"\uc120\ud0dd\ud55c \uc544\uc774\ud15c \uc18c\ubaa8"}
+                  </button>
+                ) : null}
+
+                {inventoryMode === "transfer" && transferReady ? (
+                  <button
+                    type="button"
+                    className="mb-3 w-full rounded-lg bg-emerald-700 px-4 py-2 text-center text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+                    onClick={openTransferConfirm}
+                  >
+                    {"\uc120\ud0dd\ud55c \uc544\uc774\ud15c \uc804\ub2ec"}
                   </button>
                 ) : null}
 
@@ -1148,7 +1556,225 @@ useEffect(() => {
                     </div>
                   </div>
                   </>
-                ) : !selected ? (
+                ) : inventoryMode === "transfer" ? (
+                  <>
+                    <div className="relative mb-3">
+                      <input
+                        value={transferItemQuery}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setTransferItemQuery(value);
+                          const match = transferInventory.find(
+                            (item) => item.itemName === value.trim(),
+                          );
+                          setSelectedInventoryName(match?.itemName ?? null);
+                        }}
+                        placeholder={"\uc544\uc774\ud15c \uac80\uc0c9"}
+                        className={[
+                          "h-8 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs outline-none focus:border-zinc-600",
+                          transferItemSelected ? "text-lime-300" : "text-zinc-100",
+                        ].join(" ")}
+                      />
+                      {transferItemQuery.trim() &&
+                      transferItemMatches.length > 0 &&
+                      !transferItemSelected ? (
+                        <div className="absolute z-30 mt-1 w-full rounded-md border border-zinc-800 bg-zinc-950/95 text-xs text-zinc-100 shadow-xl">
+                          {transferItemMatches.map((item) => (
+                            <button
+                              key={`transfer-item-bottom-${item.itemName}`}
+                              type="button"
+                              className="flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-zinc-800/70"
+                              onMouseDown={() => {
+                                setSelectedInventoryName(item.itemName);
+                                setTransferItemQuery(item.itemName);
+                              }}
+                            >
+                              <span
+                                className={qualityColorClass(
+                                  qualityLabelFromNumber(
+                                    catalogByName.get(item.itemName)?.quality,
+                                  ),
+                                )}
+                              >
+                                {item.itemName}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                    {!transferFromName ? (
+                    <div className="rounded-lg border border-dashed border-zinc-800 p-4 text-sm text-zinc-500">
+                      {"\uc8fc\ub294 \uc0ac\ub78c\uc744 \uc120\ud0dd\ud574 \uc8fc\uc138\uc694."}
+                    </div>
+                  ) : inventoryRows.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-zinc-800 p-3 text-xs text-zinc-500">
+                      {"\ub4f1\ub85d\ub41c \uc544\uc774\ud15c\uc774 \uc5c6\uc2b5\ub2c8\ub2e4."}
+                    </div>
+                  ) : (
+                    <div className="overflow-visible rounded-lg border border-zinc-800">
+                      <div className="grid grid-cols-[1fr_80px_4px_1fr_80px] bg-zinc-950/60 px-4 py-2 text-xs font-semibold text-zinc-400">
+                        <span>{"\ud56d\ubaa9"}</span>
+                        <span className="pr-2 text-right">{"\uc218\ub7c9"}</span>
+                        <span className="bg-zinc-700/80" aria-hidden="true" />
+                        <span className="pl-2 text-right md:text-left">
+                          {"\ud56d\ubaa9"}
+                        </span>
+                        <span className="text-right">{"\uc218\ub7c9"}</span>
+                      </div>
+                      <div className="divide-y divide-zinc-800">
+                        {inventoryRows.map((row, idx) => {
+                          const left = row[0];
+                          const right = row[1];
+                          const leftSelected =
+                            left && left.itemName === selectedInventoryName;
+                          const rightSelected =
+                            right && right.itemName === selectedInventoryName;
+                          return (
+                            <div
+                              key={`${left?.itemName ?? "row"}-${idx}`}
+                              className="grid grid-cols-[1fr_80px_4px_1fr_80px] items-center bg-zinc-950/30 px-4 py-2 text-sm text-zinc-200"
+                            >
+                              {left ? (
+                                <button
+                                  type="button"
+                                  className={[
+                                    "relative col-span-2 grid grid-cols-[1fr_80px] items-center rounded-md pl-1 pr-2 py-1 text-left",
+                                    "hover:bg-zinc-900/40",
+                                    leftSelected
+                                      ? "bg-amber-950/30 ring-1 ring-amber-500/60"
+                                      : "",
+                                  ].join(" ")}
+                                  onClick={() =>
+                                    selectInventoryItem(
+                                      leftSelected ? null : left.itemName,
+                                    )
+                                  }
+                                >
+                                  <span
+                                    className={qualityColorClass(
+                                      left.qualityLabel,
+                                    )}
+                                  >
+                                    {left.itemName}
+                                  </span>
+                                  <span className="text-right font-semibold text-amber-200">
+                                    {left.amount}
+                                  </span>
+                                  {leftSelected ? (
+                                    <div className="absolute left-0 top-full z-30 mt-2 w-52 rounded-lg border border-zinc-800 bg-zinc-950/95 p-2 text-[11px] text-zinc-200 shadow-xl">
+                                      <div className="absolute left-4 top-0 h-2 w-2 -translate-y-1/2 rotate-45 border border-zinc-800 bg-zinc-950/95" />
+                                      <div className="font-semibold text-zinc-100">
+                                        {left.itemName}
+                                      </div>
+                                      <div className="mt-1 text-zinc-400">
+                                        {"\uc218\ub7c9"}:{" "}
+                                        <span className="font-semibold text-amber-200">
+                                          {left.amount}
+                                        </span>
+                                      </div>
+                                      <div className="mt-1 text-zinc-400">
+                                        {"\ub4f1\uae09"}:{" "}
+                                        <span
+                                          className={qualityColorClass(
+                                            left.qualityLabel,
+                                          )}
+                                        >
+                                          {left.qualityLabel}
+                                        </span>
+                                      </div>
+                                      <div className="mt-1 text-zinc-400">
+                                        {"\uc885\ub958"}: {left.type}
+                                      </div>
+                                      <div className="mt-1 text-zinc-400">
+                                        {"\ub2e8\uc704"}: {left.unit}
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </button>
+                              ) : (
+                                <div className="col-span-2 grid grid-cols-[1fr_80px] items-center rounded-md px-2 py-1 text-zinc-600">
+                                  <span>-</span>
+                                  <span className="text-right">-</span>
+                                </div>
+                              )}
+                              <span
+                                className="h-full bg-zinc-700/80"
+                                aria-hidden="true"
+                              />
+                              {right ? (
+                                <button
+                                  type="button"
+                                  className={[
+                                    "relative col-span-2 grid grid-cols-[1fr_80px] items-center rounded-md pl-2 pr-1 py-1 text-left",
+                                    "hover:bg-zinc-900/40",
+                                    rightSelected
+                                      ? "bg-amber-950/30 ring-1 ring-amber-500/60"
+                                      : "",
+                                  ].join(" ")}
+                                  onClick={() =>
+                                    selectInventoryItem(
+                                      rightSelected ? null : right.itemName,
+                                    )
+                                  }
+                                >
+                                  <span
+                                    className={[
+                                      "text-right md:text-left",
+                                      qualityColorClass(right.qualityLabel),
+                                    ].join(" ")}
+                                  >
+                                    {right.itemName}
+                                  </span>
+                                  <span className="text-right font-semibold text-amber-200">
+                                    {right.amount}
+                                  </span>
+                                  {rightSelected ? (
+                                    <div className="absolute right-0 top-full z-30 mt-2 w-52 rounded-lg border border-zinc-800 bg-zinc-950/95 p-2 text-[11px] text-zinc-200 shadow-xl">
+                                      <div className="absolute right-4 top-0 h-2 w-2 -translate-y-1/2 rotate-45 border border-zinc-800 bg-zinc-950/95" />
+                                      <div className="font-semibold text-zinc-100">
+                                        {right.itemName}
+                                      </div>
+                                      <div className="mt-1 text-zinc-400">
+                                        {"\uc218\ub7c9"}:{" "}
+                                        <span className="font-semibold text-amber-200">
+                                          {right.amount}
+                                        </span>
+                                      </div>
+                                      <div className="mt-1 text-zinc-400">
+                                        {"\ub4f1\uae09"}:{" "}
+                                        <span
+                                          className={qualityColorClass(
+                                            right.qualityLabel,
+                                          )}
+                                        >
+                                          {right.qualityLabel}
+                                        </span>
+                                      </div>
+                                      <div className="mt-1 text-zinc-400">
+                                        {"\uc885\ub958"}: {right.type}
+                                      </div>
+                                      <div className="mt-1 text-zinc-400">
+                                        {"\ub2e8\uc704"}: {right.unit}
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </button>
+                              ) : (
+                                <div className="col-span-2 grid grid-cols-[1fr_80px] items-center rounded-md px-2 py-1 text-zinc-600">
+                                  <span className="text-right md:text-left">-</span>
+                                  <span className="text-right">-</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    )}
+                  </>
+                  )
+                : !selected ? (
                   <div className="rounded-lg border border-dashed border-zinc-800 p-4 text-sm text-zinc-500">
                     {"\uce90\ub9ad\ud130\ub97c \uc120\ud0dd\ud574 \uc8fc\uc138\uc694."}
                   </div>
@@ -1503,6 +2129,83 @@ useEffect(() => {
                   </div>
                 ) : null}
 
+                {transferConfirm ? (
+                  <div
+                    className="fixed inset-0 z-40 flex items-center justify-center"
+                    role="dialog"
+                    aria-modal="true"
+                  >
+                    <div
+                      className="absolute inset-0 bg-black/40"
+                      onClick={() => setTransferConfirm(null)}
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Close overlay"
+                      onKeyDown={(e) =>
+                        e.key === "Enter" && setTransferConfirm(null)
+                      }
+                    />
+                    <div className="relative z-50 w-[min(360px,92vw)] rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
+                      <div className="mb-2 text-sm font-semibold text-zinc-100">
+                        {"\uc544\uc774\ud15c \uc804\ub2ec \ud655\uc778"}
+                      </div>
+                      <div className="text-sm text-zinc-100">
+                        <span className="font-semibold">
+                          {"\u300c"}
+                          <span className="text-amber-200">
+                            {transferConfirm.fromName}
+                          </span>
+                          {"\u300d"}
+                        </span>
+                        {",  ["}
+                        <span
+                          className={[
+                            "font-semibold",
+                            qualityColorClass(transferConfirm.qualityLabel),
+                          ].join(" ")}
+                        >
+                          {transferConfirm.itemName}
+                        </span>
+                        {"]"}
+                        {getEulReul(transferConfirm.itemName)}
+                        {" "}
+                        {formatItemAmount(
+                          transferConfirm.amount,
+                          transferConfirm.unit,
+                        )}
+                        {"\ub9cc\ud07c "}
+                        <span className="font-semibold">
+                          {"\u300c"}
+                          <span className="text-amber-200">
+                            {transferConfirm.toName}
+                          </span>
+                          {"\u300d"}
+                        </span>
+                        {"\uc5d0\uac8c \uc804\ub2ec\ud569\ub2c8\ub2e4."}
+                      </div>
+                      <div className="mt-4 flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs font-semibold text-zinc-100 hover:border-zinc-600"
+                          onClick={() => setTransferConfirm(null)}
+                        >
+                          {"\ucde8\uc18c"}
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600"
+                          onClick={() => {
+                            setTransferConfirm(null);
+                            handleTransfer();
+                          }}
+                        >
+                          {"\uc801\uc6a9"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
                 {inventoryResult ? (
                   <div
                     className="fixed inset-0 z-40 flex items-center justify-center"
@@ -1576,6 +2279,99 @@ useEffect(() => {
                     </div>
                   </div>
                 ) : null}
+
+                {transferResult ? (
+                  <div
+                    className="fixed inset-0 z-40 flex items-center justify-center"
+                    role="dialog"
+                    aria-modal="true"
+                  >
+                    <div
+                      className="absolute inset-0 bg-black/40"
+                      onClick={() => setTransferResult(null)}
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Close overlay"
+                      onKeyDown={(e) =>
+                        e.key === "Enter" && setTransferResult(null)
+                      }
+                    />
+                    <div className="relative z-50 w-[min(360px,92vw)] rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
+                      <div className="mb-2 text-sm font-semibold text-zinc-100">
+                        {"\uc544\uc774\ud15c \uc804\ub2ec \uacb0\uacfc"}
+                      </div>
+                      <div className="text-sm text-zinc-100">
+                        <span className="font-semibold">
+                          {"\u300c"}
+                          <span className="text-amber-200">
+                            {transferResult.fromName}
+                          </span>
+                          {"\u300d"}
+                        </span>
+                        {",  ["}
+                        <span
+                          className={[
+                            "font-semibold",
+                            qualityColorClass(transferResult.qualityLabel),
+                          ].join(" ")}
+                        >
+                          {transferResult.itemName}
+                        </span>
+                        {"]"}
+                        {getEulReul(transferResult.itemName)}
+                        {" "}
+                        {formatItemAmount(
+                          transferResult.amount,
+                          transferResult.unit,
+                        )}
+                        {"\ub9cc\ud07c "}
+                        <span className="font-semibold">
+                          {"\u300c"}
+                          <span className="text-amber-200">
+                            {transferResult.toName}
+                          </span>
+                          {"\u300d"}
+                        </span>
+                        {"\uc5d0\uac8c \uc804\ub2ec\ud558\uc600\ub2e4."}
+                      </div>
+                      <div className="mt-1 text-sm text-zinc-300">
+                        {"(\ubcf4\ub0b4\ub294 \uc0ac\ub78c \ub0a8\uc740 \uc218\ub7c9: "}
+                        {formatItemAmount(
+                          transferResult.fromBefore,
+                          transferResult.unit,
+                        )}
+                        {" \u2192 "}
+                        {formatItemAmount(
+                          transferResult.fromAfter,
+                          transferResult.unit,
+                        )}
+                        {")"}
+                      </div>
+                      <div className="mt-1 text-sm text-zinc-300">
+                        {"(\ubc1b\ub294 \uc0ac\ub78c \ub0a8\uc740 \uc218\ub7c9: "}
+                        {formatItemAmount(
+                          transferResult.toBefore,
+                          transferResult.unit,
+                        )}
+                        {" \u2192 "}
+                        {formatItemAmount(
+                          transferResult.toAfter,
+                          transferResult.unit,
+                        )}
+                        {")"}
+                      </div>
+                      <div className="mt-4 flex justify-end">
+                        <button
+                          type="button"
+                          className="rounded-md bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600"
+                          onClick={() => setTransferResult(null)}
+                        >
+                          {"\ud655\uc778"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
                 {inventoryNotice ? (
                   <div
                     className="fixed inset-0 z-40 flex items-center justify-center"
@@ -1630,6 +2426,104 @@ useEffect(() => {
                 ) : null}
               </section>
             ) : null}
+            {activeTab === "db" ? (
+              <section className="flex-1 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
+                <div className="mb-3 text-sm font-semibold text-zinc-200">
+                  {"\uc544\uc774\ud15c DB"}
+                </div>
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  {ITEM_TYPE_OPTIONS.map((type) => {
+                    const active = dbType === type;
+                    return (
+                      <button
+                        key={type}
+                        type="button"
+                        className={[
+                          "rounded-md border px-2.5 py-1 text-[11px] font-semibold",
+                          active
+                            ? "border-amber-500/70 bg-amber-950/30 text-amber-100"
+                            : "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:border-zinc-700",
+                        ].join(" ")}
+                        onClick={() => setDbType(type)}
+                        disabled={busy}
+                      >
+                        {type}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="mb-3">
+                  <input
+                    value={dbSearch}
+                    onChange={(e) => setDbSearch(e.target.value)}
+                    placeholder={"\uc544\uc774\ud15c \uac80\uc0c9"}
+                    className="h-9 w-full rounded-md border border-zinc-800 bg-zinc-950 px-3 text-xs text-zinc-100 outline-none focus:border-zinc-600"
+                  />
+                </div>
+                <div className="overflow-visible rounded-lg border border-zinc-800">
+                  <div className="grid grid-cols-[minmax(0,1fr)_90px_90px_70px] gap-2 bg-zinc-950/60 px-4 py-2 text-xs font-semibold text-zinc-400">
+                    <span>{"\ud56d\ubaa9"}</span>
+                    <span>{"\ub4f1\uae09"}</span>
+                    <span>{"\uc885\ub958"}</span>
+                    <span className="text-right">{"\ub2e8\uc704"}</span>
+                  </div>
+                  <div className="divide-y divide-zinc-800">
+                    {dbPageItems.length === 0 ? (
+                      <div className="px-4 py-3 text-xs text-zinc-500">
+                        {"\uac80\uc0c9 \uacb0\uacfc\uac00 \uc5c6\uc2b5\ub2c8\ub2e4."}
+                      </div>
+                    ) : (
+                      dbPageItems.map((entry) => (
+                        <div
+                          key={`db-${entry.name}`}
+                          className="grid w-full grid-cols-[minmax(0,1fr)_90px_90px_70px] items-center gap-2 px-4 py-2 text-left text-sm"
+                        >
+                          <span className={qualityColorClass(entry.qualityLabel)}>
+                            {entry.name}
+                          </span>
+                          <span className={qualityColorClass(entry.qualityLabel)}>
+                            {entry.qualityLabel}
+                          </span>
+                          <span className={qualityColorClass(entry.qualityLabel)}>
+                            {entry.type}
+                          </span>
+                          <span
+                            className={
+                              "text-right " + qualityColorClass(entry.qualityLabel)
+                            }
+                          >
+                            {entry.unit ?? "-"}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+                <div className="mt-3 flex items-center justify-center gap-3">
+                  <button
+                    type="button"
+                    className="rounded-md border border-zinc-700 px-2 py-1 text-lg leading-none disabled:opacity-40"
+                    onClick={() => setDbPage((prev) => Math.max(0, prev - 1))}
+                    disabled={dbPage <= 0}
+                  >
+                    {"\u2B05\uFE0F"}
+                  </button>
+                  <span className="text-xs text-zinc-400">
+                    {dbPage + 1} / {dbPageCount}
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded-md border border-zinc-700 px-2 py-1 text-lg leading-none disabled:opacity-40"
+                    onClick={() =>
+                      setDbPage((prev) => Math.min(dbPageCount - 1, prev + 1))
+                    }
+                    disabled={dbPage >= dbPageCount - 1}
+                  >
+                    {"\u27A1\uFE0F"}
+                  </button>
+                </div>
+              </section>
+            ) : null}
             {activeTab === "sheet" ? (
               <section className="flex-1 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
                 <div className="min-h-[280px]" />
@@ -1637,59 +2531,56 @@ useEffect(() => {
             ) : null}
 
         {discordChannelOpen ? (
-                  <div
-                    className="fixed inset-0 z-40 flex items-center justify-center"
-                    role="dialog"
-                    aria-modal="true"
-                  >
-                    <div
-                      className="absolute inset-0 bg-black/40"
-                      onClick={() => setDiscordChannelOpen(false)}
-                      role="button"
-                      tabIndex={0}
-                      aria-label="Close overlay"
-                      onKeyDown={(e) =>
-                        e.key === "Enter" && setDiscordChannelOpen(false)
-                      }
-                    />
-                    <div className="relative z-50 w-[min(420px,92vw)] rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
-                      <div className="mb-2 flex items-center justify-between">
-                        <div className="text-sm font-semibold text-zinc-100">
-                          {"\ub514\uc2a4\ucf54\ub4dc \uc124\uc815"}
-                        </div>
-                        <button
-                          type="button"
-                          className="rounded-md border border-zinc-700 px-2.5 py-1 text-[11px] text-zinc-200 hover:border-zinc-600"
-                          onClick={() => setDiscordChannelOpen(false)}
-                        >
-                          {"\ub2eb\uae30"}
-                        </button>
-                      </div>
-                      <div className="text-xs text-zinc-400">
-                        {"\ucc44\ub110 ID\ub97c \uc785\ub825\ud574 \uc8fc\uc138\uc694. (\uc22b\uc790 \ub610\ub294 <#...> \ubd99\uc5ec\ub123\uae30)"}
-                      </div>
-                      <input
-                        value={discordChannelDraft}
-                        onChange={(e) => setDiscordChannelDraft(e.target.value)}
-                        placeholder={"\ucc44\ub110 ID \ub610\ub294 <#...>"}
-                        className="mt-2 h-9 w-full rounded-md border border-zinc-800 bg-zinc-950 px-3 text-xs text-zinc-100 outline-none focus:border-zinc-600"
-                      />
-                      <div className="mt-2 text-xs text-zinc-500">
-                        {"\ud604\uc7ac \ucc44\ub110: "}
-                        <span className="text-zinc-200">{channelId || "-"}</span>
-                      </div>
-                      <div className="mt-4 flex justify-end">
-                        <button
-                          type="button"
-                          className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
-                          onClick={saveDiscordSettings}
-                        >
-                          {"\uc800\uc7a5"}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
+          <div
+            className="fixed inset-0 z-40 flex items-center justify-center"
+            role="dialog"
+            aria-modal="true"
+          >
+            <div
+              className="absolute inset-0 bg-black/40"
+              onClick={() => setDiscordChannelOpen(false)}
+              role="button"
+              tabIndex={0}
+              aria-label="Close overlay"
+              onKeyDown={(e) => e.key === "Enter" && setDiscordChannelOpen(false)}
+            />
+            <div className="relative z-50 w-[min(420px,92vw)] rounded-2xl border border-zinc-800 bg-zinc-950 p-4 shadow-2xl">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="text-sm font-semibold text-zinc-100">
+                  디스코드 설정
+                </div>
+                <button
+                  type="button"
+                  className="rounded-md border border-zinc-700 px-2.5 py-1 text-[11px] text-zinc-200 hover:border-zinc-600"
+                  onClick={() => setDiscordChannelOpen(false)}
+                >
+                  닫기
+                </button>
+              </div>
+              <div className="text-xs text-zinc-400">
+                {"채널 ID를 입력해 주세요. (숫자 또는 <#...> 붙여넣기)"}
+              </div>
+              <input
+                value={discordChannelDraft}
+                onChange={(e) => setDiscordChannelDraft(e.target.value)}
+                placeholder="채널 ID 또는 <#...>"
+                className="mt-2 h-9 w-full rounded-md border border-zinc-800 bg-zinc-950 px-3 text-xs text-zinc-100 outline-none focus:border-zinc-600"
+              />
+              <div className="mt-2 text-xs text-zinc-500">
+                현재 채널: <span className="text-zinc-200">{channelId || "-"}</span>
+              </div>
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+                  onClick={saveDiscordSettings}
+                >
+                  저장
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
           </div>
         </div>
       </div>

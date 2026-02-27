@@ -1022,16 +1022,16 @@ export default function UnitsPanel(props: {
 
         const deathSaves =
           data.deathSaves &&
-          (Number(data.deathSaves.success) > 0 ||
-            Number(data.deathSaves.failure) > 0)
+          (Number(data.deathSaves.success ?? 0) !== 0 ||
+            Number(data.deathSaves.failure ?? -1) !== -1)
             ? {
                 success: Math.max(
                   0,
                   Math.floor(Number(data.deathSaves.success ?? 0))
                 ),
                 failure: Math.max(
-                  0,
-                  Math.floor(Number(data.deathSaves.failure ?? 0))
+                  -1,
+                  Math.floor(Number(data.deathSaves.failure ?? -1))
                 ),
               }
             : undefined;
@@ -2062,9 +2062,9 @@ export default function UnitsPanel(props: {
                       <span className="text-zinc-500">사망 내성</span>
                       <span className="ml-2">
                         {selectedPreset.data?.deathSaves &&
-                        (selectedPreset.data.deathSaves.success ||
-                          selectedPreset.data.deathSaves.failure)
-                          ? `(${selectedPreset.data.deathSaves.success ?? 0}, ${selectedPreset.data.deathSaves.failure ?? 0})`
+                        ((selectedPreset.data.deathSaves.success ?? 0) !== 0 ||
+                          (selectedPreset.data.deathSaves.failure ?? -1) !== -1)
+                          ? `(${selectedPreset.data.deathSaves.success ?? 0}, ${selectedPreset.data.deathSaves.failure ?? -1})`
                           : "없음"}
                       </span>
                     </div>

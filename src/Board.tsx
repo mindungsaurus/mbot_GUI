@@ -437,7 +437,9 @@ export default function Board(props: {
                               const dsFailure =
                                 typeof u.deathSaves?.failure === "number"
                                   ? u.deathSaves.failure
-                                  : 0;
+                                  : -1;
+                              const showDeathSaves =
+                                !(dsSuccess === 0 && dsFailure === -1);
                               const summaryTags = formatSummaryTags(u);
 
                               return (
@@ -473,7 +475,7 @@ export default function Board(props: {
                                               {ac ?? "-"}
                                             </span>
                                           </span>
-                                          {(dsSuccess > 0 || dsFailure > 0) && (
+                                          {showDeathSaves && (
                                             <span className="text-zinc-400">
                                               (
                                               <span className="font-semibold text-green-400">
