@@ -1525,14 +1525,14 @@ export default function App() {
 
     const name = markerDraftName.trim();
     if (!name) {
-      setMarkerDraftErr("?? ??? 저장.");
+      setMarkerDraftErr("마커 이름을 입력해 주세요.");
       return;
     }
 
     const alias = markerDraftAlias.trim();
 
     if (markerSelectedCells.length === 0) {
-      setMarkerDraftErr("저장 ?? 저장.");
+      setMarkerDraftErr("마커를 배치할 셀을 선택해 주세요.");
       return;
     }
 
@@ -1542,7 +1542,7 @@ export default function App() {
     if (durationRaw.length > 0) {
       const parsed = Math.trunc(Number(durationRaw));
       if (!Number.isFinite(parsed) || parsed <= 0) {
-        setMarkerDraftErr("저장? 1 ??? 저장 ?.");
+        setMarkerDraftErr("지속시간은 1 이상의 정수로 입력해 주세요.");
         return;
       }
       duration = parsed;
@@ -2629,7 +2629,9 @@ export default function App() {
   async function applyTurnOrderReorder(
     turnOrder: TurnEntry[],
     turnGroups: TurnGroup[],
-    disabledChanges: { unitId: string; turnDisabled: boolean }[]
+    disabledChanges: { unitId: string; turnDisabled: boolean }[],
+    priorities?: Record<string, number>,
+    priorityModeApplied?: boolean
   ) {
     const patchActions = (disabledChanges ?? []).map((change) => ({
       type: "PATCH_UNIT",
@@ -2639,10 +2641,14 @@ export default function App() {
 
     const actions: any[] = [];
     if (Array.isArray(turnOrder)) {
+      const hasPriorities =
+        priorities && Object.keys(priorities).length > 0;
+      const applyByPriority = !!priorityModeApplied && !!hasPriorities;
       actions.push({
-        type: "SET_TURN_ORDER",
+        type: applyByPriority ? "SET_TURN_ORDER_BY_PRIORITY" : "SET_TURN_ORDER",
         turnOrder,
         turnGroups: Array.isArray(turnGroups) ? turnGroups : [],
+        ...(hasPriorities ? { priorities } : {}),
       });
     }
     actions.push(...patchActions);
@@ -4449,13 +4455,22 @@ export default function App() {
           turnGroups={(state as any)?.turnGroups ?? []}
           busy={busy}
           onClose={() => setReorderOpen(false)}
-          onApply={async (nextOrder, nextGroups, disabledChanges) => {
+          onApply={async (
+            nextOrder,
+            nextGroups,
+            disabledChanges,
+            priorities,
+            priorityModeApplied
+          ) => {
             const ok = await applyTurnOrderReorder(
               nextOrder,
               nextGroups,
-              disabledChanges
+              disabledChanges,
+              priorities,
+              priorityModeApplied
             );
-            if (ok) setReorderOpen(false);
+            const keepOpenForPriorityMode = !!priorityModeApplied;
+            if (ok && !keepOpenForPriorityMode) setReorderOpen(false);
           }}
         />
 

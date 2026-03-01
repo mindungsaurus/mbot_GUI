@@ -1,9 +1,9 @@
-// src/TurnOrderBar.tsx
+﻿// src/TurnOrderBar.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Marker, TurnEntry, TurnGroup, Unit } from "./types";
 import { unitTextColor } from "./UnitColor";
 
-// turnOrder에 label 같은 게 섞여 있어도 unitId만 최대한 뽑아내기
+// turnOrder??label 媛숈? 寃??욎뿬 ?덉뼱??unitId留?理쒕???戮묒븘?닿린
 function extractUnitId(entry: any): string | null {
   if (!entry) return null;
   if (typeof entry === "string") return entry;
@@ -23,7 +23,7 @@ function mod(n: number, m: number) {
 function turnLabel(u: Unit | undefined | null) {
   if (!u) return "unknown";
   const alias = ((u as any).alias ?? "").toString().trim();
-  // ✅ TurnOrderBar에서는 alias만 표시 (없으면 name)
+  // ??TurnOrderBar?먯꽌??alias留??쒖떆 (?놁쑝硫?name)
   return alias || u.name || "unknown";
 }
 
@@ -37,6 +37,28 @@ function groupLabel(g: TurnGroup | undefined | null) {
   if (!g) return "group";
   const name = (g.name ?? "").toString().trim();
   return name || g.id;
+}
+
+function parseTempTurnToken(
+  token: string | null | undefined,
+  unitById: Map<string, Unit>,
+  groupById: Map<string, TurnGroup>
+): { kind: "unit"; unitId: string } | { kind: "group"; groupId: string } | null {
+  const raw = (token ?? "").toString().trim();
+  if (!raw) return null;
+  if (raw.startsWith("unit:")) {
+    const unitId = raw.slice(5).trim();
+    if (unitId) return { kind: "unit", unitId };
+    return null;
+  }
+  if (raw.startsWith("group:")) {
+    const groupId = raw.slice(6).trim();
+    if (groupId) return { kind: "group", groupId };
+    return null;
+  }
+  if (unitById.has(raw)) return { kind: "unit", unitId: raw };
+  if (groupById.has(raw)) return { kind: "group", groupId: raw };
+  return null;
 }
 
 function sidePillTint(side: Unit["side"] | undefined): string {
@@ -70,11 +92,11 @@ function isGroupEligible(
 export default function TurnOrderBar(props: {
   units: Unit[];
   markers: Marker[];
-  turnOrder: TurnEntry[]; // backend에서 오는 turnOrder (label 섞여도 OK)
+  turnOrder: TurnEntry[]; // backend?먯꽌 ?ㅻ뒗 turnOrder (label ?욎뿬??OK)
   turnGroups?: TurnGroup[];
-  // 둘 중 하나만 있어도 동작. 둘 다 주면 currentUnitId 우선.
-  turnOrderIndex?: number | null; // turnOrder 배열 기준 현재 위치
-  currentUnitId?: string | null; // 현재 턴 유닛 id
+  // ??以??섎굹留??덉뼱???숈옉. ????二쇰㈃ currentUnitId ?곗꽑.
+  turnOrderIndex?: number | null; // turnOrder 諛곗뿴 湲곗? ?꾩옱 ?꾩튂
+  currentUnitId?: string | null; // ?꾩옱 ???좊떅 id
   className?: string;
   round?: number | null; // backend state.round
   battleStarted?: boolean;
@@ -135,7 +157,7 @@ export default function TurnOrderBar(props: {
     return ids;
   }, [turnGroups]);
 
-  // turnOrder에 marker 엔트리도 표시되도록 구성한다.
+  // turnOrder??marker ?뷀듃由щ룄 ?쒖떆?섎룄濡?援ъ꽦?쒕떎.
   const displayEntries = useMemo(() => {
     const out: Array<
       | { kind: "unit"; unitId: string; sourceIndex: number }
@@ -239,16 +261,27 @@ export default function TurnOrderBar(props: {
   }, [tempTurnStack]);
 
   const isTempTurn = isBattleStarted && tempStack.length > 0;
-  const tempTurnUnitId = isTempTurn ? tempStack[tempStack.length - 1] : null;
+  const tempTurnToken = isTempTurn ? tempStack[tempStack.length - 1] : null;
 
-  // NEXT_TURN을 누르면(임시턴 중엔 pop) “다음으로 보일 턴”
-  const resumeUnitId = isTempTurn
-    ? tempStack.length >= 2
-      ? tempStack[tempStack.length - 2]
-      : baseEntryFromTurnIndex?.kind === "unit"
-        ? baseEntryFromTurnIndex.unitId
-        : null
-    : null;
+  // NEXT_TURN???꾨Ⅴ硫??꾩떆??以묒뿏 pop) ?쒕떎?뚯쑝濡?蹂댁씪 ?닳?
+  const tempTurnEntry = useMemo(
+    () => parseTempTurnToken(tempTurnToken, unitById, groupById),
+    [tempTurnToken, unitById, groupById]
+  );
+
+  const resumeEntry = useMemo(() => {
+    if (!isTempTurn) return null;
+    if (tempStack.length >= 2) {
+      return parseTempTurnToken(tempStack[tempStack.length - 2], unitById, groupById);
+    }
+    if (baseEntryFromTurnIndex?.kind === "unit") {
+      return { kind: "unit", unitId: baseEntryFromTurnIndex.unitId } as const;
+    }
+    if (baseEntryFromTurnIndex?.kind === "group") {
+      return { kind: "group", groupId: baseEntryFromTurnIndex.groupId } as const;
+    }
+    return null;
+  }, [isTempTurn, tempStack, baseEntryFromTurnIndex, unitById, groupById]);
 
   const resolvedCurrentEntry = useMemo(() => {
     if (!isBattleStarted) return null;
@@ -296,7 +329,7 @@ export default function TurnOrderBar(props: {
     return idx >= 0 ? idx : 0;
   }, [displayEntries, displayIndexFromTurnIndex, resolvedCurrentKey, n]);
 
-  const MAX_VISIBLE = 11; // 중앙 고정 때문에 홀수 권장 (12개 “정도”면 11이 가장 자연스러움)
+  const MAX_VISIBLE = 11; // 以묒븰 怨좎젙 ?뚮Ц?????沅뚯옣 (12媛??쒖젙?꾟앸㈃ 11??媛???먯뿰?ㅻ윭?)
 
   const visibleCount = useMemo(() => {
     if (n <= 0) return 0;
@@ -307,9 +340,9 @@ export default function TurnOrderBar(props: {
   const leftCount = Math.floor((visibleCount - 1) / 2);
   const rightCount = Math.max(0, visibleCount - 1 - leftCount);
 
-  // ---- 애니메이션용 상태 ----
-  const SLOT_W = 132; // 슬롯 폭(=한 칸 이동 폭)
-  const CARD_W = 116; // 유닛 pill(텍스트 박스) 폭
+  // ---- ?좊땲硫붿씠?섏슜 ?곹깭 ----
+  const SLOT_W = 132; // ?щ’ ??=??移??대룞 ??
+  const CARD_W = 116; // ?좊떅 pill(?띿뒪??諛뺤뒪) ??
   const [renderIndex, setRenderIndex] = useState(currentIndex);
   const [animating, setAnimating] = useState(false);
   const [animDir, setAnimDir] = useState<"forward" | "backward" | null>(null);
@@ -317,7 +350,7 @@ export default function TurnOrderBar(props: {
   const pendingIndexRef = useRef<number | null>(null);
   const animatingRef = useRef(false);
 
-  // ---- 라운드 표시(프론트에서만 추적) ----
+  // ---- ?쇱슫???쒖떆(?꾨줎?몄뿉?쒕쭔 異붿쟻) ----
   const roundValue = Number.isFinite(roundProp as number)
     ? Math.trunc(roundProp as number)
     : 1;
@@ -352,20 +385,20 @@ export default function TurnOrderBar(props: {
     return () => window.clearTimeout(t);
   }, [animating]);
 
-  // currentIndex가 바뀔 때 “한 칸 굴러가는” 애니메이션
+  // currentIndex媛 諛붾????쒗븳 移?援대윭媛?붴??좊땲硫붿씠??
   useEffect(() => {
     if (n <= 1) {
       setRenderIndex(currentIndex);
       return;
     }
-    if (animating) return; // 연타 시엔 일단 자연스럽게 “다음 업데이트”로 넘어가게(간단 버전)
+    if (animating) return; // ?고? ?쒖뿏 ?쇰떒 ?먯뿰?ㅻ읇寃??쒕떎???낅뜲?댄듃?앸줈 ?섏뼱媛寃?媛꾨떒 踰꾩쟾)
     if (currentIndex === renderIndex) return;
 
     const forward = mod(renderIndex + 1, n) === currentIndex;
     const backward = mod(renderIndex - 1, n) === currentIndex;
 
     if (!forward && !backward) {
-      // 한 칸 이동이 아니면(예: 유닛 삭제/선택점프) 그냥 점프
+      // ??移??대룞???꾨땲硫??? ?좊떅 ??젣/?좏깮?먰봽) 洹몃깷 ?먰봽
       setRenderIndex(currentIndex);
       setShiftPx(0);
       setAnimDir(null);
@@ -394,17 +427,17 @@ export default function TurnOrderBar(props: {
     const next = pendingIndexRef.current;
     pendingIndexRef.current = null;
 
-    // 트랜지션 끄고(=animating false) 위치 리셋
+    // ?몃옖吏???꾧퀬(=animating false) ?꾩튂 由ъ뀑
     setAnimating(false);
     setAnimDir(null);
 
     if (typeof next === "number") setRenderIndex(next);
 
-    // forward는 끝이 -SLOT_W라서 0으로 점프 리셋이 필요
+    // forward???앹씠 -SLOT_W?쇱꽌 0?쇰줈 ?먰봽 由ъ뀑???꾩슂
     setShiftPx(0);
   }
 
-  // 현재 화면에 렌더할 인덱스 목록 만들기
+  // ?꾩옱 ?붾㈃???뚮뜑???몃뜳??紐⑸줉 留뚮뱾湲?
   const displayIndices = useMemo(() => {
     if (n <= 0 || visibleCount <= 0) return [];
 
@@ -422,7 +455,7 @@ export default function TurnOrderBar(props: {
   }, [n, visibleCount, leftCount, rightCount, animating, animDir, renderIndex]);
 
   const focusPos = useMemo(() => {
-    // 애니메이션 중에도 “실제 currentIndex”를 강조해서, 중앙으로 들어오는 느낌을 줌
+    // ?좊땲硫붿씠??以묒뿉???쒖떎??currentIndex?앸? 媛뺤“?댁꽌, 以묒븰?쇰줈 ?ㅼ뼱?ㅻ뒗 ?먮굦??以?
     const p = displayIndices.indexOf(currentIndex);
     return p >= 0 ? p : leftCount;
   }, [displayIndices, currentIndex, leftCount]);
@@ -445,11 +478,53 @@ export default function TurnOrderBar(props: {
       ? unitTextColor(currentGroupLead)
       : undefined;
 
-  const tempUnit = tempTurnUnitId ? unitById.get(tempTurnUnitId) : null;
-  const resumeUnit = resumeUnitId ? unitById.get(resumeUnitId) : null;
+  const tempUnit =
+    tempTurnEntry?.kind === "unit" ? unitById.get(tempTurnEntry.unitId) : null;
+  const tempGroup =
+    tempTurnEntry?.kind === "group" ? groupById.get(tempTurnEntry.groupId) : null;
+  const tempGroupLeadId = tempGroup?.unitIds?.[0];
+  const tempGroupLead = tempGroupLeadId ? unitById.get(tempGroupLeadId) : null;
+  const tempColor = tempUnit
+    ? unitTextColor(tempUnit)
+    : tempGroupLead
+      ? unitTextColor(tempGroupLead)
+      : undefined;
+  const tempTitle =
+    tempTurnEntry?.kind === "unit"
+      ? tempUnit?.name ?? ""
+      : tempTurnEntry?.kind === "group"
+        ? tempGroup?.name ?? ""
+        : "";
+  const tempLabel =
+    tempTurnEntry?.kind === "unit"
+      ? turnLabel(tempUnit)
+      : tempTurnEntry?.kind === "group"
+        ? groupLabel(tempGroup)
+        : "-";
 
-  const tempColor = tempUnit ? unitTextColor(tempUnit) : undefined;
-  const resumeColor = resumeUnit ? unitTextColor(resumeUnit) : undefined;
+  const resumeUnit =
+    resumeEntry?.kind === "unit" ? unitById.get(resumeEntry.unitId) : null;
+  const resumeGroup =
+    resumeEntry?.kind === "group" ? groupById.get(resumeEntry.groupId) : null;
+  const resumeGroupLeadId = resumeGroup?.unitIds?.[0];
+  const resumeGroupLead = resumeGroupLeadId ? unitById.get(resumeGroupLeadId) : null;
+  const resumeColor = resumeUnit
+    ? unitTextColor(resumeUnit)
+    : resumeGroupLead
+      ? unitTextColor(resumeGroupLead)
+      : undefined;
+  const resumeTitle =
+    resumeEntry?.kind === "unit"
+      ? resumeUnit?.name ?? ""
+      : resumeEntry?.kind === "group"
+        ? resumeGroup?.name ?? ""
+        : "";
+  const resumeLabel =
+    resumeEntry?.kind === "unit"
+      ? turnLabel(resumeUnit)
+      : resumeEntry?.kind === "group"
+        ? groupLabel(resumeGroup)
+        : "-";
 
   if (n <= 0) return null;
 
@@ -463,59 +538,40 @@ export default function TurnOrderBar(props: {
       <div className="mb-1 grid grid-cols-3 items-center gap-2">
         {/* left */}
         <div className="text-xs font-semibold text-zinc-200">Turn Order</div>
-
         {/* center: (임시턴 안내 1줄 + 버튼들) */}
         <div className="flex flex-col items-center justify-center gap-1">
-          {/* 임시턴 안내: on/off에도 높이 유지 */}
-          <div className="h-4 flex items-center justify-center gap-2 text-[11px] text-zinc-500">
-            {isTempTurn ? (
-              <>
-                <span className="text-sky-300 font-semibold">임시 턴</span>
+          {isTempTurn ? (
+            <div className="flex items-center justify-center gap-2 text-[11px] text-zinc-500">
+              <span className="text-sky-300 font-semibold">임시 턴</span>
                 <span
                   className="font-semibold"
                   style={tempColor ? { color: tempColor } : undefined}
-                  title={tempUnit?.name ?? ""}
+                  title={tempTitle}
                 >
-                  {turnLabel(tempUnit)}
+                  {tempLabel}
                 </span>
 
-                <span className="text-zinc-700">→</span>
+              <span className="text-zinc-700">→</span>
 
-                <span className="text-zinc-400">다음 턴(재개)</span>
+              <span className="text-zinc-400">(다음 턴 재개)</span>
                 <span
                   className="font-semibold"
                   style={resumeColor ? { color: resumeColor } : undefined}
-                  title={resumeUnit?.name ?? ""}
+                  title={resumeTitle}
                 >
-                  {turnLabel(resumeUnit)}
+                  {resumeLabel}
                 </span>
-              </>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
 
-          {/* 버튼들: 살짝 더 떨어지게 */}
+          {/* 버튼들 간격 */}
           <div className="flex items-center justify-center gap-3">
-            {onReorder ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={onReorder}
-                className={[
-                  "rounded-lg border px-2 py-1 text-[11px] font-semibold",
-                  "border-amber-500/50 bg-amber-950/25 text-amber-200",
-                  "hover:bg-amber-900/35 hover:text-amber-100",
-                  "disabled:opacity-50",
-                ].join(" ")}
-                title="Reorder Turn"
-              >
-                순서 조정
-              </button>
-            ) : null}
             {isBattleStarted && onRoundReset ? (
               <button
                 type="button"
                 disabled={busy}
                 onClick={onRoundReset}
+                style={{ order: 1 }}
                 className={[
                   "whitespace-nowrap rounded-lg border px-2 py-1 text-[10px] font-semibold",
                   "border-fuchsia-500/60 bg-fuchsia-950/35 text-fuchsia-200",
@@ -532,6 +588,7 @@ export default function TurnOrderBar(props: {
                 type="button"
                 disabled={busy}
                 onClick={onBattleStart}
+                style={{ order: 1 }}
                 className={[
                   "rounded-lg border px-2 py-1 text-[11px] font-semibold",
                   "border-rose-500/50 bg-rose-950/30 text-rose-200",
@@ -543,11 +600,29 @@ export default function TurnOrderBar(props: {
                 전투 개시
               </button>
             ) : null}
+            {onReorder ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onReorder}
+                style={{ order: 2 }}
+                className={[
+                  "rounded-lg border px-2 py-1 text-[11px] font-semibold",
+                  "border-amber-500/50 bg-amber-950/25 text-amber-200",
+                  "hover:bg-amber-900/35 hover:text-amber-100",
+                  "disabled:opacity-50",
+                ].join(" ")}
+                title="Reorder Turn"
+              >
+                순서 조정
+              </button>
+            ) : null}
             {onNextTurn ? (
               <button
                 type="button"
                 disabled={busy || !isBattleStarted}
                 onClick={onNextTurn}
+                style={{ order: 3 }}
                 className={[
                   "rounded-lg border px-2 py-1 text-[11px] font-semibold",
                   "border-emerald-500/50 bg-emerald-950/35 text-emerald-200",
@@ -564,6 +639,7 @@ export default function TurnOrderBar(props: {
               type="button"
               disabled={busy || !isBattleStarted || !canTempTurn}
               onClick={onTempTurn}
+              style={{ order: 4 }}
               title={
                 !isBattleStarted
                   ? "전투 개시 후 사용할 수 있어"
@@ -582,8 +658,7 @@ export default function TurnOrderBar(props: {
             </button>
           </div>
         </div>
-
-        {/* right: round/current (색 복구는 여기 style로 이미 들어가 있어야 함) :contentReference[oaicite:2]{index=2} */}
+        {/* right: round/current (??蹂듦뎄???ш린 style濡??대? ?ㅼ뼱媛 ?덉뼱???? :contentReference[oaicite:2]{index=2} */}
         <div className="flex justify-end">
           <div className="flex items-center gap-2 text-[11px] text-zinc-500">
             <span>
@@ -629,9 +704,9 @@ export default function TurnOrderBar(props: {
         </div>
       </div>
 
-      {/* 휠 영역 */}
+      {/* ???곸뿭 */}
       <div className="relative overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/20 px-2 py-2">
-        {/* 양끝 페이드(휠 느낌) */}
+        {/* ?묐걹 ?섏씠?????먮굦) */}
         <div className="pointer-events-none absolute inset-y-0 left-0 w-8 bg-gradient-to-r from-zinc-950/70 to-transparent" />
         <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-zinc-950/70 to-transparent" />
 
@@ -709,12 +784,12 @@ export default function TurnOrderBar(props: {
                       ? "opacity-65"
                       : "opacity-45";
 
-              // 랩(끝→처음) 경계면인지 체크: idx 다음이 0이고 idx가 마지막이면
+              // ???앪넂泥섏쓬) 寃쎄퀎硫댁씤吏 泥댄겕: idx ?ㅼ쓬??0?닿퀬 idx媛 留덉?留됱씠硫?
               const nextIdx =
                 i < displayIndices.length - 1 ? displayIndices[i + 1] : null;
               const isWrapSeparator = nextIdx === 0 && idx === n - 1;
 
-              // 실제 라운드 증가 직후(마지막→0)라면 wrap separator를 더 티나게
+              // ?ㅼ젣 ?쇱슫??利앷? 吏곹썑(留덉?留됤넂0)?쇰㈃ wrap separator瑜????곕굹寃?
               const wrapFlash =
                 roundFlash && currentIndex === 0 && isWrapSeparator;
 
@@ -762,7 +837,7 @@ export default function TurnOrderBar(props: {
                               ? "text-zinc-100"
                               : "text-zinc-400",
                         ].join(" ")}
-                        // ✅ 현재 턴만 colorCode(또는 side 기본색)로
+                        // ???꾩옱 ?대쭔 colorCode(?먮뒗 side 湲곕낯??濡?
                         style={labelColor ? { color: labelColor } : undefined}
                       >
                         {label}
@@ -770,17 +845,32 @@ export default function TurnOrderBar(props: {
                     </div>
                   </div>
 
-                  {/* separator: "-" + wrap이면 이모지 추가 */}
+                  {/* separator: "-" + wrap?대㈃ ?대え吏 異붽? */}
                   {i < displayIndices.length - 1 && (
                     <div
                       className={[
-                        "absolute -right-1 flex items-center gap-1 text-[11px] text-zinc-600",
-                        wrapFlash ? "text-zinc-100 animate-pulse" : "",
+                        "absolute -right-1 flex items-center gap-1 text-[11px]",
+                        isWrapSeparator
+                          ? "text-fuchsia-300"
+                          : "text-zinc-500",
+                        wrapFlash ? "text-zinc-100" : "",
                       ].join(" ")}
                     >
-                      <span>-</span>
+                      {!isWrapSeparator ? <span>-</span> : null}
                       {isWrapSeparator ? (
-                        <span title="next round">🔁</span>
+                        <span
+                          title="round boundary"
+                          className={[
+                            "inline-flex h-5 w-5 items-center justify-center rounded-full",
+                            "border border-fuchsia-400/85 bg-fuchsia-900/60",
+                            "text-[11px] font-bold text-fuchsia-100",
+                            wrapFlash
+                              ? "animate-pulse border-fuchsia-200 text-white shadow-[0_0_14px_rgba(232,121,249,0.65)]"
+                              : "",
+                          ].join(" ")}
+                        >
+                          ↺
+                        </span>
                       ) : null}
                     </div>
                   )}
@@ -793,3 +883,6 @@ export default function TurnOrderBar(props: {
     </section>
   );
 }
+
+
+

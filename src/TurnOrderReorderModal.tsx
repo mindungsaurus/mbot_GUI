@@ -26,6 +26,19 @@ function clampIndex(idx: number, len: number) {
   return Math.max(0, Math.min(len, Math.floor(idx)));
 }
 
+function entryPriorityKey(entry: TurnEntry | undefined | null) {
+  if (!entry) return null;
+  if (entry.kind === "unit") return `unit:${entry.unitId}`;
+  if (entry.kind === "group") return `group:${entry.groupId}`;
+  return null;
+}
+
+function toPositiveIntOrNull(raw: string | undefined) {
+  const n = Math.floor(Number(raw ?? ""));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
 function unitLabel(u: Unit | undefined | null) {
   if (!u) return "unknown";
   const alias = ((u as any).alias ?? "").toString().trim();
@@ -158,7 +171,9 @@ export default function TurnOrderReorderModal(props: {
   onApply: (
     turnOrder: TurnEntry[],
     turnGroups: TurnGroup[],
-    disabledChanges: { unitId: string; turnDisabled: boolean }[]
+    disabledChanges: { unitId: string; turnDisabled: boolean }[],
+    priorities?: Record<string, number>,
+    priorityModeApplied?: boolean
   ) => Promise<void> | void;
 }) {
   const { open, units, turnOrder, turnGroups, busy, onClose, onApply } = props;
@@ -178,14 +193,24 @@ export default function TurnOrderReorderModal(props: {
   const [overIndex, setOverIndex] = useState<number | null>(null);
   const [overGroupId, setOverGroupId] = useState<string | null>(null);
   const [groupName, setGroupName] = useState("");
+  const [priorityMode, setPriorityMode] = useState(true);
+  const [priorityInputs, setPriorityInputs] = useState<Record<string, string>>(
+    {}
+  );
   const initialOrderRef = useRef<TurnEntry[]>([]);
   const markerTemplateRef = useRef<TurnEntry[]>([]);
   const initialGroupsRef = useRef<TurnGroup[]>([]);
   const initialDisabledRef = useRef<Record<string, boolean>>({});
+  const wasOpenRef = useRef(false);
   const entryRefs = useRef<Array<HTMLDivElement | null>>([]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      wasOpenRef.current = false;
+      return;
+    }
+    const justOpened = !wasOpenRef.current;
+    wasOpenRef.current = true;
     const normalizedGroups = normalizeGroups(units, turnGroups ?? [], {
       keepEmpty: true,
     });
@@ -205,12 +230,32 @@ export default function TurnOrderReorderModal(props: {
     for (const u of units) disabledMap[u.id] = !!u.turnDisabled;
     initialDisabledRef.current = disabledMap;
     setDraftDisabled({ ...disabledMap });
+    const validPriorityKeys = new Set<string>();
+    for (const entry of baseOrder) {
+      if (entry.kind === "unit") {
+        validPriorityKeys.add(`unit:${entry.unitId}`);
+        continue;
+      }
+      if (entry.kind === "group") {
+        validPriorityKeys.add(`group:${entry.groupId}`);
+      }
+    }
+    // Keep user-entered priorities and only prune removed entries.
+    // New entries are added with an empty input (no order-based auto-fill).
+    setPriorityInputs((prev) => {
+      const next: Record<string, string> = {};
+      for (const key of validPriorityKeys) {
+        next[key] = prev[key] ?? "";
+      }
+      return next;
+    });
+    if (justOpened) setPriorityMode(true);
 
     setDragIndex(null);
     setOverIndex(null);
     setOverGroupId(null);
     setGroupName("");
-  }, [open, turnOrder, turnGroups, units]);
+  }, [open, turnOrder, turnGroups, units, unitById]);
 
   useEffect(() => {
     if (!open) return;
@@ -255,7 +300,7 @@ export default function TurnOrderReorderModal(props: {
     idx: number,
     e: React.DragEvent
   ) {
-    if (busy) return;
+    if (busy || priorityMode) return;
     if (entry.kind !== "unit" && entry.kind !== "group") return;
     setDragIndex(idx);
     setOverIndex(idx);
@@ -273,7 +318,7 @@ export default function TurnOrderReorderModal(props: {
     unitId: string,
     e: React.DragEvent
   ) {
-    if (busy) return;
+    if (busy || priorityMode) return;
     e.dataTransfer.effectAllowed = "move";
     const payload: DragPayload = {
       source: "group",
@@ -286,7 +331,7 @@ export default function TurnOrderReorderModal(props: {
   }
 
   function handleDragOverEntry(idx: number, e: React.DragEvent) {
-    if (busy) return;
+    if (busy || priorityMode) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     const target = e.target as HTMLElement | null;
@@ -296,7 +341,7 @@ export default function TurnOrderReorderModal(props: {
   }
 
   function handleDragEnterEntry(idx: number, e: React.DragEvent) {
-    if (busy) return;
+    if (busy || priorityMode) return;
     e.preventDefault();
     const target = e.target as HTMLElement | null;
     if (target?.closest?.("[data-group-drop=\"true\"]")) return;
@@ -305,7 +350,7 @@ export default function TurnOrderReorderModal(props: {
   }
 
   function handleListDragOver(e: React.DragEvent) {
-    if (busy) return;
+    if (busy || priorityMode) return;
     e.preventDefault();
     const target = e.target as HTMLElement | null;
     if (target?.closest?.("[data-group-drop=\"true\"]")) return;
@@ -326,7 +371,7 @@ export default function TurnOrderReorderModal(props: {
   }
 
   function handleListDragLeave(e: React.DragEvent) {
-    if (busy) return;
+    if (busy || priorityMode) return;
     const nextTarget = e.relatedTarget as Node | null;
     if (nextTarget && e.currentTarget.contains(nextTarget)) return;
     if (overIndex !== null) setOverIndex(null);
@@ -334,7 +379,7 @@ export default function TurnOrderReorderModal(props: {
   }
 
   function handleDropOnEntry(idx: number, e: React.DragEvent) {
-    if (busy) return;
+    if (busy || priorityMode) return;
     e.preventDefault();
     const payload = readDragPayload(e);
     if (!payload) return;
@@ -346,7 +391,31 @@ export default function TurnOrderReorderModal(props: {
         setOverIndex(null);
         return;
       }
-      setDraftOrder((prev) => moveItem(prev, payload.index, idx));
+      const from = payload.index;
+      const sourceEntry = draftOrder[from];
+      const targetEntry = draftOrder[idx];
+      setDraftOrder((prev) => moveItem(prev, from, idx));
+
+      // Dragging a higher-priority entry behind a lower-priority entry
+      // should copy the lower priority value to the moved entry.
+      if (from < idx) {
+        const sourceKey = entryPriorityKey(sourceEntry);
+        const targetKey = entryPriorityKey(targetEntry);
+        if (sourceKey && targetKey) {
+          const sourceVal = toPositiveIntOrNull(priorityInputs[sourceKey]);
+          const targetVal = toPositiveIntOrNull(priorityInputs[targetKey]);
+          if (
+            sourceVal != null &&
+            targetVal != null &&
+            sourceVal > targetVal
+          ) {
+            setPriorityInputs((prev) => ({
+              ...prev,
+              [sourceKey]: String(targetVal),
+            }));
+          }
+        }
+      }
       setDragIndex(null);
       setOverIndex(null);
       return;
@@ -384,7 +453,7 @@ export default function TurnOrderReorderModal(props: {
   }
 
   function handleGroupDragOver(groupId: string, e: React.DragEvent) {
-    if (busy) return;
+    if (busy || priorityMode) return;
     e.stopPropagation();
     e.preventDefault();
     if (overGroupId !== groupId) setOverGroupId(groupId);
@@ -392,7 +461,7 @@ export default function TurnOrderReorderModal(props: {
   }
 
   function handleGroupDragEnter(groupId: string, e: React.DragEvent) {
-    if (busy) return;
+    if (busy || priorityMode) return;
     e.stopPropagation();
     e.preventDefault();
     if (overGroupId !== groupId) setOverGroupId(groupId);
@@ -400,14 +469,14 @@ export default function TurnOrderReorderModal(props: {
   }
 
   function handleGroupDragLeave(groupId: string, e: React.DragEvent) {
-    if (busy) return;
+    if (busy || priorityMode) return;
     const nextTarget = e.relatedTarget as Node | null;
     if (nextTarget && e.currentTarget.contains(nextTarget)) return;
     if (overGroupId === groupId) setOverGroupId(null);
   }
 
   function handleDropOnGroup(groupId: string, e: React.DragEvent) {
-    if (busy) return;
+    if (busy || priorityMode) return;
     e.stopPropagation();
     e.preventDefault();
     const payload = readDragPayload(e);
@@ -562,11 +631,78 @@ export default function TurnOrderReorderModal(props: {
         disabledChanges.push({ unitId, turnDisabled: !!disabled });
       }
     }
-    const nextOrder = mergeMarkerTemplate(
-      markerTemplateRef.current,
-      safeOrder as TurnEntry[]
+    let orderForApply: TurnEntry[] = safeOrder as TurnEntry[];
+    let prioritiesPayload: Record<string, number> | undefined;
+    if (priorityMode) {
+      const meta: Array<{
+        entry: TurnEntry;
+        index: number;
+        key: string;
+        score: number;
+      }> = [];
+      for (let idx = 0; idx < orderForApply.length; idx += 1) {
+        const entry = orderForApply[idx];
+        if (entry.kind === "unit") {
+          const unit = unitById.get(entry.unitId);
+          if (!isTurnEligible(unit) || !!draftDisabled[entry.unitId]) {
+            continue;
+          }
+          const key = `unit:${entry.unitId}`;
+          const raw = priorityInputs[key] ?? "";
+          const n = Math.floor(Number(raw));
+          const score = Number.isFinite(n) && n > 0 ? n : 1;
+          meta.push({ entry, index: idx, key, score });
+          continue;
+        }
+        if (entry.kind === "group") {
+          const group = draftGroups.find((g) => g.id === entry.groupId);
+          if (!group || (group.unitIds?.length ?? 0) === 0) continue;
+          const key = `group:${entry.groupId}`;
+          const raw = priorityInputs[key] ?? "";
+          const n = Math.floor(Number(raw));
+          const score = Number.isFinite(n) && n > 0 ? n : 1;
+          meta.push({ entry, index: idx, key, score });
+        }
+      }
+      if (meta.length > 0) {
+        const sorted = meta
+          .slice()
+          .sort((a, b) => b.score - a.score || a.index - b.index);
+        let cursor = 0;
+        orderForApply = orderForApply.map((entry) => {
+          if (entry.kind !== "unit" && entry.kind !== "group") return entry;
+          const current = cursor < sorted.length ? sorted[cursor] : null;
+          const isSortable =
+            entry.kind === "group"
+              ? (draftGroups.find((g) => g.id === entry.groupId)?.unitIds
+                  ?.length ?? 0) > 0
+              : !draftDisabled[entry.unitId] &&
+                isTurnEligible(unitById.get(entry.unitId));
+          if (!isSortable || !current) return entry;
+          cursor += 1;
+          return current.entry;
+        });
+        prioritiesPayload = {};
+        for (const m of meta) prioritiesPayload[m.key] = m.score;
+      }
+    }
+    if (!prioritiesPayload) {
+      const next: Record<string, number> = {};
+      for (const [key, raw] of Object.entries(priorityInputs)) {
+        const n = Math.floor(Number(raw ?? ""));
+        if (!Number.isFinite(n) || n <= 0) continue;
+        next[key] = n;
+      }
+      if (Object.keys(next).length > 0) prioritiesPayload = next;
+    }
+    const nextOrder = mergeMarkerTemplate(markerTemplateRef.current, orderForApply);
+    await onApply(
+      nextOrder,
+      draftGroups,
+      disabledChanges,
+      prioritiesPayload,
+      priorityMode
     );
-    await onApply(nextOrder, draftGroups, disabledChanges);
   }
 
   const safeOrder = draftOrder.filter((entry) => !!entry);
@@ -581,7 +717,7 @@ export default function TurnOrderReorderModal(props: {
       aria-label="Turn order reorder modal"
     >
       <div
-        className="absolute inset-0 bg-black/30 backdrop-blur-[2px]"
+        className="absolute inset-0 bg-black/30"
         onClick={busy ? undefined : onClose}
         role="button"
         aria-label="Close overlay"
@@ -596,7 +732,9 @@ export default function TurnOrderReorderModal(props: {
               순서 조정
             </div>
             <div className="mt-1 text-xs text-zinc-500">
-              유닛을 드래그해 순서를 바꾸고, 그룹 카드에 드롭해 묶을 수 있습니다.
+              {priorityMode
+                ? "우선권(양의 정수)을 입력하면 높은 값 순서로 자동 정렬됩니다."
+                : "유닛을 드래그해 순서를 바꾸고, 그룹 카드에 드롭해 묶을 수 있습니다."}
             </div>
           </div>
 
@@ -617,6 +755,20 @@ export default function TurnOrderReorderModal(props: {
             className="rounded-lg bg-amber-700 px-3 py-2 text-xs text-white hover:bg-amber-600 disabled:opacity-50"
           >
             그룹 추가
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setPriorityMode((prev) => !prev)}
+            className={[
+              "ml-auto rounded-lg border px-3 py-2 text-xs font-semibold",
+              priorityMode
+                ? "border-sky-500/60 bg-sky-950/30 text-sky-200 hover:bg-sky-900/40"
+                : "border-zinc-700 bg-zinc-900/40 text-zinc-200 hover:bg-zinc-800/50",
+              "disabled:opacity-50",
+            ].join(" ")}
+          >
+            {priorityMode ? "드래그 모드" : "우선권 입력 모드"}
           </button>
         </div>
 
@@ -656,7 +808,7 @@ export default function TurnOrderReorderModal(props: {
                     entryRefs.current[idx] = el;
                   }}
                   data-entry-index={idx}
-                  draggable={!busy && (isUnit || isGroup)}
+                  draggable={!busy && !priorityMode && (isUnit || isGroup)}
                   onDragStart={(e) => handleDragStartEntry(entry, idx, e)}
                   onDragEnd={handleDragEnd}
                   onDragEnter={(e) => handleDragEnterEntry(idx, e)}
@@ -703,18 +855,52 @@ export default function TurnOrderReorderModal(props: {
                       </span>
                     </div>
 
-                    {isUnit ? (
-                      <label className="flex items-center gap-2 text-[11px] text-zinc-400">
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 accent-amber-500"
-                          checked={isDisabled}
-                          onChange={() => toggleDisabled(entry.unitId)}
-                          disabled={busy}
-                        />
-                        <span>비활성화</span>
-                      </label>
-                    ) : null}
+                    <div className="flex items-center gap-3">
+                      {priorityMode && (isUnit || isGroup) ? (
+                        <label className="flex items-center gap-2 text-[11px] font-bold text-amber-300">
+                          <span className="font-bold text-amber-300">우선권</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={
+                              isUnit
+                                ? priorityInputs[`unit:${entry.unitId}`] ?? ""
+                                : priorityInputs[`group:${entry.groupId}`] ?? ""
+                            }
+                            onChange={(e) => {
+                              const digits = e.target.value.replace(/\D/g, "");
+                              const key = isUnit
+                                ? `unit:${entry.unitId}`
+                                : `group:${entry.groupId}`;
+                              setPriorityInputs((prev) => ({
+                                ...prev,
+                                [key]: digits,
+                              }));
+                            }}
+                            disabled={
+                              busy ||
+                              (isUnit
+                                ? isDisabled || !isTurnEligible(unit)
+                                : (group?.unitIds?.length ?? 0) === 0)
+                            }
+                            placeholder="-"
+                            className="h-7 w-16 rounded-md border border-amber-700/70 bg-zinc-950 px-2 text-right text-xs font-bold text-amber-200 placeholder:text-amber-500/50 disabled:cursor-not-allowed disabled:border-zinc-800 disabled:bg-zinc-900/50 disabled:text-zinc-500"
+                          />
+                        </label>
+                      ) : null}
+                      {!priorityMode && isUnit ? (
+                        <label className="flex items-center gap-2 text-[11px] text-zinc-400">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 accent-amber-500"
+                            checked={isDisabled}
+                            onChange={() => toggleDisabled(entry.unitId)}
+                            disabled={busy}
+                          />
+                          <span>비활성화</span>
+                        </label>
+                      ) : null}
+                    </div>
                   </div>
 
                   {isGroup ? (
@@ -826,3 +1012,4 @@ export default function TurnOrderReorderModal(props: {
     </div>
   );
 }
+

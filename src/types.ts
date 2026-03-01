@@ -124,6 +124,7 @@ export type EncounterState = {
 
   turnOrder?: TurnEntry[];
   turnGroups?: TurnGroup[];
+  turnPriorities?: Record<string, number>;
   turnIndex?: number;
   turnEndSnapshots?: Record<string, TurnEndSnapshot>;
   turnStartSnapshots?: Record<string, TurnEndSnapshot>;
