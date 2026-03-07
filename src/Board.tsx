@@ -53,6 +53,9 @@ function formatSummaryTags(u: Unit): string[] {
 export default function Board(props: {
   units: Unit[];
   markers: Marker[];
+  blockedCells?: Pos[];
+  gridLabelX?: Record<string, string>;
+  gridLabelZ?: Record<string, string>;
   selectedIds: string[];
   selectedId: string | null; // primary
   onSelectUnit: (id: string, opts?: { additive?: boolean }) => void;
@@ -65,12 +68,19 @@ export default function Board(props: {
   onSelectCell?: (pos: Pos, opts?: { additive?: boolean }) => void;
   onToggleMarkerCreate?: () => void;
   markerCreateActive?: boolean;
+  onToggleTerrainEdit?: () => void;
+  terrainEditActive?: boolean;
+  onToggleBlockedCell?: (pos: Pos) => void;
+  onSetGridLabel?: (axis: "x" | "z", index: number, label: string | null) => void;
   onOpenSideMemo?: () => void;
   sideMemoActive?: boolean;
 }) {
   const {
     units,
     markers,
+    blockedCells = [],
+    gridLabelX = {},
+    gridLabelZ = {},
     selectedIds,
     selectedId,
     onSelectUnit,
@@ -83,6 +93,10 @@ export default function Board(props: {
     onSelectCell,
     onToggleMarkerCreate,
     markerCreateActive = false,
+    onToggleTerrainEdit,
+    terrainEditActive = false,
+    onToggleBlockedCell,
+    onSetGridLabel,
     onOpenSideMemo,
     sideMemoActive = false,
   } = props;
@@ -141,6 +155,14 @@ export default function Board(props: {
     }
     return set;
   }, [selectedMarkerCells]);
+  const blockedCellSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of blockedCells ?? []) {
+      if (!c) continue;
+      set.add(keyXZ(c.x, c.z));
+    }
+    return set;
+  }, [blockedCells]);
   const [dropTargetCell, setDropTargetCell] = useState<string | null>(null);
   const [hoveredUnitId, setHoveredUnitId] = useState<string | null>(null);
   const hoverTimerRef = useRef<number | null>(null);
@@ -158,6 +180,20 @@ export default function Board(props: {
     e.dataTransfer.setData("application/x-unit-id", unitId);
     e.dataTransfer.setData("text/plain", unitId);
     e.dataTransfer.effectAllowed = "move";
+  }
+
+  function editAxisLabel(axis: "x" | "z", index: number) {
+    if (!onSetGridLabel) return;
+    const cur =
+      (axis === "x" ? gridLabelX[String(index)] : gridLabelZ[String(index)]) ??
+      "";
+    const next = window.prompt(
+      `${axis.toUpperCase()} ${index} 이름 입력 (비우면 기본값으로 복원)`,
+      cur
+    );
+    if (next === null) return;
+    const trimmed = next.trim();
+    onSetGridLabel(axis, index, trimmed ? trimmed : null);
   }
 
   // =========================
@@ -237,6 +273,21 @@ export default function Board(props: {
               마커 생성
             </button>
           )}
+          {onToggleTerrainEdit && (
+            <button
+              type="button"
+              onClick={onToggleTerrainEdit}
+              className={[
+                "rounded-lg border px-2 py-1 text-[11px] font-semibold",
+                "border-zinc-400/60 bg-zinc-200/15 text-zinc-100",
+                "hover:bg-zinc-200/25 hover:text-white",
+                terrainEditActive ? "ring-1 ring-zinc-300/70" : "",
+              ].join(" ")}
+              title="비활성화 지형 셀을 편집"
+            >
+              지형 편집
+            </button>
+          )}
         </div>
       </div>
 
@@ -265,9 +316,10 @@ export default function Board(props: {
                   lineHeight: LINE_H,
                   color: x === 0 ? "rgb(110 231 183)" : "rgb(161 161 170)", // emerald-300 / zinc-400 느낌
                 }}
-                title={`x=${x}`}
+                title={`x=${x} (더블클릭: 이름 변경)`}
+                onDoubleClick={() => editAxisLabel("x", x)}
               >
-                {x}
+                {gridLabelX[String(x)]?.trim() || x}
               </div>
             ))}
           </div>
@@ -297,15 +349,17 @@ export default function Board(props: {
                       lineHeight: LINE_H,
                       color: z === 0 ? "rgb(110 231 183)" : "rgb(161 161 170)",
                     }}
-                    title={`z=${z}`}
+                    title={`z=${z} (더블클릭: 이름 변경)`}
+                    onDoubleClick={() => editAxisLabel("z", z)}
                   >
-                    z {z}
+                    {gridLabelZ[String(z)]?.trim() || `z ${z}`}
                   </div>
 
                   {xLabels.map((x) => {
                     const k = keyXZ(x, z);
                     const us = cellUnits.get(k) ?? [];
                     const ms = cellMarkers.get(k) ?? [];
+                    const isBlocked = blockedCellSet.has(k);
                     const hasSel = us.some((u) => u.id === selectedId);
                     const isMarkerSelected =
                       markerSelectActive && selectedCellSet.has(k);
@@ -316,7 +370,9 @@ export default function Board(props: {
                         data-cell={k} // ✅ 자동 포커스용
                         className={[
                           "rounded-lg border px-2 py-1 text-left",
+                          "relative",
                           "border-zinc-800 bg-zinc-950/30",
+                          isBlocked ? "bg-zinc-300/35 border-zinc-300/65" : "",
                           x === 0 ? "bg-zinc-950/45" : "",
                           z === 0 ? "ring-1 ring-emerald-900/40" : "",
                           hasSel ? "outline outline-1 outline-white/60" : "",
@@ -326,14 +382,22 @@ export default function Board(props: {
                           dropTargetCell === k
                             ? "outline outline-2 outline-sky-300/80"
                             : "",
-                          markerSelectActive ? "cursor-pointer" : "",
+                          markerSelectActive || terrainEditActive
+                            ? "cursor-pointer"
+                            : "",
                         ].join(" ")}
                         style={{
                           minHeight: CELL_MIN_H, // ✅ 최소 높이 보장
                         }}
                         title={`(${x},${z})`}
                         onDragOver={(e) => {
-                          if (markerSelectActive || !onMoveUnitsByDelta) return;
+                          if (
+                            markerSelectActive ||
+                            terrainEditActive ||
+                            !onMoveUnitsByDelta
+                          )
+                            return;
+                          if (isBlocked) return;
                           e.preventDefault();
                           e.dataTransfer.dropEffect = "move";
                           setDropTargetCell(k);
@@ -342,7 +406,13 @@ export default function Board(props: {
                           setDropTargetCell((prev) => (prev === k ? null : prev));
                         }}
                         onDrop={(e) => {
-                          if (markerSelectActive || !onMoveUnitsByDelta) return;
+                          if (
+                            markerSelectActive ||
+                            terrainEditActive ||
+                            !onMoveUnitsByDelta
+                          )
+                            return;
+                          if (isBlocked) return;
                           e.preventDefault();
                           setDropTargetCell(null);
                           const unitId =
@@ -364,6 +434,10 @@ export default function Board(props: {
                           onMoveUnitsByDelta(targetIds, dx, dz);
                         }}
                         onClick={(e) => {
+                          if (terrainEditActive && onToggleBlockedCell) {
+                            onToggleBlockedCell({ x, z });
+                            return;
+                          }
                           if (!markerSelectActive || !onSelectCell) return;
                           onSelectCell(
                             { x, z },
@@ -373,9 +447,35 @@ export default function Board(props: {
                           );
                         }}
                       >
+                        {isBlocked && (
+                          <div className="pointer-events-none absolute inset-0 z-0">
+                            <svg
+                              className="h-full w-full"
+                              viewBox="0 0 100 100"
+                              preserveAspectRatio="none"
+                            >
+                              <line
+                                x1="8"
+                                y1="8"
+                                x2="92"
+                                y2="92"
+                                stroke="rgba(244,244,245,0.88)"
+                                strokeWidth="2.5"
+                              />
+                              <line
+                                x1="92"
+                                y1="8"
+                                x2="8"
+                                y2="92"
+                                stroke="rgba(244,244,245,0.88)"
+                                strokeWidth="2.5"
+                              />
+                            </svg>
+                          </div>
+                        )}
                         {/* markers */}
                         {ms.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
+                          <div className="relative z-[1] flex flex-wrap gap-1">
                             {/* Render markers as chips for quick scanning */}
                             {ms.map((m) => {
                               const alias = (m.alias ?? "").trim();
@@ -543,6 +643,9 @@ export default function Board(props: {
                                       "cursor-grab active:cursor-grabbing",
                                       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/50",
                                       "active:bg-zinc-900/80",
+                                      terrainEditActive
+                                        ? "pointer-events-none opacity-85"
+                                        : "",
                                       isPrimary
                                         ? "border-emerald-300 bg-emerald-950/70 ring-2 ring-emerald-300/60 shadow-[0_0_0_1px_rgba(16,185,129,0.25)]"
                                         : isMulti
@@ -557,7 +660,10 @@ export default function Board(props: {
                                     title={
                                       u.name + (u.alias ? ` (${u.alias})` : "")
                                     } // ✅ 툴팁은 둘 다 보이게
-                                    draggable={!markerSelectActive}
+                                    disabled={terrainEditActive}
+                                    draggable={
+                                      !markerSelectActive && !terrainEditActive
+                                    }
                                     onDragStart={(e) =>
                                       handleUnitDragStart(e, u.id)
                                     }

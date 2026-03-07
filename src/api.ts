@@ -478,6 +478,7 @@ export async function publish(
     hideBench?: boolean;
     hideBenchTeam?: boolean;
     hideBenchEnemy?: boolean;
+    planarMode?: boolean;
   },
 ) {
   const res = await fetch(`${API_BASE}/encounters/${encounterId}/publish`, {
@@ -488,6 +489,7 @@ export async function publish(
       hideBench: !!opts?.hideBench,
       hideBenchTeam: !!opts?.hideBenchTeam,
       hideBenchEnemy: !!opts?.hideBenchEnemy,
+      planarMode: !!opts?.planarMode,
     }),
   });
   if (!res.ok) throw new Error(await res.text());

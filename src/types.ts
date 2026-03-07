@@ -120,6 +120,11 @@ export type EncounterState = {
 
   units: Unit[];
   markers?: Marker[];
+  blockedCells?: Pos[];
+  gridLabels?: {
+    x?: Record<string, string>;
+    z?: Record<string, string>;
+  };
   sideNotes?: Partial<Record<Side, string>>;
 
   turnOrder?: TurnEntry[];

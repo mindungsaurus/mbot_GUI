@@ -431,6 +431,7 @@ type View = { minX: number; maxX: number; minZ: number; maxZ: number };
 function computeAutoView(
   units: Unit[],
   markers: Marker[],
+  blockedCells: Pos[],
   opts?: { padX?: number; padZ?: number; minCols?: number; minRows?: number }
 ): View {
   const padX = opts?.padX ?? 2;
@@ -456,6 +457,12 @@ function computeAutoView(
       minZ = Math.min(minZ, cell.z);
       maxZ = Math.max(maxZ, cell.z);
     }
+  }
+  for (const c of blockedCells) {
+    if (!c) continue;
+    maxAbsX = Math.max(maxAbsX, Math.abs(c.x));
+    minZ = Math.min(minZ, c.z);
+    maxZ = Math.max(maxZ, c.z);
   }
 
   const viewMinZ = minZ < 0 ? minZ - padZ : 0;
@@ -621,6 +628,8 @@ export default function App() {
   }, []);  const [debugOpen, setDebugOpen] = useState(true);
   const [hideBenchTeamOnPublish, setHideBenchTeamOnPublish] = useState(false);
   const [hideBenchEnemyOnPublish, setHideBenchEnemyOnPublish] = useState(false);
+  const [planarBattleModeOnPublish, setPlanarBattleModeOnPublish] =
+    useState(false);
   const channelInputRef = useRef<HTMLInputElement | null>(null);
 
   // 채널 입력/최근 채널
@@ -634,6 +643,7 @@ export default function App() {
   // 마커 입력값
   // Marker creation flow (board selection + form)
   const [markerCreateOpen, setMarkerCreateOpen] = useState(false);
+  const [terrainEditOpen, setTerrainEditOpen] = useState(false);
   const [markerSelectedCells, setMarkerSelectedCells] = useState<Pos[]>([]);
   const [markerMultiSelect, setMarkerMultiSelect] = useState(false);
   const [markerDraftName, setMarkerDraftName] = useState("");
@@ -760,6 +770,20 @@ export default function App() {
 
   const units: Unit[] = useMemo(() => state?.units ?? [], [state]);
   const markers: Marker[] = useMemo(() => state?.markers ?? [], [state]);
+  const blockedCells: Pos[] = useMemo(
+    () => ((state as any)?.blockedCells ?? []) as Pos[],
+    [state]
+  );
+  const gridLabelX = useMemo(
+    () =>
+      (((state as any)?.gridLabels?.x ?? {}) as Record<string, string>) ?? {},
+    [state]
+  );
+  const gridLabelZ = useMemo(
+    () =>
+      (((state as any)?.gridLabels?.z ?? {}) as Record<string, string>) ?? {},
+    [state]
+  );
   const activeUnits: Unit[] = useMemo(
     () => units.filter((u) => !u.bench),
     [units]
@@ -986,6 +1010,7 @@ export default function App() {
   const panelHotkeysEnabled =
     !busy &&
     !markerCreateOpen &&
+    !terrainEditOpen &&
     !tagGrantOpen &&
     !settingsOpen &&
     !reorderOpen &&
@@ -1490,7 +1515,21 @@ export default function App() {
 
   function toggleMarkerCreate() {
     setMarkerDraftErr(null);
-    setMarkerCreateOpen((prev) => !prev);
+    setMarkerCreateOpen((prev) => {
+      const next = !prev;
+      if (next) setTerrainEditOpen(false);
+      return next;
+    });
+  }
+
+  function toggleTerrainEdit() {
+    setTerrainEditOpen((prev) => {
+      const next = !prev;
+      if (next) {
+        setMarkerCreateOpen(false);
+      }
+      return next;
+    });
   }
 
   function clearMarkerSelection() {
@@ -1710,6 +1749,7 @@ export default function App() {
       await publish(encounterId, channelId, {
         hideBenchTeam: hideBenchTeamOnPublish,
         hideBenchEnemy: hideBenchEnemyOnPublish,
+        planarMode: planarBattleModeOnPublish,
       });
       pushRecent(channelId);
     } catch (e: any) {
@@ -2665,13 +2705,13 @@ export default function App() {
 
   // ✅ 동적 view 범위 계산
   const view = useMemo(() => {
-    return computeAutoView(activeUnits, markers, {
+    return computeAutoView(activeUnits, markers, blockedCells, {
       padX: 2,
       padZ: 1,
       minCols: 9,
       minRows: 3,
     });
-  }, [activeUnits, markers]);
+  }, [activeUnits, markers, blockedCells]);
 
   // ---------- Unit helpers ----------
   async function createUnit(payload: CreateUnitPayload) {
@@ -2708,6 +2748,19 @@ export default function App() {
     await run({ type: "REMOVE_UNIT", unitId });
   }
 
+  async function handleTerrainCellToggle(pos: Pos) {
+    if (!terrainEditOpen || busy) return;
+    await run({ type: "TOGGLE_BLOCKED_CELL", x: pos.x, z: pos.z });
+  }
+
+  async function setGridAxisLabel(
+    axis: "x" | "z",
+    index: number,
+    label: string | null
+  ) {
+    await run({ type: "SET_GRID_LABEL", axis, index, label });
+  }
+
   async function removeUnits(unitIds: string[]) {
     if (unitIds.length === 0) return;
     const ok = window.confirm(`총 ${unitIds.length}개의 유닛을 삭제합니다.`);
@@ -2716,7 +2769,6 @@ export default function App() {
       await removeUnit(id);
     }
   }
-
   async function patchUnit(unitId: string, patch: UnitPatch) {
     await run({ type: "PATCH_UNIT", unitId, patch });
   }
@@ -3526,6 +3578,9 @@ export default function App() {
           <Board
             units={activeUnits}
             markers={markers}
+            blockedCells={blockedCells}
+            gridLabelX={gridLabelX}
+            gridLabelZ={gridLabelZ}
             view={view}
             selectedId={selectedId}
             selectedIds={selectedIds}
@@ -3539,6 +3594,10 @@ export default function App() {
             onSelectCell={handleMarkerCellSelect}
             onToggleMarkerCreate={toggleMarkerCreate}
             markerCreateActive={markerCreateOpen}
+            onToggleTerrainEdit={toggleTerrainEdit}
+            terrainEditActive={terrainEditOpen}
+            onToggleBlockedCell={handleTerrainCellToggle}
+            onSetGridLabel={setGridAxisLabel}
             maxHeightPx={520}
           />
 
@@ -3764,6 +3823,24 @@ export default function App() {
                     ))}
                   </select>
                 )}
+              </div>
+
+              <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2">
+                <label className="flex items-center gap-2 text-sm text-zinc-200">
+                  <input
+                    type="checkbox"
+                    checked={planarBattleModeOnPublish}
+                    onChange={(e) =>
+                      setPlanarBattleModeOnPublish(e.target.checked)
+                    }
+                    className="h-4 w-4 accent-emerald-500"
+                  />
+                  평면 전투 모드
+                </label>
+                <div className="mt-1 text-xs text-zinc-500">
+                  기본: Formation line 모드 / 체크 시 Formation 숨김 + Distance
+                  Marks를 [01][01] 형태로 출력
+                </div>
               </div>
 
               <div className="mt-4 flex justify-end gap-2">
