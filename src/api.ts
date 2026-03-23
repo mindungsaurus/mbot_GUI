@@ -1,6 +1,6 @@
 import type { Pos } from "./types";
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:3000";
+export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:3000";
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem("operator.auth.token");
@@ -412,6 +412,311 @@ export async function createItemCatalog(payload: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listWorldMaps() {
+  const res = await fetch(`${API_BASE}/world-maps`, {
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getWorldMap(id: string) {
+  const res = await fetch(`${API_BASE}/world-maps/${id}`, {
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createWorldMap(body: { name?: string }) {
+  const res = await fetch(`${API_BASE}/world-maps`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateWorldMap(
+  id: string,
+  body: {
+    name?: string;
+    imageWidth?: number | null;
+    imageHeight?: number | null;
+    hexSize?: number;
+    originX?: number;
+    originY?: number;
+    cols?: number;
+    rows?: number;
+    orientation?: "pointy" | "flat";
+    cityGlobal?: {
+      day?: number;
+      populationCap?: number;
+      values?: {
+        wood?: number;
+        stone?: number;
+        fabric?: number;
+        weave?: number;
+        food?: number;
+        research?: number;
+        order?: number;
+        gold?: number;
+      };
+      caps?: {
+        wood?: number;
+        stone?: number;
+        fabric?: number;
+        weave?: number;
+        food?: number;
+      };
+      population?: {
+        settlers?: { total?: number; available?: number };
+        engineers?: { total?: number; available?: number };
+        scholars?: { total?: number; available?: number };
+        laborers?: { total?: number; available?: number };
+        elderly?: { total?: number };
+      };
+    };
+    tileStatePresets?: Array<{
+      id: string;
+      name: string;
+      color: string;
+      hasValue: boolean;
+    }>;
+    tileStateAssignments?: Record<
+      string,
+      Array<{
+        presetId: string;
+        value?: string;
+      }>
+    >;
+    tileRegionStates?: Record<
+      string,
+      {
+        spaceUsed?: number;
+        spaceCap?: number;
+        satisfaction?: number;
+        threat?: number;
+        pollution?: number;
+      }
+    >;
+    buildingPresets?: Array<{
+      id: string;
+      name: string;
+      color: string;
+      tier?: string;
+      effort?: number;
+      space?: number;
+      description?: string;
+      buildCosts?: Array<{ id: string; text: string }>;
+      researchCosts?: Array<{ id: string; text: string }>;
+      upkeep?: Array<{ id: string; text: string }>;
+      dailyEffects?: Array<{ id: string; text: string }>;
+      requirements?: Array<{ id: string; text: string }>;
+      notes?: Array<{ id: string; text: string }>;
+    }>;
+  }
+) {
+  const res = await fetch(`${API_BASE}/world-maps/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function uploadWorldMapImage(id: string, file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${API_BASE}/world-maps/${id}/image`, {
+    method: "POST",
+    headers: { ...getAuthHeaders() },
+    body: form,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteWorldMap(id: string) {
+  const res = await fetch(`${API_BASE}/world-maps/${id}`, {
+    method: "DELETE",
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listWorldMapBuildingPresets(mapId: string) {
+  const res = await fetch(`${API_BASE}/world-maps/${mapId}/building-presets`, {
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createWorldMapBuildingPreset(
+  mapId: string,
+  body: {
+    name?: string;
+    color?: string;
+    tier?: string;
+    effort?: number | null;
+    space?: number | null;
+    description?: string | null;
+    placementRules?: Array<Record<string, unknown>> | null;
+    buildCost?: Record<string, number> | null;
+    researchCost?: Record<string, number> | null;
+    upkeep?: {
+      resources?: Record<string, number>;
+      population?: Record<string, number>;
+    } | null;
+    effects?: {
+      onBuild?: Array<Record<string, unknown>>;
+      daily?: Array<Record<string, unknown>>;
+      onRemove?: Array<Record<string, unknown>>;
+    } | null;
+  },
+) {
+  const res = await fetch(`${API_BASE}/world-maps/${mapId}/building-presets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateWorldMapBuildingPreset(
+  mapId: string,
+  presetId: string,
+  body: {
+    name?: string;
+    color?: string;
+    tier?: string;
+    effort?: number | null;
+    space?: number | null;
+    description?: string | null;
+    placementRules?: Array<Record<string, unknown>> | null;
+    buildCost?: Record<string, number> | null;
+    researchCost?: Record<string, number> | null;
+    upkeep?: {
+      resources?: Record<string, number>;
+      population?: Record<string, number>;
+    } | null;
+    effects?: {
+      onBuild?: Array<Record<string, unknown>>;
+      daily?: Array<Record<string, unknown>>;
+      onRemove?: Array<Record<string, unknown>>;
+    } | null;
+  },
+) {
+  const res = await fetch(`${API_BASE}/world-maps/${mapId}/building-presets/${presetId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteWorldMapBuildingPreset(mapId: string, presetId: string) {
+  const res = await fetch(`${API_BASE}/world-maps/${mapId}/building-presets/${presetId}`, {
+    method: "DELETE",
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listWorldMapBuildingInstances(mapId: string) {
+  const res = await fetch(`${API_BASE}/world-maps/${mapId}/buildings`, {
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createWorldMapBuildingInstance(
+  mapId: string,
+  body: {
+    presetId?: string;
+    col?: number;
+    row?: number;
+    enabled?: boolean;
+    progressEffort?: number;
+    meta?: Record<string, unknown>;
+  },
+) {
+  const res = await fetch(`${API_BASE}/world-maps/${mapId}/buildings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateWorldMapBuildingInstance(
+  mapId: string,
+  instanceId: string,
+  body: {
+    enabled?: boolean;
+    progressEffort?: number;
+    meta?: Record<string, unknown> | null;
+  },
+) {
+  const res = await fetch(`${API_BASE}/world-maps/${mapId}/buildings/${instanceId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteWorldMapBuildingInstance(mapId: string, instanceId: string) {
+  const res = await fetch(`${API_BASE}/world-maps/${mapId}/buildings/${instanceId}`, {
+    method: "DELETE",
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listWorldMapTickLogs(mapId: string, limit = 30) {
+  const query = Number.isFinite(limit) ? `?limit=${Math.max(1, Math.trunc(limit))}` : "";
+  const res = await fetch(`${API_BASE}/world-maps/${mapId}/tick-logs${query}`, {
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function appendWorldMapTickLog(
+  mapId: string,
+  body: { day?: number; summary?: Record<string, unknown> },
+) {
+  const res = await fetch(`${API_BASE}/world-maps/${mapId}/tick-logs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function runWorldMapDaily(mapId: string, days = 1) {
+  const res = await fetch(`${API_BASE}/world-maps/${mapId}/run-daily`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify({ days }),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

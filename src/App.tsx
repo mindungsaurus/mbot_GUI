@@ -49,6 +49,7 @@ import UnitPresetManager from "./UnitPresetManager";
 import TagPresetManager from "./TagPresetManager";
 import GoldItemsManager from "./GoldItemsManager";
 import ItemDbManager from "./ItemDbManager";
+import WorldMapManager from "./WorldMapManager";
 import { ansiColorCodeToCss } from "./UnitColor";
 
 const LS_DEFAULT_CHANNEL = "operator.defaultChannelId";
@@ -402,6 +403,25 @@ function ItemDbTabIcon(props: { className?: string }) {
   );
 }
 
+function WorldMapTabIcon(props: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      className={props.className}
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2V6z" />
+      <path d="M9 4v14" />
+      <path d="M15 6v14" />
+    </svg>
+  );
+}
+
 
 function sanitizeChannelId(input: string): string {
   return (input ?? "").replace(/\D/g, "");
@@ -589,6 +609,8 @@ export default function App() {
   const [tagPresetView, setTagPresetView] = useState(false);
   const [goldItemsView, setGoldItemsView] = useState(false);
   const [itemDbView, setItemDbView] = useState(false);
+  const [worldMapView, setWorldMapView] = useState(false);
+  const [worldMapMode, setWorldMapMode] = useState<"map" | "presets">("map");
   const [goldItemsTab, setGoldItemsTab] = useState<
     "gold" | "inventory" | "db" | "sheet"
   >("gold");
@@ -3151,6 +3173,19 @@ export default function App() {
     );
   }
 
+  if (worldMapView) {
+    return (
+      <WorldMapManager
+        authUser={authUser}
+        mode={worldMapMode}
+        onBack={() => {
+          setWorldMapView(false);
+          setWorldMapMode("map");
+        }}
+      />
+    );
+  }
+
   if (goldItemsView) {
     return (
       <GoldItemsManager
@@ -3208,6 +3243,7 @@ export default function App() {
                     setTagPresetView(false);
                     setItemDbView(false);
                     setGoldItemsView(false);
+                    setWorldMapView(false);
                   }}
                 >
                   <CombatTabIcon className="h-4 w-4" />
@@ -3223,6 +3259,7 @@ export default function App() {
                     setPresetView(false);
                     setTagPresetView(false);
                     setItemDbView(false);
+                    setWorldMapView(false);
                     setGoldItemsTab("gold");
                     setGoldItemsView(true);
                   }}
@@ -3241,12 +3278,51 @@ export default function App() {
                     setPresetView(false);
                     setTagPresetView(false);
                     setGoldItemsView(false);
+                    setWorldMapView(false);
                     setItemDbView(true);
                   }}
                   disabled={busy}
                 >
                   <ItemDbTabIcon className="h-4 w-4" />
                   아이템 DB
+                </button>
+                <button
+                  type="button"
+                  className={[
+                    "mt-2 flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold",
+                    "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:bg-zinc-800/60",
+                  ].join(" ")}
+                  onClick={() => {
+                    setPresetView(false);
+                    setTagPresetView(false);
+                    setGoldItemsView(false);
+                    setItemDbView(false);
+                    setWorldMapMode("map");
+                    setWorldMapView(true);
+                  }}
+                  disabled={busy}
+                >
+                  <WorldMapTabIcon className="h-4 w-4" />
+                  World Map
+                </button>
+                <button
+                  type="button"
+                  className={[
+                    "mt-2 flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold",
+                    "border-zinc-800 bg-zinc-950/40 text-zinc-200 hover:bg-zinc-800/60",
+                  ].join(" ")}
+                  onClick={() => {
+                    setPresetView(false);
+                    setTagPresetView(false);
+                    setGoldItemsView(false);
+                    setItemDbView(false);
+                    setWorldMapMode("presets");
+                    setWorldMapView(true);
+                  }}
+                  disabled={busy}
+                >
+                  <WorldMapTabIcon className="h-4 w-4" />
+                  맵 프리셋
                 </button>
               </div>
             </nav>
