@@ -67,7 +67,6 @@ import {
   ALL_POPULATION_IDS,
   UPKEEP_POPULATION_IDS,
   RESOURCE_LABELS,
-  RESOURCE_EMOJIS,
   POPULATION_LABELS,
   UPKEEP_POPULATION_LABELS,
   POPULATION_EMOJIS,
@@ -92,7 +91,6 @@ import {
   makeLocalId,
   formatWithCommas,
   roundTo2,
-  formatDailyDelta,
   safeInt,
   evalRuleExpr,
   evaluateRulePredicatePreview,
@@ -104,6 +102,10 @@ import {
   exprToEditableNumber,
   buildDraftFromPreset,
 } from "./world-map/utils";
+import TileStateModal from "./world-map/components/TileStateModal";
+import TileRegionModal from "./world-map/components/TileRegionModal";
+import TileBuildingModal from "./world-map/components/TileBuildingModal";
+import ResourcePopulationOverlay from "./world-map/components/ResourcePopulationOverlay";
 
 export default function WorldMapManager({ authUser, mode = "map", onBack }: Props) {
   const isAdmin = !!authUser.isAdmin;
@@ -4257,189 +4259,25 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
                       </div>
                     </div>
 
-                    <div className="pointer-events-none absolute right-4 top-14 z-30">
-                      <div className="pointer-events-auto flex flex-col gap-3">
-                        <div className="rounded-xl border border-zinc-700/70 bg-zinc-900/55 backdrop-blur-sm">
-                          <div className="flex items-center justify-between gap-2 border-b border-zinc-700/70 px-3 py-2">
-                            <div className="text-xs font-semibold text-zinc-100">자원</div>
-                            <button
-                              type="button"
-                              className="rounded-md border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-200 hover:border-zinc-500"
-                              onClick={() => setResourceOverlayOpen((prev) => !prev)}
-                            >
-                              {resourceOverlayOpen ? "접기" : "펼치기"}
-                            </button>
-                          </div>
-                          {resourceOverlayOpen ? (
-                            <div className="space-y-1 px-3 py-2 text-[11px]">
-                              {CAPPED_RESOURCE_IDS.map((id) => (
-                                <div
-                                  key={id}
-                                  className="grid min-w-[190px] grid-cols-[1fr_auto] gap-3 text-zinc-100"
-                                >
-                                  <span>
-                                    {RESOURCE_EMOJIS[id]} {RESOURCE_LABELS[id]}
-                                  </span>
-                                  <span className="font-semibold text-emerald-300">
-                                    {formatWithCommas(activeCityGlobal.values[id])}
-                                    <span
-                                      className={[
-                                        "ml-1",
-                                        dailyResourceDeltaById[id] > 0
-                                          ? "text-emerald-300"
-                                          : dailyResourceDeltaById[id] < 0
-                                            ? "text-rose-300"
-                                            : "text-zinc-400",
-                                      ].join(" ")}
-                                    >
-                                      ({formatDailyDelta(dailyResourceDeltaById[id] ?? 0)})
-                                    </span>{" "}
-                                    / {formatWithCommas(activeCityGlobal.caps[id])}
-                                  </span>
-                                </div>
-                              ))}
-                              <div className="my-1 border-t border-zinc-700/70" />
-                              {UNCAPPED_RESOURCE_IDS.map((id) => (
-                                <div
-                                  key={id}
-                                  className="grid min-w-[190px] grid-cols-[1fr_auto] gap-3 text-zinc-100"
-                                >
-                                  <span>
-                                    {RESOURCE_EMOJIS[id]} {RESOURCE_LABELS[id]}
-                                  </span>
-                                  <span className="font-semibold text-amber-300">
-                                    {formatWithCommas(activeCityGlobal.values[id])}
-                                    <span
-                                      className={[
-                                        "ml-1",
-                                        dailyResourceDeltaById[id] > 0
-                                          ? "text-emerald-300"
-                                          : dailyResourceDeltaById[id] < 0
-                                            ? "text-rose-300"
-                                            : "text-zinc-400",
-                                      ].join(" ")}
-                                    >
-                                      ({formatDailyDelta(dailyResourceDeltaById[id] ?? 0)})
-                                    </span>
-                                  </span>
-                                </div>
-                              ))}
-
-                              <div className="mt-2 border-t border-zinc-700/70 pt-2">
-                                <button
-                                  type="button"
-                                  className="w-full rounded-md border border-zinc-700 px-2 py-1 text-left text-[11px] text-zinc-200 hover:border-zinc-500"
-                                  onClick={() => setResourceAdjustOpen((prev) => !prev)}
-                                  disabled={busy}
-                                >
-                                  {resourceAdjustOpen ? "자원 조정 접기" : "자원 조정 펼치기"}
-                                </button>
-                                {resourceAdjustOpen ? (
-                                  <div className="mt-2 space-y-2">
-                                    <div className="grid grid-cols-2 gap-2">
-                                      <select
-                                        value={resourceAdjustTarget}
-                                        onChange={(e) =>
-                                          setResourceAdjustTarget(e.target.value as ResourceId)
-                                        }
-                                        className="h-8 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-[11px] text-zinc-100 outline-none focus:border-zinc-500"
-                                      >
-                                        {ALL_RESOURCE_IDS.map((id) => (
-                                          <option key={id} value={id}>
-                                            {RESOURCE_EMOJIS[id]} {RESOURCE_LABELS[id]}
-                                          </option>
-                                        ))}
-                                      </select>
-                                      <select
-                                        value={resourceAdjustMode}
-                                        onChange={(e) =>
-                                          setResourceAdjustMode(
-                                            (e.target.value as "inc" | "dec") ?? "inc"
-                                          )
-                                        }
-                                        className="h-8 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-[11px] text-zinc-100 outline-none focus:border-zinc-500"
-                                      >
-                                        <option value="inc">증가</option>
-                                        <option value="dec">감소</option>
-                                      </select>
-                                    </div>
-                                    <input
-                                      type="number"
-                                      min={0}
-                                      step={1}
-                                      value={resourceAdjustAmount}
-                                      onChange={(e) => setResourceAdjustAmount(e.target.value)}
-                                      className="h-8 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 text-[11px] text-zinc-100 outline-none focus:border-zinc-500"
-                                      placeholder="수치 입력"
-                                    />
-                                    <button
-                                      type="button"
-                                      className="w-full rounded-md bg-amber-700 px-2 py-1.5 text-[11px] font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
-                                      onClick={handleApplyResourceAdjust}
-                                      disabled={busy}
-                                    >
-                                      적용
-                                    </button>
-                                  </div>
-                                ) : null}
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-
-                        <div className="rounded-xl border border-zinc-700/70 bg-zinc-900/55 backdrop-blur-sm">
-                          <div className="flex items-center justify-between gap-2 border-b border-zinc-700/70 px-3 py-2">
-                            <div className="text-xs font-semibold text-zinc-100">인구</div>
-                            <button
-                              type="button"
-                              className="rounded-md border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-200 hover:border-zinc-500"
-                              onClick={() => setPopulationOverlayOpen((prev) => !prev)}
-                            >
-                              {populationOverlayOpen ? "접기" : "펼치기"}
-                            </button>
-                          </div>
-                          {populationOverlayOpen ? (
-                            <div className="space-y-1 px-3 py-2 text-[11px]">
-                              <div className="grid min-w-[190px] grid-cols-[1fr_auto] gap-3 text-zinc-100">
-                                <span>👥 전체 인구</span>
-                                <span className="font-semibold text-lime-300">
-                                  {formatWithCommas(totalPopulation)}
-                                </span>
-                              </div>
-                              <div className="grid min-w-[190px] grid-cols-[1fr_auto] gap-3 text-zinc-100">
-                                <span>🧱 인구 상한</span>
-                                <span className="font-semibold text-lime-300">
-                                  {formatWithCommas(activeCityGlobal.populationCap)}
-                                </span>
-                              </div>
-                              <div className="my-1 border-t border-zinc-700/70" />
-                              {TRACKED_POPULATION_IDS.map((id) => (
-                                <div
-                                  key={id}
-                                  className="grid min-w-[190px] grid-cols-[1fr_auto] gap-3 text-zinc-100"
-                                >
-                                  <span>
-                                    {POPULATION_EMOJIS[id]} {POPULATION_LABELS[id]}
-                                  </span>
-                                  <span className="font-semibold text-sky-300">
-                                    {formatWithCommas(activeCityGlobal.population[id].available ?? 0)} /{" "}
-                                    {formatWithCommas(activeCityGlobal.population[id].total)}
-                                  </span>
-                                </div>
-                              ))}
-                              <div className="grid min-w-[190px] grid-cols-[1fr_auto] gap-3 text-zinc-100">
-                                <span>
-                                  {POPULATION_EMOJIS.elderly} {POPULATION_LABELS.elderly}
-                                </span>
-                                <span className="font-semibold text-zinc-200">
-                                  {formatWithCommas(activeCityGlobal.population.elderly.total)}
-                                </span>
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
+                    <ResourcePopulationOverlay
+                      activeCityGlobal={activeCityGlobal}
+                      dailyResourceDeltaById={dailyResourceDeltaById}
+                      resourceOverlayOpen={resourceOverlayOpen}
+                      populationOverlayOpen={populationOverlayOpen}
+                      resourceAdjustOpen={resourceAdjustOpen}
+                      resourceAdjustTarget={resourceAdjustTarget}
+                      resourceAdjustMode={resourceAdjustMode}
+                      resourceAdjustAmount={resourceAdjustAmount}
+                      totalPopulation={totalPopulation}
+                      busy={busy}
+                      onToggleResourceOverlay={() => setResourceOverlayOpen((prev) => !prev)}
+                      onTogglePopulationOverlay={() => setPopulationOverlayOpen((prev) => !prev)}
+                      onToggleResourceAdjust={() => setResourceAdjustOpen((prev) => !prev)}
+                      onResourceAdjustTargetChange={setResourceAdjustTarget}
+                      onResourceAdjustModeChange={setResourceAdjustMode}
+                      onResourceAdjustAmountChange={setResourceAdjustAmount}
+                      onApplyResourceAdjust={handleApplyResourceAdjust}
+                    />
 
                     {!imageUrl ? (
                       <div className="rounded-lg border border-dashed border-zinc-800 px-4 py-10 text-sm text-zinc-500">
@@ -4783,473 +4621,43 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
                     </div>
                   ) : null}
 
-                  {tileBuildingEditor ? (
-                    <div className="fixed inset-0 z-[80] bg-black/55 p-4">
-                      <div className="mx-auto mt-16 w-full max-w-3xl rounded-2xl border border-zinc-700 bg-zinc-950 p-4">
-                        <div className="mb-3 flex items-center justify-between">
-                          <div className="text-sm font-semibold text-zinc-100">
-                            건물 배치 · col {tileBuildingEditor.col}, row {tileBuildingEditor.row}
-                          </div>
-                          <button
-                            type="button"
-                            className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:border-zinc-500"
-                            onClick={() => {
-                              setTileBuildingEditor(null);
-                              setTileBuildingSearchQuery("");
-                              tileBuildingWorkersDraftByIdRef.current = {};
-                            }}
-                          >
-                            닫기
-                          </button>
-                        </div>
+                  <TileBuildingModal
+                    tileBuildingEditor={tileBuildingEditor}
+                    setTileBuildingEditor={setTileBuildingEditor}
+                    setTileBuildingSearchQuery={setTileBuildingSearchQuery}
+                    tileBuildingSearchInputRef={tileBuildingSearchInputRef}
+                    tileBuildingSearchTimerRef={tileBuildingSearchTimerRef}
+                    tileBuildingCreateWorkersDraftRef={tileBuildingCreateWorkersDraftRef}
+                    tileBuildingWorkersDraftByIdRef={tileBuildingWorkersDraftByIdRef}
+                    tileBuildingSearchQuery={tileBuildingSearchQuery}
+                    filteredBuildingPresetsForTile={filteredBuildingPresetsForTile}
+                    activeBuildingPresets={activeBuildingPresets}
+                    tileBuildingInstances={tileBuildingInstances}
+                    selectedTileBuildingPresetNeedsWorkers={
+                      selectedTileBuildingPresetNeedsWorkers
+                    }
+                    busy={busy}
+                    onPlaceBuilding={handlePlaceBuildingOnTile}
+                    onUpdateBuildingWorkers={handleUpdateBuildingWorkers}
+                    onDeleteBuildingOnTile={handleDeleteBuildingOnTile}
+                  />
 
-                        <div className="mb-3 rounded-lg border border-zinc-800 bg-zinc-900/30 p-3">
-                          <div className="mb-2 text-xs font-semibold text-zinc-300">건물 프리셋 선택</div>
-                          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
-                            <input
-                              ref={tileBuildingSearchInputRef}
-                              defaultValue={tileBuildingSearchQuery}
-                              onChange={(e) => {
-                                const next = e.target.value;
-                                if (tileBuildingSearchTimerRef.current != null) {
-                                  window.clearTimeout(tileBuildingSearchTimerRef.current);
-                                }
-                                tileBuildingSearchTimerRef.current = window.setTimeout(() => {
-                                  setTileBuildingSearchQuery(next);
-                                }, 140);
-                              }}
-                              placeholder="건물 이름 검색"
-                              className="h-9 rounded-md border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-500"
-                            />
-                            <button
-                              type="button"
-                              className="rounded-md bg-amber-700 px-3 py-2 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
-                              onClick={handlePlaceBuildingOnTile}
-                              disabled={busy || !tileBuildingEditor.presetId}
-                            >
-                              건물 배치
-                            </button>
-                          </div>
-                          {selectedTileBuildingPresetNeedsWorkers ? (
-                            <div className="mt-2 grid gap-2 md:grid-cols-4">
-                              {TRACKED_POPULATION_IDS.map((id) => (
-                                <div key={`new-assigned-${id}`} className="space-y-1">
-                                  <div className="text-[11px] text-zinc-400">
-                                    {POPULATION_EMOJIS[id]} {POPULATION_LABELS[id]}
-                                  </div>
-                                  <input
-                                    defaultValue={tileBuildingCreateWorkersDraftRef.current[id]}
-                                    onChange={(e) => {
-                                      const digits = e.target.value.replace(/[^\d]/g, "");
-                                      tileBuildingCreateWorkersDraftRef.current = {
-                                        ...tileBuildingCreateWorkersDraftRef.current,
-                                        [id]: digits,
-                                      };
-                                    }}
-                                    placeholder="0"
-                                    className="h-8 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-amber-200 outline-none focus:border-amber-500"
-                                  />
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="mt-2 text-[11px] text-zinc-500">
-                              즉시 완공 건물은 인원 배치가 필요하지 않습니다.
-                            </div>
-                          )}
-                          <div className="mt-2 max-h-48 overflow-auto rounded-md border border-zinc-800 bg-zinc-950/40">
-                            {filteredBuildingPresetsForTile.length === 0 ? (
-                              <div className="px-3 py-2 text-xs text-zinc-500">
-                                검색 결과가 없습니다.
-                              </div>
-                            ) : (
-                              filteredBuildingPresetsForTile.map((preset) => {
-                                const active = tileBuildingEditor.presetId === preset.id;
-                                return (
-                                  <button
-                                    key={preset.id}
-                                    type="button"
-                                    className={[
-                                      "flex w-full items-center justify-between px-3 py-2 text-left text-xs",
-                                      active
-                                        ? "bg-amber-900/30 text-amber-200"
-                                        : "text-zinc-200 hover:bg-zinc-800/60",
-                                    ].join(" ")}
-                                    onClick={() =>
-                                      setTileBuildingEditor((prev) =>
-                                        prev ? { ...prev, presetId: preset.id } : prev
-                                      )
-                                    }
-                                  >
-                                    <span className="font-semibold" style={{ color: normalizeHexColor(preset.color, "#e5e7eb") }}>
-                                      {preset.name}
-                                    </span>
-                                    {preset.tier ? (
-                                      <span className="text-[11px] text-zinc-500">{preset.tier}</span>
-                                    ) : null}
-                                  </button>
-                                );
-                              })
-                            )}
-                          </div>
-                        </div>
+                  <TileStateModal
+                    tileEditor={tileEditor}
+                    setTileEditor={setTileEditor}
+                    presetById={presetById}
+                    activeTilePresets={activeTilePresets}
+                    normalizeHexColor={normalizeHexColor}
+                    onSave={handleTileEditorSave}
+                  />
 
-                        <div className="rounded-lg border border-zinc-800 bg-zinc-900/30 p-3">
-                          <div className="mb-2 text-xs font-semibold text-zinc-300">배치된 건물</div>
-                          {tileBuildingInstances.length === 0 ? (
-                            <div className="text-xs text-zinc-500">배치된 건물이 없습니다.</div>
-                          ) : (
-                            <div className="space-y-2">
-                              {tileBuildingInstances.map((instance) => {
-                                const preset = activeBuildingPresets.find(
-                                  (entry) => entry.id === instance.presetId
-                                );
-                                const buildStatus = getInstanceBuildStatus(instance, preset);
-                                const isActive = buildStatus === "active";
-                                return (
-                                  <div
-                                    key={instance.id}
-                                    className="grid items-center gap-2 rounded-md border border-zinc-800 bg-zinc-950/50 px-3 py-2 md:grid-cols-[minmax(0,1fr)_auto_auto]"
-                                  >
-                                    <div className="min-w-0">
-                                      <div
-                                        className="truncate text-sm font-semibold"
-                                        style={{ color: normalizeHexColor(preset?.color, "#e5e7eb") }}
-                                      >
-                                        {preset?.name ?? "이름 없는 건물"}
-                                      </div>
-                                      <div className="text-[11px] text-zinc-500">
-                                        {(() => {
-                                          const effort = Math.max(0, Math.trunc(Number(preset?.effort ?? 0)));
-                                          if (effort <= 0) return "진행도: 즉시 완공";
-                                          return `진행도: ${instance.progressEffort}/${effort}`;
-                                        })()}
-                                      </div>
-                                      <div className="mt-1 text-[11px] text-zinc-500">
-                                        투입{" "}
-                                        {(() => {
-                                          const byType = readAssignedWorkersByTypeFromInstanceMeta(instance.meta);
-                                          return TRACKED_POPULATION_IDS.map(
-                                            (id) =>
-                                              `${POPULATION_EMOJIS[id]}${POPULATION_LABELS[id]} ${byType[id]}`
-                                          ).join(" · ");
-                                        })()}
-                                      </div>
-                                    </div>
-                                    <span
-                                      className={[
-                                        "rounded px-1.5 py-0.5 text-[10px] font-semibold",
-                                        instance.enabled === false
-                                          ? "bg-zinc-800 text-zinc-400"
-                                          : isActive
-                                            ? "bg-emerald-900/40 text-emerald-300"
-                                            : "bg-amber-900/40 text-amber-300",
-                                      ].join(" ")}
-                                    >
-                                      {instance.enabled === false
-                                        ? "비활성"
-                                        : isActive
-                                          ? "완공"
-                                          : "건설중"}
-                                    </span>
-                                    <div className="flex items-center gap-1">
-                                      {!isActive ? (
-                                        <>
-                                          <div className="grid grid-cols-4 gap-1">
-                                            {TRACKED_POPULATION_IDS.map((id) => {
-                                              const fallback = readAssignedWorkersByTypeFromInstanceMeta(
-                                                instance.meta
-                                              );
-                                              const currentDraft =
-                                                tileBuildingWorkersDraftByIdRef.current[instance.id] ??
-                                                ({
-                                                  settlers: String(fallback.settlers),
-                                                  engineers: String(fallback.engineers),
-                                                  scholars: String(fallback.scholars),
-                                                  laborers: String(fallback.laborers),
-                                                } satisfies WorkerAssignmentDraft);
-                                              tileBuildingWorkersDraftByIdRef.current[instance.id] =
-                                                currentDraft;
-                                              return (
-                                                <input
-                                                  key={`${instance.id}-${id}`}
-                                                  defaultValue={currentDraft[id]}
-                                                  onChange={(e) => {
-                                                    const digits = e.target.value.replace(/[^\d]/g, "");
-                                                    const prevDraft =
-                                                      tileBuildingWorkersDraftByIdRef.current[
-                                                        instance.id
-                                                      ] ?? { ...EMPTY_WORKER_ASSIGNMENT_DRAFT };
-                                                    tileBuildingWorkersDraftByIdRef.current = {
-                                                      ...tileBuildingWorkersDraftByIdRef.current,
-                                                      [instance.id]: {
-                                                        ...prevDraft,
-                                                        [id]: digits,
-                                                      },
-                                                    };
-                                                  }}
-                                                  title={`${POPULATION_LABELS[id]}`}
-                                                  placeholder="0"
-                                                  className="h-7 w-14 rounded-md border border-zinc-700 bg-zinc-950 px-1.5 text-center text-xs text-amber-200 outline-none focus:border-amber-500"
-                                                />
-                                              );
-                                            })}
-                                          </div>
-                                          <button
-                                            type="button"
-                                            className="rounded-md border border-amber-700/70 bg-amber-950/30 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-900/50 disabled:opacity-50"
-                                            onClick={() =>
-                                              handleUpdateBuildingWorkers(
-                                                instance,
-                                                TRACKED_POPULATION_IDS.reduce(
-                                                  (acc, id) => ({
-                                                    ...acc,
-                                                    [id]: Number(
-                                                      tileBuildingWorkersDraftByIdRef.current[instance.id]?.[id] ??
-                                                        String(
-                                                          readAssignedWorkersByTypeFromInstanceMeta(
-                                                            instance.meta
-                                                          )[id]
-                                                        )
-                                                    ),
-                                                  }),
-                                                  {} as Partial<Record<PopulationTrackedId, number>>
-                                                )
-                                              )
-                                            }
-                                            disabled={busy}
-                                          >
-                                            인원 저장
-                                          </button>
-                                        </>
-                                      ) : (
-                                        <div className="text-[11px] text-zinc-500">완공 상태(투입 인원 없음)</div>
-                                      )}
-                                      <button
-                                        type="button"
-                                        className="rounded-md border border-red-800/70 bg-red-950/40 px-2 py-1 text-[11px] text-red-200 hover:bg-red-900/50 disabled:opacity-50"
-                                        onClick={() => handleDeleteBuildingOnTile(instance.id)}
-                                        disabled={busy}
-                                      >
-                                        제거
-                                      </button>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {tileEditor ? (
-                    <div className="fixed inset-0 z-[80] bg-black/55 p-4">
-                      <div className="mx-auto mt-16 w-full max-w-2xl rounded-2xl border border-zinc-700 bg-zinc-950 p-4">
-                        <div className="mb-3 flex items-center justify-between">
-                          <div className="text-sm font-semibold text-zinc-100">
-                            타일 속성 편집 · col {tileEditor.col}, row {tileEditor.row}
-                          </div>
-                          <button
-                            type="button"
-                            className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:border-zinc-500"
-                            onClick={() => setTileEditor(null)}
-                          >
-                            닫기
-                          </button>
-                        </div>
-
-                        <div className="mb-3 space-y-2 rounded-lg border border-zinc-800 bg-zinc-900/30 p-3">
-                          <div className="text-xs font-semibold text-zinc-300">현재 속성</div>
-                          {tileEditor.draft.length === 0 ? (
-                            <div className="text-xs text-zinc-500">설정된 속성이 없습니다.</div>
-                          ) : (
-                            tileEditor.draft.map((entry, idx) => {
-                              const preset = presetById.get(entry.presetId);
-                              if (!preset) return null;
-                              const color = normalizeHexColor(preset.color);
-                              return (
-                                <div
-                                  key={`${entry.presetId}-${idx}`}
-                                  className="grid items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 px-2 py-2 md:grid-cols-[1fr_180px_auto]"
-                                >
-                                  <div className="min-w-0">
-                                    <span className="text-sm font-semibold" style={{ color }}>
-                                      {preset.name}
-                                    </span>
-                                  </div>
-                                  {preset.hasValue ? (
-                                    <input
-                                      value={entry.value ?? ""}
-                                      onChange={(e) =>
-                                        setTileEditor((prev) =>
-                                          prev
-                                            ? {
-                                                ...prev,
-                                                draft: prev.draft.map((draftEntry, draftIdx) =>
-                                                  draftIdx === idx
-                                                    ? { ...draftEntry, value: e.target.value }
-                                                    : draftEntry
-                                                ),
-                                              }
-                                            : prev
-                                        )
-                                      }
-                                      className="h-8 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-500"
-                                      placeholder="값 입력"
-                                    />
-                                  ) : (
-                                    <div className="text-xs text-zinc-500">값 없음</div>
-                                  )}
-                                  <button
-                                    type="button"
-                                    className="rounded-md border border-red-800/70 bg-red-950/30 px-2 py-1 text-xs text-red-200 hover:bg-red-900/40"
-                                    onClick={() =>
-                                      setTileEditor((prev) =>
-                                        prev
-                                          ? {
-                                              ...prev,
-                                              draft: prev.draft.filter((_, draftIdx) => draftIdx !== idx),
-                                            }
-                                          : prev
-                                      )
-                                    }
-                                  >
-                                     제거
-                                  </button>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-
-                        <div className="mb-4 space-y-2 rounded-lg border border-zinc-800 bg-zinc-900/30 p-3">
-                          <div className="text-xs font-semibold text-zinc-300">속성 추가</div>
-                          {activeTilePresets.length === 0 ? (
-                            <div className="text-xs text-zinc-500">추가 가능한 속성이 없습니다.</div>
-                          ) : (
-                            <div className="flex flex-wrap gap-2">
-                              {activeTilePresets.map((preset) => {
-                                const color = normalizeHexColor(preset.color);
-                                const exists = tileEditor.draft.some(
-                                  (entry) => entry.presetId === preset.id
-                                );
-                                return (
-                                  <button
-                                    key={preset.id}
-                                    type="button"
-                                    disabled={exists}
-                                    className={[
-                                      "rounded-md border px-2 py-1 text-xs font-semibold",
-                                      exists
-                                        ? "cursor-not-allowed border-zinc-800 bg-zinc-900 text-zinc-500"
-                                        : "border-zinc-700 bg-zinc-950 text-zinc-100 hover:border-zinc-500",
-                                    ].join(" ")}
-                                    style={!exists ? { color } : undefined}
-                                    onClick={() =>
-                                      setTileEditor((prev) =>
-                                        prev
-                                          ? {
-                                              ...prev,
-                                              draft: [
-                                                ...prev.draft,
-                                                preset.hasValue
-                                                  ? { presetId: preset.id, value: "" }
-                                                  : { presetId: preset.id },
-                                              ],
-                                            }
-                                          : prev
-                                      )
-                                    }
-                                  >
-                                    {preset.name}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="flex items-center justify-end gap-2">
-                          <button
-                            type="button"
-                            className="rounded-md bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600"
-                            onClick={handleTileEditorSave}
-                          >
-                            저장
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {tileRegionEditor ? (
-                    <div className="fixed inset-0 z-[82] bg-black/55 p-4">
-                      <div className="mx-auto mt-20 w-full max-w-lg rounded-2xl border border-zinc-700 bg-zinc-950 p-4">
-                        <div className="mb-3 flex items-center justify-between">
-                          <div className="text-sm font-semibold text-zinc-100">
-                            지역 상태 편집 · col {tileRegionEditor.col}, row {tileRegionEditor.row}
-                          </div>
-                          <button
-                            type="button"
-                            className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:border-zinc-500"
-                            onClick={() => {
-                              setTileRegionEditor(null);
-                              tileRegionDraftRef.current = null;
-                            }}
-                          >
-                            닫기
-                          </button>
-                        </div>
-
-                        <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-900/30 p-3">
-                          {(
-                            [
-                              { field: "spaceUsed", label: "💠 사용 공간", color: "#38bdf8" },
-                              { field: "spaceCap", label: "🧊 최대 공간", color: "#38bdf8" },
-                              { field: "satisfaction", label: "🙂 만족치", color: "#f8fafc" },
-                              { field: "threat", label: "⚠️ 위협도", color: "#ef4444" },
-                              { field: "pollution", label: "☣️ 오염도", color: "#c084fc" },
-                            ] as const
-                          ).map(({ field, label, color }) => (
-                            <label key={field} className="grid grid-cols-[92px_1fr] items-center gap-2">
-                              <span className="text-xs font-semibold" style={{ color }}>
-                                {label}
-                              </span>
-                              <input
-                                type="number"
-                                step={1}
-                                defaultValue={tileRegionEditor.draft[field]}
-                                onChange={(e) =>
-                                  tileRegionDraftRef.current
-                                    ? (tileRegionDraftRef.current = {
-                                        ...tileRegionDraftRef.current,
-                                        [field]: e.target.value,
-                                      })
-                                    : undefined
-                                }
-                                className="h-8 rounded-md border bg-zinc-950 px-2 text-xs text-zinc-100 outline-none"
-                                style={{ borderColor: `${color}aa`, color, caretColor: color }}
-                                placeholder="미설정"
-                              />
-                            </label>
-                          ))}
-                        </div>
-
-                        <div className="mt-3 flex justify-end gap-2">
-                          <button
-                            type="button"
-                            className="rounded-md bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
-                            onClick={handleTileRegionEditorSave}
-                            disabled={busy}
-                          >
-                            저장
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
+                  <TileRegionModal
+                    tileRegionEditor={tileRegionEditor}
+                    setTileRegionEditor={setTileRegionEditor}
+                    tileRegionDraftRef={tileRegionDraftRef}
+                    onSave={handleTileRegionEditorSave}
+                    busy={busy}
+                  />
                 </div>
               </>
             )}
