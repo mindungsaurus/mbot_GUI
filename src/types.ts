@@ -180,6 +180,7 @@ export type HexOrientation = "pointy" | "flat";
 
 export type CappedResourceId = "wood" | "stone" | "fabric" | "weave" | "food";
 export type ResourceId = CappedResourceId | "research" | "order" | "gold";
+export type BuildingResourceId = ResourceId | `item:${string}`;
 
 export type PopulationTrackedId =
   | "settlers"
@@ -199,7 +200,10 @@ export type CityPopulationState = Record<PopulationId, PopulationEntry>;
 export type CityGlobalState = {
   values: Record<ResourceId, number>;
   caps: Record<CappedResourceId, number>;
+  overflowToGold: Record<CappedResourceId, number>;
+  warehouse?: Record<string, number>;
   day: number;
+  satisfaction: number;
   populationCap: number;
   population: CityPopulationState;
 };
@@ -219,7 +223,6 @@ export type MapTileStateAssignment = {
 export type MapTileRegionState = {
   spaceUsed?: number;
   spaceCap?: number;
-  satisfaction?: number;
   threat?: number;
   pollution?: number;
 };
@@ -267,7 +270,7 @@ export type BuildingRuleActionTargetScope = "self" | "range";
 
 export type BuildingRuleExpr =
   | { kind: "const"; value: number }
-  | { kind: "resource"; resourceId: ResourceId }
+  | { kind: "resource"; resourceId: BuildingResourceId }
   | { kind: "population"; populationId: PopulationId; field: "total" | "available" }
   | {
       kind: "tileMetric";
@@ -282,7 +285,7 @@ export type BuildingRulePredicate =
   | { kind: "compare"; op: BuildingRuleComparisonOp; left: BuildingRuleExpr; right: BuildingRuleExpr }
   | {
       kind: "tileRegionCompare";
-      field: "spaceRemaining" | "pollution" | "threat" | "satisfaction";
+      field: "spaceRemaining" | "pollution" | "threat";
       op: BuildingRuleComparisonOp;
       value: number;
     }
@@ -294,7 +297,7 @@ export type BuildingRulePredicate =
 export type BuildingRuleAction =
   | {
       kind: "adjustResource";
-      resourceId: ResourceId;
+      resourceId: BuildingResourceId;
       delta: BuildingRuleExpr;
       target?: BuildingRuleActionTargetScope;
       distance?: number;
@@ -360,7 +363,7 @@ export type BuildingPlacementRule =
   | { kind: "uniquePerTile"; maxCount?: number }
   | {
       kind: "tileRegionCompare";
-      field: "spaceRemaining" | "pollution" | "threat" | "satisfaction";
+      field: "spaceRemaining" | "pollution" | "threat";
       op: BuildingRuleComparisonOp;
       value: number;
     }
@@ -394,10 +397,10 @@ export type WorldMapBuildingPresetRow = {
   space?: number;
   description?: string;
   placementRules?: BuildingPlacementRule[];
-  buildCost?: Partial<Record<ResourceId, number>>;
-  researchCost?: Partial<Record<ResourceId, number>>;
+  buildCost?: Partial<Record<BuildingResourceId, number>>;
+  researchCost?: Partial<Record<BuildingResourceId, number>>;
   upkeep?: {
-    resources?: Partial<Record<ResourceId, number>>;
+    resources?: Partial<Record<BuildingResourceId, number>>;
     population?: Partial<Record<UpkeepPopulationId, number>>;
   };
   effects?: {

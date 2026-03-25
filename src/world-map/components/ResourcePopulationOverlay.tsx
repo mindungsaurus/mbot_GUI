@@ -7,7 +7,6 @@ import {
   RESOURCE_EMOJIS,
   RESOURCE_LABELS,
   TRACKED_POPULATION_IDS,
-  UNCAPPED_RESOURCE_IDS,
   formatDailyDelta,
   formatWithCommas,
 } from "../utils";
@@ -26,10 +25,12 @@ type Props = {
   onToggleResourceOverlay: () => void;
   onTogglePopulationOverlay: () => void;
   onToggleResourceAdjust: () => void;
+  onOpenWarehouseModal: () => void;
   onResourceAdjustTargetChange: (id: ResourceId) => void;
   onResourceAdjustModeChange: (mode: "inc" | "dec") => void;
   onResourceAdjustAmountChange: (value: string) => void;
   onApplyResourceAdjust: () => void;
+  onOpenPlacementReport: () => void;
 };
 
 export default function ResourcePopulationOverlay({
@@ -46,11 +47,15 @@ export default function ResourcePopulationOverlay({
   onToggleResourceOverlay,
   onTogglePopulationOverlay,
   onToggleResourceAdjust,
+  onOpenWarehouseModal,
   onResourceAdjustTargetChange,
   onResourceAdjustModeChange,
   onResourceAdjustAmountChange,
   onApplyResourceAdjust,
+  onOpenPlacementReport,
 }: Props) {
+  const uncappedCore: ResourceId[] = ["research", "gold"];
+
   return (
     <div className="pointer-events-none absolute right-4 top-14 z-30">
       <div className="pointer-events-auto flex flex-col gap-3">
@@ -94,7 +99,7 @@ export default function ResourcePopulationOverlay({
                 </div>
               ))}
               <div className="my-1 border-t border-zinc-700/70" />
-              {UNCAPPED_RESOURCE_IDS.map((id) => (
+              {uncappedCore.map((id) => (
                 <div
                   key={id}
                   className="grid min-w-[190px] grid-cols-[1fr_auto] gap-3 text-zinc-100"
@@ -119,6 +124,33 @@ export default function ResourcePopulationOverlay({
                   </span>
                 </div>
               ))}
+              <div className="my-1 border-t border-zinc-700/70" />
+              <div className="grid min-w-[190px] grid-cols-[1fr_auto] gap-3 text-zinc-100">
+                <span>
+                  {RESOURCE_EMOJIS.order} {RESOURCE_LABELS.order}
+                </span>
+                <span className="font-semibold text-amber-300">
+                  {formatWithCommas(activeCityGlobal.values.order)}
+                  <span
+                    className={[
+                      "ml-1",
+                      dailyResourceDeltaById.order > 0
+                        ? "text-emerald-300"
+                        : dailyResourceDeltaById.order < 0
+                          ? "text-rose-300"
+                          : "text-zinc-400",
+                    ].join(" ")}
+                  >
+                    ({formatDailyDelta(dailyResourceDeltaById.order ?? 0)})
+                  </span>
+                </span>
+              </div>
+              <div className="grid min-w-[190px] grid-cols-[1fr_auto] gap-3 text-zinc-100">
+                <span>🙂 만족도</span>
+                <span className="font-semibold text-amber-300">
+                  {`${Math.max(0, Math.min(100, Number(activeCityGlobal.satisfaction ?? 0))).toFixed(1)}%`}
+                </span>
+              </div>
 
               <div className="mt-2 border-t border-zinc-700/70 pt-2">
                 <button
@@ -173,6 +205,14 @@ export default function ResourcePopulationOverlay({
                     </button>
                   </div>
                 ) : null}
+                <button
+                  type="button"
+                  className="mt-2 w-full rounded-md border border-zinc-700 px-2 py-1 text-left text-[11px] text-zinc-200 hover:border-zinc-500"
+                  onClick={onOpenWarehouseModal}
+                  disabled={busy}
+                >
+                  창고 열기
+                </button>
               </div>
             </div>
           ) : null}
@@ -220,9 +260,20 @@ export default function ResourcePopulationOverlay({
                 <span>
                   {POPULATION_EMOJIS.elderly} {POPULATION_LABELS.elderly}
                 </span>
-                <span className="font-semibold text-zinc-200">
+                <span className="font-semibold text-sky-300">
+                  {formatWithCommas(activeCityGlobal.population.elderly.available ?? 0)} /{" "}
                   {formatWithCommas(activeCityGlobal.population.elderly.total)}
                 </span>
+              </div>
+              <div className="mt-2 border-t border-zinc-700/70 pt-2">
+                <button
+                  type="button"
+                  className="w-full rounded-md border border-zinc-700 px-2 py-1 text-left text-[11px] text-zinc-200 hover:border-zinc-500"
+                  onClick={onOpenPlacementReport}
+                  disabled={busy}
+                >
+                  배치 현황 확인
+                </button>
               </div>
             </div>
           ) : null}

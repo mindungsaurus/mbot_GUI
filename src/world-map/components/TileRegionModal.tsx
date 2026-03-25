@@ -3,7 +3,6 @@ import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 type TileRegionDraft = {
   spaceUsed: string;
   spaceCap: string;
-  satisfaction: string;
   threat: string;
   pollution: string;
 };
@@ -56,7 +55,6 @@ export default function TileRegionModal({
             [
               { field: "spaceUsed", label: "💠 사용 공간", color: "#38bdf8" },
               { field: "spaceCap", label: "🧊 최대 공간", color: "#38bdf8" },
-              { field: "satisfaction", label: "🙂 만족치", color: "#f8fafc" },
               { field: "threat", label: "⚠️ 위협도", color: "#ef4444" },
               { field: "pollution", label: "☣️ 오염도", color: "#c084fc" },
             ] as const
@@ -99,4 +97,3 @@ export default function TileRegionModal({
     </div>
   );
 }
-

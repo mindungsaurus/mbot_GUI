@@ -3,6 +3,7 @@ import {
   createWorldMapBuildingInstance,
   createWorldMapBuildingPreset,
   createWorldMap,
+  addInventoryItem,
   getWorldMap,
   deleteWorldMapBuildingInstance,
   deleteWorldMapBuildingPreset,
@@ -11,6 +12,9 @@ import {
   listWorldMapBuildingPresets,
   listWorldMaps,
   runWorldMapDaily,
+  listInventory,
+  listItemCatalog,
+  useInventoryItem,
   updateWorldMapBuildingInstance,
   updateWorldMapBuildingPreset,
   updateWorldMap,
@@ -22,8 +26,9 @@ import type {
   BuildingPlacementRule,
   BuildingRuleAction,
   BuildingRulePredicate,
+  BuildingResourceId,
   CityGlobalState,
-  HexOrientation,
+  ItemCatalogEntry,
   MapTileRegionState,
   MapTileStateAssignment,
   MapTileStatePreset,
@@ -40,7 +45,34 @@ type Props = {
   onBack: () => void;
 };
 
+type OverflowConversionDetail = {
+  resourceId: CappedResourceId;
+  overflowAmount: number;
+  goldGain: number;
+};
+
+type OverflowConversionNotice = {
+  beforeGold: number;
+  afterGold: number;
+  totalGoldGain: number;
+  details: OverflowConversionDetail[];
+};
+
+type TileYieldDelta = {
+  resourceId: string;
+  label: string;
+  value: number;
+};
+
+type TileYieldBuildingRow = {
+  instanceId: string;
+  buildingName: string;
+  color: string;
+  deltas: TileYieldDelta[];
+};
+
 import type {
+  CappedResourceId,
   Draft,
   SelectedHex,
   ViewMode,
@@ -52,7 +84,6 @@ import type {
   BuildingPresetsByMap,
   BuildingInstancesByMap,
   ImageViewportBounds,
-  CappedResourceId,
   ResourceId,
   WorkerAssignmentDraft,
   BuildingDraftState,
@@ -60,16 +91,11 @@ import type {
 } from "./world-map/utils";
 import {
   CAPPED_RESOURCE_IDS,
-  UNCAPPED_RESOURCE_IDS,
   ALL_RESOURCE_IDS,
   BUILDING_PRESET_RESOURCE_IDS,
   TRACKED_POPULATION_IDS,
   ALL_POPULATION_IDS,
   UPKEEP_POPULATION_IDS,
-  RESOURCE_LABELS,
-  POPULATION_LABELS,
-  UPKEEP_POPULATION_LABELS,
-  POPULATION_EMOJIS,
   EMPTY_STATE_BADGES,
   EMPTY_WORKER_ASSIGNMENT_DRAFT,
   normalizeCityGlobalState,
@@ -85,6 +111,7 @@ import {
   normalizeBuildingPresets,
   normalizeBuildingInstances,
   readAssignedWorkersByTypeFromInstanceMeta,
+  readUpkeepAnyNonElderlyByTypeFromInstanceMeta,
   sumAssignedWorkersByType,
   getInstanceBuildStatus,
   createZeroWorkersByType,
@@ -94,18 +121,22 @@ import {
   safeInt,
   evalRuleExpr,
   evaluateRulePredicatePreview,
+  convertUniquePerTileRulesForPersist,
   createDefaultRuleAction,
   createDefaultExecutionRule,
   createDefaultBuildingDraftState,
   toNonNegativeInt,
   toNumberRecordFromDraft,
-  exprToEditableNumber,
+  toNumberRecordFromResourceDraft,
   buildDraftFromPreset,
+  RESOURCE_LABELS,
+  RESOURCE_EMOJIS,
+  getBuildingResourceLabel,
 } from "./world-map/utils";
-import TileStateModal from "./world-map/components/TileStateModal";
-import TileRegionModal from "./world-map/components/TileRegionModal";
-import TileBuildingModal from "./world-map/components/TileBuildingModal";
-import ResourcePopulationOverlay from "./world-map/components/ResourcePopulationOverlay";
+import MapListPanel from "./world-map/components/MapListPanel";
+import MapPresetsPanel from "./world-map/components/MapPresetsPanel";
+import MapModePanel from "./world-map/components/MapModePanel";
+import WorldMapHeaderBar from "./world-map/components/WorldMapHeaderBar";
 
 export default function WorldMapManager({ authUser, mode = "map", onBack }: Props) {
   const isAdmin = !!authUser.isAdmin;
@@ -119,20 +150,26 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   const [resourceOverlayOpen, setResourceOverlayOpen] = useState(true);
   const [populationOverlayOpen, setPopulationOverlayOpen] = useState(true);
   const [resourceAdjustOpen, setResourceAdjustOpen] = useState(false);
+  const [warehouseModalOpen, setWarehouseModalOpen] = useState(false);
+  const [placementReportOpen, setPlacementReportOpen] = useState(false);
   const [resourceAdjustTarget, setResourceAdjustTarget] = useState<ResourceId>("gold");
   const [resourceAdjustMode, setResourceAdjustMode] = useState<"inc" | "dec">("inc");
   const [resourceAdjustAmount, setResourceAdjustAmount] = useState("0");
+  const [itemCatalogEntries, setItemCatalogEntries] = useState<ItemCatalogEntry[]>([]);
   const [dailyRunDays, setDailyRunDays] = useState("1");
   const [dailyRunResult, setDailyRunResult] = useState<string | null>(null);
   const [dailyRunLogs, setDailyRunLogs] = useState<string[]>([]);
+  const [overflowNotice, setOverflowNotice] = useState<OverflowConversionNotice | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [createName, setCreateName] = useState("");
   const [draft, setDraft] = useState<Draft>(DEFAULT_DRAFT);
   const [selectedHex, setSelectedHex] = useState<SelectedHex>(null);
+  const [selectedHexes, setSelectedHexes] = useState<Array<{ col: number; row: number }>>([]);
   const [viewMode, setViewMode] = useState<ViewMode>("scroll");
   const [showTileStatePills, setShowTileStatePills] = useState(true);
   const [showRegionStatusPills, setShowRegionStatusPills] = useState(true);
+  const [showTileNumbering, setShowTileNumbering] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [zoom, setZoom] = useState(0.7);
   const [visibleImageBounds, setVisibleImageBounds] = useState<ImageViewportBounds | null>(
@@ -159,9 +196,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     row: number;
   } | null>(null);
   const [tileEditor, setTileEditor] = useState<{
-    key: string;
-    col: number;
-    row: number;
+    targets: Array<{ key: string; col: number; row: number }>;
     draft: MapTileStateAssignment[];
   } | null>(null);
   const [tileRegionEditor, setTileRegionEditor] = useState<{
@@ -171,7 +206,6 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     draft: {
       spaceUsed: string;
       spaceCap: string;
-      satisfaction: string;
       threat: string;
       pollution: string;
     };
@@ -181,6 +215,9 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     row: number;
     presetId: string;
   } | null>(null);
+  const [tileYieldViewer, setTileYieldViewer] = useState<{ col: number; row: number } | null>(
+    null
+  );
   const [tileBuildingSearchQuery, setTileBuildingSearchQuery] = useState("");
   const [loadedSize, setLoadedSize] = useState<{ width: number; height: number } | null>(
     null
@@ -209,7 +246,6 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   const tileRegionDraftRef = useRef<{
     spaceUsed: string;
     spaceCap: string;
-    satisfaction: string;
     threat: string;
     pollution: string;
   } | null>(null);
@@ -220,6 +256,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     ...EMPTY_WORKER_ASSIGNMENT_DRAFT,
   });
   const tileBuildingWorkersDraftByIdRef = useRef<Record<string, WorkerAssignmentDraft>>({});
+  const prevSelectedMapIdRef = useRef<string | null>(null);
 
   const loadMaps = async (preferredId?: string | null) => {
     setBusy(true);
@@ -283,6 +320,33 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
 
   useEffect(() => {
     void loadMaps();
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    const run = async () => {
+      try {
+        const rows = await listItemCatalog();
+        if (disposed) return;
+        const normalized = Array.isArray(rows)
+          ? rows
+              .map((entry) => ({
+                name: String((entry as any)?.name ?? "").trim(),
+                quality: Number((entry as any)?.quality ?? 0) || 0,
+                unit: String((entry as any)?.unit ?? "").trim(),
+                type: String((entry as any)?.type ?? "").trim(),
+              }))
+              .filter((entry) => !!entry.name)
+          : [];
+        setItemCatalogEntries(normalized);
+      } catch {
+        if (!disposed) setItemCatalogEntries([]);
+      }
+    };
+    void run();
+    return () => {
+      disposed = true;
+    };
   }, []);
 
   const loadBuildingPresetsForMap = useCallback(
@@ -382,6 +446,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       for (const preset of presets) presetById.set(preset.id, preset);
 
       const targets = instances.filter((instance) => {
+        if (instance.enabled === false) return false;
         const preset = presetById.get(instance.presetId) ?? null;
         if (getInstanceBuildStatus(instance, preset) !== "active") return false;
         const assigned = readAssignedWorkersByTypeFromInstanceMeta(instance.meta);
@@ -413,7 +478,6 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
           },
         });
       }
-
       await loadBuildingInstancesForMap(mapId);
     },
     [buildingPresetsByMap, loadBuildingInstancesForMap]
@@ -426,9 +490,15 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   }, [selectedMapId, loadBuildingInstancesForMap, loadBuildingPresetsForMap]);
 
   useEffect(() => {
+    if (!selectedMapId) return;
+    void refreshCurrentMapOnly(selectedMapId);
+  }, [selectedMapId, refreshCurrentMapOnly]);
+
+  useEffect(() => {
     setDailyRunResult(null);
     setDailyRunLogs([]);
     setDailyRunDays("1");
+    setOverflowNotice(null);
   }, [selectedMapId]);
 
   const selectedMap = useMemo(
@@ -454,6 +524,10 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   const activeBuildingInstances = useMemo(
     () => (selectedMapId ? buildingInstancesByMap[selectedMapId] ?? [] : []),
     [selectedMapId, buildingInstancesByMap]
+  );
+  const selectedHexKeySet = useMemo(
+    () => new Set(selectedHexes.map((hex) => tileKey(hex.col, hex.row))),
+    [selectedHexes]
   );
   const buildingPresetById = useMemo(() => {
     const out = new Map<string, WorldMapBuildingPresetRow>();
@@ -491,15 +565,323 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     () => normalizeCityGlobalState(selectedMap?.cityGlobal),
     [selectedMap]
   );
+  const operationalAllocation = useMemo(() => {
+    const out: Record<string, boolean> = {};
+    const upkeepWorkersByTypeById: Record<string, Record<PopulationTrackedId, number>> = {};
+    const upkeepAnyRequiredById: Record<string, number> = {};
+    const upkeepAnyAssignedByTypeById: Record<string, Record<PopulationTrackedId, number>> = {};
+    const anyNonElderlyFillOrder: PopulationTrackedId[] = [
+      "settlers",
+      "engineers",
+      "laborers",
+      "scholars",
+    ];
+    const poolByType = createZeroWorkersByType();
+    for (const id of TRACKED_POPULATION_IDS) {
+      poolByType[id] = Math.max(
+        0,
+        Math.trunc(
+          Number(activeCityGlobal.population[id]?.total ?? 0) || 0
+        )
+      );
+    }
+    let elderlyPool = Math.max(
+      0,
+      Math.trunc(
+        Number(activeCityGlobal.population.elderly?.total ?? 0) || 0
+      )
+    );
+
+    const sortedInstances = [...activeBuildingInstances].sort((a, b) => {
+      const ta = new Date(a.createdAt).getTime();
+      const tb = new Date(b.createdAt).getTime();
+      if (ta !== tb) return ta - tb;
+      return a.id.localeCompare(b.id);
+    });
+
+    for (const instance of sortedInstances) {
+      const preset = buildingPresetById.get(instance.presetId) ?? null;
+      const buildStatus = getInstanceBuildStatus(instance, preset);
+      upkeepWorkersByTypeById[instance.id] = createZeroWorkersByType();
+      upkeepAnyRequiredById[instance.id] = 0;
+      upkeepAnyAssignedByTypeById[instance.id] = createZeroWorkersByType();
+      if (instance.enabled === false) {
+        out[instance.id] = false;
+        continue;
+      }
+      if (buildStatus !== "active") {
+        // 건설중 건물에 투입된 인원은 즉시 점유되어 가용 인구에서 제외된다.
+        const assignedBuildWorkers = readAssignedWorkersByTypeFromInstanceMeta(instance.meta);
+        for (const id of TRACKED_POPULATION_IDS) {
+          const used = Math.max(0, Math.trunc(Number(assignedBuildWorkers[id] ?? 0) || 0));
+          if (used <= 0) continue;
+          poolByType[id] = Math.max(0, poolByType[id] - used);
+        }
+        out[instance.id] = false;
+        continue;
+      }
+
+      const upkeepPopulation = preset?.upkeep?.population ?? {};
+      const requiredByType = createZeroWorkersByType();
+      for (const id of TRACKED_POPULATION_IDS) {
+        requiredByType[id] = Math.max(
+          0,
+          Math.trunc(Number((upkeepPopulation as Partial<Record<PopulationTrackedId, number>>)[id] ?? 0) || 0)
+        );
+      }
+      const requiredElderly = Math.max(
+        0,
+        Math.trunc(Number((upkeepPopulation as Partial<Record<UpkeepPopulationId, number>>).elderly ?? 0) || 0)
+      );
+      let requiredAnyNonElderly = Math.max(
+        0,
+        Math.trunc(
+          Number((upkeepPopulation as Partial<Record<UpkeepPopulationId, number>>).anyNonElderly ?? 0) || 0
+        )
+      );
+      upkeepAnyRequiredById[instance.id] = requiredAnyNonElderly;
+      const requestedAnyByType = readUpkeepAnyNonElderlyByTypeFromInstanceMeta(instance.meta);
+      const assignedAnyByType = createZeroWorkersByType();
+
+      let canOperate = true;
+      const nextPoolByType = { ...poolByType };
+      for (const id of TRACKED_POPULATION_IDS) {
+        if (nextPoolByType[id] < requiredByType[id]) {
+          canOperate = false;
+          break;
+        }
+        nextPoolByType[id] = Math.max(0, nextPoolByType[id] - requiredByType[id]);
+      }
+      if (canOperate && elderlyPool < requiredElderly) canOperate = false;
+      if (canOperate && requiredAnyNonElderly > 0) {
+        for (const id of anyNonElderlyFillOrder) {
+          if (requiredAnyNonElderly <= 0) break;
+          const want = Math.max(0, Math.trunc(Number(requestedAnyByType[id] ?? 0) || 0));
+          const used = Math.min(nextPoolByType[id], want, requiredAnyNonElderly);
+          assignedAnyByType[id] += used;
+          nextPoolByType[id] = Math.max(0, nextPoolByType[id] - used);
+          requiredAnyNonElderly -= used;
+        }
+        for (const id of anyNonElderlyFillOrder) {
+          if (requiredAnyNonElderly <= 0) break;
+          const used = Math.min(nextPoolByType[id], requiredAnyNonElderly);
+          assignedAnyByType[id] += used;
+          nextPoolByType[id] = Math.max(0, nextPoolByType[id] - used);
+          requiredAnyNonElderly -= used;
+        }
+        if (requiredAnyNonElderly > 0) canOperate = false;
+      }
+
+      if (!canOperate) {
+        out[instance.id] = false;
+        upkeepAnyAssignedByTypeById[instance.id] = assignedAnyByType;
+        continue;
+      }
+
+      for (const id of TRACKED_POPULATION_IDS) {
+        poolByType[id] = Math.max(0, nextPoolByType[id]);
+        upkeepWorkersByTypeById[instance.id][id] =
+          Math.max(0, requiredByType[id]) + Math.max(0, assignedAnyByType[id] ?? 0);
+      }
+      upkeepAnyAssignedByTypeById[instance.id] = assignedAnyByType;
+      elderlyPool = Math.max(0, elderlyPool - requiredElderly);
+      out[instance.id] = true;
+    }
+
+    return {
+      operationalById: out,
+      availablePoolByType: {
+        settlers: Math.max(0, poolByType.settlers),
+        engineers: Math.max(0, poolByType.engineers),
+        scholars: Math.max(0, poolByType.scholars),
+        laborers: Math.max(0, poolByType.laborers),
+      } as Record<PopulationTrackedId, number>,
+      availableElderly: Math.max(0, elderlyPool),
+      upkeepWorkersByTypeById,
+      upkeepAnyRequiredById,
+      upkeepAnyAssignedByTypeById,
+    };
+  }, [activeBuildingInstances, activeCityGlobal, buildingPresetById]);
+  const instanceOperationalById = operationalAllocation.operationalById;
+  const instanceUpkeepWorkersByTypeById = operationalAllocation.upkeepWorkersByTypeById;
+  const instanceUpkeepAnyRequiredById = operationalAllocation.upkeepAnyRequiredById;
+  const instanceUpkeepAnyAssignedByTypeById = operationalAllocation.upkeepAnyAssignedByTypeById;
+
+  const effectiveCityGlobal = useMemo(() => {
+    const next = normalizeCityGlobalState(activeCityGlobal);
+    for (const id of TRACKED_POPULATION_IDS) {
+      next.population[id].available = Math.max(
+        0,
+        Math.trunc(Number(operationalAllocation.availablePoolByType[id] ?? 0) || 0)
+      );
+    }
+    next.population.elderly.available = Math.max(
+      0,
+      Math.trunc(Number(operationalAllocation.availableElderly ?? 0) || 0)
+    );
+    return next;
+  }, [activeCityGlobal, operationalAllocation]);
+  const placementPopulationSummary = useMemo(
+    () =>
+      ALL_POPULATION_IDS.map((id) => {
+        const total = Math.max(
+          0,
+          Math.trunc(Number(effectiveCityGlobal.population[id]?.total ?? 0) || 0)
+        );
+        const available = Math.max(
+          0,
+          Math.trunc(Number(effectiveCityGlobal.population[id]?.available ?? 0) || 0)
+        );
+        return {
+          id,
+          total,
+          available,
+          allocated: Math.max(0, total - available),
+        };
+      }),
+    [effectiveCityGlobal.population]
+  );
+  const placementReportRows = useMemo(() => {
+    if (!selectedMap) return [] as Array<{
+      instanceId: string;
+      tileNumber: number;
+      col: number;
+      row: number;
+      buildingName: string;
+      color: string;
+      statusLabel: string;
+      reason: string;
+      required: {
+        settlers: number;
+        engineers: number;
+        scholars: number;
+        laborers: number;
+        elderly: number;
+        anyNonElderly: number;
+      };
+      assigned: {
+        settlers: number;
+        engineers: number;
+        scholars: number;
+        laborers: number;
+        elderly: number;
+      };
+      assignedAnyByType: Record<PopulationTrackedId, number>;
+      construction: {
+        progressEffort: number;
+        requiredEffort: number;
+      };
+    }>;
+
+    const rows = activeBuildingInstances.map((instance) => {
+      const preset = buildingPresetById.get(instance.presetId) ?? null;
+      const buildStatus = getInstanceBuildStatus(instance, preset);
+      const isActive = buildStatus === "active";
+      const isOperational = !!instanceOperationalById[instance.id];
+      const isManuallyDisabled = instance.enabled === false;
+      const tileNumber = instance.row * selectedMap.cols + instance.col + 1;
+
+      const upkeepPopulation = preset?.upkeep?.population ?? {};
+      const required = {
+        settlers: Math.max(0, Math.trunc(Number((upkeepPopulation as any).settlers ?? 0) || 0)),
+        engineers: Math.max(0, Math.trunc(Number((upkeepPopulation as any).engineers ?? 0) || 0)),
+        scholars: Math.max(0, Math.trunc(Number((upkeepPopulation as any).scholars ?? 0) || 0)),
+        laborers: Math.max(0, Math.trunc(Number((upkeepPopulation as any).laborers ?? 0) || 0)),
+        elderly: Math.max(0, Math.trunc(Number((upkeepPopulation as any).elderly ?? 0) || 0)),
+        anyNonElderly:
+          instanceUpkeepAnyRequiredById[instance.id] ??
+          Math.max(0, Math.trunc(Number((upkeepPopulation as any).anyNonElderly ?? 0) || 0)),
+      };
+      const assignedByType = !isActive
+        ? readAssignedWorkersByTypeFromInstanceMeta(instance.meta)
+        : isOperational
+          ? instanceUpkeepWorkersByTypeById[instance.id] ?? createZeroWorkersByType()
+          : createZeroWorkersByType();
+      const assignedAnyByType =
+        isActive && isOperational
+          ? instanceUpkeepAnyAssignedByTypeById[instance.id] ?? createZeroWorkersByType()
+          : createZeroWorkersByType();
+      const assignedElderly = isActive && isOperational ? required.elderly : 0;
+
+      let statusLabel = "운영중";
+      let reason = "요구 인원 충족";
+      if (isManuallyDisabled) {
+        statusLabel = "비활성";
+        reason = "수동 비활성화";
+      } else if (!isActive) {
+        statusLabel = "건설중";
+        reason = "건설 진행 중";
+      } else if (!isOperational) {
+        statusLabel = "비활성";
+        reason = "유지관리 인원 부족";
+      }
+
+      return {
+        instanceId: instance.id,
+        tileNumber,
+        col: instance.col,
+        row: instance.row,
+        buildingName: preset?.name ?? "이름 없는 건물",
+        color: normalizeHexColor(preset?.color, "#e5e7eb"),
+        statusLabel,
+        reason,
+        required,
+        assigned: {
+          settlers: Math.max(0, assignedByType.settlers ?? 0),
+          engineers: Math.max(0, assignedByType.engineers ?? 0),
+          scholars: Math.max(0, assignedByType.scholars ?? 0),
+          laborers: Math.max(0, assignedByType.laborers ?? 0),
+          elderly: Math.max(0, assignedElderly),
+        },
+        assignedAnyByType,
+        construction: {
+          progressEffort: Math.max(0, Math.trunc(Number(instance.progressEffort ?? 0) || 0)),
+          requiredEffort: Math.max(0, Math.trunc(Number(preset?.effort ?? 0) || 0)),
+        },
+      };
+    });
+
+    rows.sort((a, b) => {
+      if (a.tileNumber !== b.tileNumber) return a.tileNumber - b.tileNumber;
+      return a.buildingName.localeCompare(b.buildingName, "ko");
+    });
+    return rows;
+  }, [
+    selectedMap,
+    activeBuildingInstances,
+    buildingPresetById,
+    instanceOperationalById,
+    instanceUpkeepAnyAssignedByTypeById,
+    instanceUpkeepAnyRequiredById,
+    instanceUpkeepWorkersByTypeById,
+  ]);
   const totalPopulation = useMemo(
     () =>
       ALL_POPULATION_IDS.reduce(
-        (sum, id) => sum + Math.max(0, activeCityGlobal.population[id]?.total ?? 0),
+        (sum, id) => sum + Math.max(0, effectiveCityGlobal.population[id]?.total ?? 0),
         0
       ),
-    [activeCityGlobal.population]
+    [effectiveCityGlobal.population]
   );
-
+  const warehouseEntries = useMemo(() => {
+    const warehouse = effectiveCityGlobal.warehouse ?? {};
+    const byName = new Map<string, number>();
+    for (const [rawName, rawAmount] of Object.entries(warehouse)) {
+      const name = String(rawName ?? "").trim();
+      if (!name) continue;
+      const amount = Math.max(0, Math.trunc(Number(rawAmount) || 0));
+      if (amount <= 0) continue;
+      byName.set(name, amount);
+    }
+    for (const entry of itemCatalogEntries) {
+      if (!entry?.name) continue;
+      if (!byName.has(entry.name)) continue;
+      byName.set(entry.name, Math.max(0, Math.trunc(Number(byName.get(entry.name) ?? 0))));
+    }
+    return [...byName.entries()]
+      .map(([name, amount]) => ({ name, amount }))
+      .sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  }, [effectiveCityGlobal.warehouse, itemCatalogEntries]);
   const dailyResourceDeltaById = useMemo(() => {
     const totals: Record<ResourceId, number> = {
       wood: 0,
@@ -512,12 +894,15 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       gold: 0,
     };
     if (!selectedMap) return totals;
-    const enabledInstances = activeBuildingInstances.filter((entry) => {
+    const activeBuiltInstances = activeBuildingInstances.filter((entry) => {
       if (entry.enabled === false) return false;
       const preset = buildingPresetById.get(entry.presetId) ?? null;
       return getInstanceBuildStatus(entry, preset) === "active";
     });
-    for (const instance of enabledInstances) {
+    const operationalInstances = activeBuiltInstances.filter(
+      (entry) => instanceOperationalById[entry.id]
+    );
+    for (const instance of operationalInstances) {
       const preset = buildingPresetById.get(instance.presetId);
       if (!preset) continue;
 
@@ -525,10 +910,10 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         col: instance.col,
         row: instance.row,
         map: selectedMap,
-        cityGlobal: activeCityGlobal,
+        cityGlobal: effectiveCityGlobal,
         tileStates: activeTileStates,
         tileRegions: activeTileRegionStates,
-        buildingInstances: enabledInstances,
+        buildingInstances: activeBuiltInstances,
       };
 
       const upkeepResources = preset.upkeep?.resources ?? {};
@@ -540,7 +925,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
 
       for (const rule of preset.effects?.daily ?? []) {
         const intervalDays = Math.max(1, safeInt(rule.intervalDays, 1));
-        const nextDay = Math.max(0, safeInt(activeCityGlobal.day, 0) + 1);
+        const nextDay = Math.max(0, safeInt(effectiveCityGlobal.day, 0) + 1);
         const shouldApplyThisTick =
           intervalDays <= 1 || (nextDay % intervalDays === 0);
         if (!shouldApplyThisTick) continue;
@@ -551,7 +936,9 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
           if (action.kind !== "adjustResource") continue;
           const value = evalRuleExpr(ruleContext, action.delta);
           if (!Number.isFinite(value) || value === 0) continue;
-          totals[action.resourceId] += value * repeatMultiplier;
+          if ((ALL_RESOURCE_IDS as readonly string[]).includes(String(action.resourceId))) {
+            totals[action.resourceId as ResourceId] += value * repeatMultiplier;
+          }
         }
       }
     }
@@ -562,11 +949,130 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   }, [
     activeBuildingInstances,
     activeBuildingPresets,
-    activeCityGlobal,
+    effectiveCityGlobal,
+    instanceOperationalById,
     activeTileRegionStates,
     activeTileStates,
     buildingPresetById,
     selectedMap,
+  ]);
+
+  const tileYieldPreview = useMemo(() => {
+    if (!selectedMap || !tileYieldViewer) {
+      return { rows: [] as TileYieldBuildingRow[], totals: [] as TileYieldDelta[] };
+    }
+
+    const activeBuiltInstances = activeBuildingInstances.filter((entry) => {
+      if (entry.enabled === false) return false;
+      const preset = buildingPresetById.get(entry.presetId) ?? null;
+      return getInstanceBuildStatus(entry, preset) === "active";
+    });
+    const operationalInstances = activeBuiltInstances.filter(
+      (entry) => instanceOperationalById[entry.id]
+    );
+    const targetInstances = operationalInstances.filter(
+      (entry) => entry.col === tileYieldViewer.col && entry.row === tileYieldViewer.row
+    );
+    const nextDay = Math.max(0, safeInt(effectiveCityGlobal.day, 0) + 1);
+    const toLabel = (resourceId: string) => {
+      const trimmed = String(resourceId ?? "").trim();
+      if (!trimmed) return "-";
+      if ((ALL_RESOURCE_IDS as readonly string[]).includes(trimmed)) {
+        return RESOURCE_LABELS[trimmed as ResourceId];
+      }
+      return getBuildingResourceLabel(trimmed as BuildingResourceId);
+    };
+
+    const rows: TileYieldBuildingRow[] = targetInstances.map((instance) => {
+      const preset = buildingPresetById.get(instance.presetId);
+      const deltasById = new Map<string, number>();
+      if (!preset) {
+        return {
+          instanceId: instance.id,
+          buildingName: "건물",
+          color: "#eab308",
+          deltas: [],
+        };
+      }
+
+      const upkeepResources = preset.upkeep?.resources ?? {};
+      for (const [resourceIdRaw, rawValue] of Object.entries(upkeepResources)) {
+        const resourceId = String(resourceIdRaw ?? "").trim();
+        if (!resourceId) continue;
+        const upkeepValue = Number(rawValue ?? 0);
+        if (!Number.isFinite(upkeepValue) || upkeepValue === 0) continue;
+        deltasById.set(resourceId, (deltasById.get(resourceId) ?? 0) - upkeepValue);
+      }
+
+      const ruleContext: RuleEvalContext = {
+        col: instance.col,
+        row: instance.row,
+        map: selectedMap,
+        cityGlobal: effectiveCityGlobal,
+        tileStates: activeTileStates,
+        tileRegions: activeTileRegionStates,
+        buildingInstances: activeBuiltInstances,
+      };
+      for (const rule of preset.effects?.daily ?? []) {
+        const intervalDays = Math.max(1, safeInt(rule.intervalDays, 1));
+        const shouldApplyThisTick = intervalDays <= 1 || nextDay % intervalDays === 0;
+        if (!shouldApplyThisTick) continue;
+        const evalResult = evaluateRulePredicatePreview(ruleContext, rule.when);
+        if (!evalResult.matched || evalResult.repeatCount <= 0) continue;
+        const repeatMultiplier = Math.max(1, evalResult.repeatCount);
+        for (const action of rule.actions ?? []) {
+          if (action.kind !== "adjustResource") continue;
+          const resourceId = String(action.resourceId ?? "").trim();
+          if (!resourceId) continue;
+          const value = evalRuleExpr(ruleContext, action.delta);
+          if (!Number.isFinite(value) || value === 0) continue;
+          deltasById.set(resourceId, (deltasById.get(resourceId) ?? 0) + value * repeatMultiplier);
+        }
+      }
+
+      const deltas = [...deltasById.entries()]
+        .map(([resourceId, value]) => ({
+          resourceId,
+          label: toLabel(resourceId),
+          value: roundTo2(value),
+        }))
+        .filter((entry) => entry.value !== 0)
+        .sort((a, b) => a.label.localeCompare(b.label, "ko"));
+
+      return {
+        instanceId: instance.id,
+        buildingName: preset.name,
+        color: preset.color,
+        deltas,
+      };
+    });
+
+    const totalsById = new Map<string, number>();
+    for (const row of rows) {
+      for (const entry of row.deltas) {
+        totalsById.set(entry.resourceId, (totalsById.get(entry.resourceId) ?? 0) + entry.value);
+      }
+    }
+    const totals = [...totalsById.entries()]
+      .map(([resourceId, value]) => ({
+        resourceId,
+        label: toLabel(resourceId),
+        value: roundTo2(value),
+      }))
+      .filter((entry) => entry.value !== 0)
+      .sort((a, b) => a.label.localeCompare(b.label, "ko"));
+
+    rows.sort((a, b) => a.buildingName.localeCompare(b.buildingName, "ko"));
+    return { rows, totals };
+  }, [
+    selectedMap,
+    tileYieldViewer,
+    activeBuildingInstances,
+    buildingPresetById,
+    instanceOperationalById,
+    effectiveCityGlobal,
+    activeTileStates,
+    activeTileRegionStates,
   ]);
 
   useEffect(() => {
@@ -574,22 +1080,37 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   }, [selectedMap]);
 
   useEffect(() => {
+    if (!selectedMapId) setPlacementReportOpen(false);
+  }, [selectedMapId]);
+
+  useEffect(() => {
     if (!isPresetMode) return;
     setSettingsOpen(false);
     setMapListOpen(false);
+    setSelectedHexes([]);
     setTileContextMenu(null);
     setTileEditor(null);
     setTileBuildingEditor(null);
+    setTileYieldViewer(null);
   }, [isPresetMode]);
 
   useEffect(() => {
+    const prevMapId = prevSelectedMapIdRef.current;
+    const mapIdChanged = prevMapId !== selectedMapId;
+    prevSelectedMapIdRef.current = selectedMapId;
+
     setDraft(buildDraft(selectedMap));
+
+    if (!mapIdChanged) return;
+
     setPresetMode("tile");
     setSelectedHex(null);
+    setSelectedHexes([]);
     setTileContextMenu(null);
     setTileEditor(null);
     setTileRegionEditor(null);
     setTileBuildingEditor(null);
+    setTileYieldViewer(null);
     setTileBuildingSearchQuery("");
     setBuildingDraft(createDefaultBuildingDraftState());
     tileRegionDraftRef.current = null;
@@ -878,53 +1399,75 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       if (!Number.isFinite(n)) return fallback;
       return Math.max(0, n);
     };
+    const parsePercent = (name: string, fallback: number) => {
+      const raw = String(formData.get(name) ?? "").trim();
+      if (!raw) return fallback;
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return fallback;
+      return Math.max(0, Math.min(100, n));
+    };
     const nextState = normalizeCityGlobalState({
       values: {
-        ...activeCityGlobal.values,
+        ...effectiveCityGlobal.values,
+      },
+      overflowToGold: {
+        wood: parseNonNegativeInt("overflow_rate_wood", effectiveCityGlobal.overflowToGold.wood),
+        stone: parseNonNegativeInt("overflow_rate_stone", effectiveCityGlobal.overflowToGold.stone),
+        fabric: parseNonNegativeInt("overflow_rate_fabric", effectiveCityGlobal.overflowToGold.fabric),
+        weave: parseNonNegativeInt("overflow_rate_weave", effectiveCityGlobal.overflowToGold.weave),
+        food: parseNonNegativeInt("overflow_rate_food", effectiveCityGlobal.overflowToGold.food),
+      },
+      warehouse: {
+        ...(effectiveCityGlobal.warehouse ?? {}),
       },
       caps: {
-        wood: parseNonNegativeInt("cap_wood", activeCityGlobal.caps.wood),
-        stone: parseNonNegativeInt("cap_stone", activeCityGlobal.caps.stone),
-        fabric: parseNonNegativeInt("cap_fabric", activeCityGlobal.caps.fabric),
-        weave: parseNonNegativeInt("cap_weave", activeCityGlobal.caps.weave),
-        food: parseNonNegativeInt("cap_food", activeCityGlobal.caps.food),
+        wood: parseNonNegativeInt("cap_wood", effectiveCityGlobal.caps.wood),
+        stone: parseNonNegativeInt("cap_stone", effectiveCityGlobal.caps.stone),
+        fabric: parseNonNegativeInt("cap_fabric", effectiveCityGlobal.caps.fabric),
+        weave: parseNonNegativeInt("cap_weave", effectiveCityGlobal.caps.weave),
+        food: parseNonNegativeInt("cap_food", effectiveCityGlobal.caps.food),
       },
-      day: parseNonNegativeInt("day", activeCityGlobal.day),
-      populationCap: parseNonNegativeInt("population_cap", activeCityGlobal.populationCap),
+      day: parseNonNegativeInt("day", effectiveCityGlobal.day),
+      satisfaction: parsePercent("satisfaction", effectiveCityGlobal.satisfaction),
+      populationCap: parseNonNegativeInt("population_cap", effectiveCityGlobal.populationCap),
       population: {
         settlers: {
           available: parseNonNegativeInt(
             "pop_settlers_available",
-            activeCityGlobal.population.settlers.available ?? 0
+            effectiveCityGlobal.population.settlers.available ?? 0
           ),
-          total: parseNonNegativeInt("pop_settlers_total", activeCityGlobal.population.settlers.total),
+          total: parseNonNegativeInt("pop_settlers_total", effectiveCityGlobal.population.settlers.total),
         },
         engineers: {
           available: parseNonNegativeInt(
             "pop_engineers_available",
-            activeCityGlobal.population.engineers.available ?? 0
+            effectiveCityGlobal.population.engineers.available ?? 0
           ),
           total: parseNonNegativeInt(
             "pop_engineers_total",
-            activeCityGlobal.population.engineers.total
+            effectiveCityGlobal.population.engineers.total
           ),
         },
         scholars: {
           available: parseNonNegativeInt(
             "pop_scholars_available",
-            activeCityGlobal.population.scholars.available ?? 0
+            effectiveCityGlobal.population.scholars.available ?? 0
           ),
-          total: parseNonNegativeInt("pop_scholars_total", activeCityGlobal.population.scholars.total),
+          total: parseNonNegativeInt("pop_scholars_total", effectiveCityGlobal.population.scholars.total),
         },
         laborers: {
           available: parseNonNegativeInt(
             "pop_laborers_available",
-            activeCityGlobal.population.laborers.available ?? 0
+            effectiveCityGlobal.population.laborers.available ?? 0
           ),
-          total: parseNonNegativeInt("pop_laborers_total", activeCityGlobal.population.laborers.total),
+          total: parseNonNegativeInt("pop_laborers_total", effectiveCityGlobal.population.laborers.total),
         },
         elderly: {
-          total: parseNonNegativeInt("pop_elderly_total", activeCityGlobal.population.elderly.total),
+          available: parseNonNegativeInt(
+            "pop_elderly_available",
+            effectiveCityGlobal.population.elderly.available ?? 0
+          ),
+          total: parseNonNegativeInt("pop_elderly_total", effectiveCityGlobal.population.elderly.total),
         },
       },
     });
@@ -934,19 +1477,73 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         entry.available = entry.total;
       }
     }
+    if (
+      (nextState.population.elderly.available ?? 0) > nextState.population.elderly.total
+    ) {
+      nextState.population.elderly.available = nextState.population.elderly.total;
+    }
+    const converted = applyOverflowToGold(nextState);
     setBusy(true);
     setErr(null);
     try {
       const updated = await updateWorldMap(selectedMap.id, {
-        cityGlobal: nextState,
+        cityGlobal: converted.nextState,
       });
-      setMaps((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
+      setMaps((prev) =>
+        prev.map((entry) =>
+          entry.id === updated.id
+            ? {
+                ...entry,
+                ...updated,
+                cityGlobal: converted.nextState,
+              }
+            : entry
+        )
+      );
+      if (converted.convertedGold > 0 && converted.details.length > 0) {
+        setOverflowNotice({
+          beforeGold: Math.max(0, Math.trunc(Number(nextState.values.gold ?? 0) || 0)),
+          afterGold: Math.max(0, Math.trunc(Number(converted.nextState.values.gold ?? 0) || 0)),
+          totalGoldGain: converted.convertedGold,
+          details: converted.details,
+        });
+      }
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     } finally {
       setBusy(false);
     }
   };
+
+  const applyOverflowToGold = useCallback((input: CityGlobalState) => {
+    const nextState = normalizeCityGlobalState(input);
+    let changed = false;
+    let convertedGold = 0;
+    const details: OverflowConversionDetail[] = [];
+    for (const id of CAPPED_RESOURCE_IDS) {
+      const cap = Math.max(0, Math.trunc(Number(nextState.caps[id] ?? 0) || 0));
+      const current = Math.max(0, Math.trunc(Number(nextState.values[id] ?? 0) || 0));
+      if (current <= cap) continue;
+      const overflow = current - cap;
+      nextState.values[id] = cap;
+      changed = true;
+      const rate = Math.max(0, Math.trunc(Number(nextState.overflowToGold[id] ?? 0) || 0));
+      if (rate > 0) {
+        const goldGain = overflow * rate;
+        nextState.values.gold = Math.max(
+          0,
+          Math.trunc(Number(nextState.values.gold ?? 0) || 0) + goldGain
+        );
+        convertedGold += goldGain;
+        details.push({
+          resourceId: id,
+          overflowAmount: overflow,
+          goldGain,
+        });
+      }
+    }
+    return { nextState, changed, convertedGold, details };
+  }, []);
 
   const handleApplyResourceAdjust = async () => {
     if (!selectedMap) return;
@@ -957,29 +1554,46 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       return;
     }
 
-    const current = activeCityGlobal.values[resourceAdjustTarget] ?? 0;
+    const current = effectiveCityGlobal.values[resourceAdjustTarget] ?? 0;
     const signed = resourceAdjustMode === "inc" ? amount : -amount;
     let nextValue = current + signed;
     if (nextValue < 0) nextValue = 0;
-
-    if ((CAPPED_RESOURCE_IDS as readonly string[]).includes(resourceAdjustTarget)) {
-      const cap = activeCityGlobal.caps[resourceAdjustTarget as CappedResourceId] ?? 0;
-      if (nextValue > cap) nextValue = cap;
-    }
-
-    const nextState: CityGlobalState = {
-      ...activeCityGlobal,
+    const nextState = normalizeCityGlobalState({
+      ...effectiveCityGlobal,
       values: {
-        ...activeCityGlobal.values,
+        ...effectiveCityGlobal.values,
         [resourceAdjustTarget]: nextValue,
       },
-    };
+    });
+    const beforeGold = Math.max(0, Math.trunc(Number(nextState.values.gold ?? 0) || 0));
+    const converted = applyOverflowToGold(nextState);
 
     setBusy(true);
     setErr(null);
     try {
-      const updated = await updateWorldMap(selectedMap.id, { cityGlobal: nextState });
-      setMaps((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
+      const updated = await updateWorldMap(selectedMap.id, { cityGlobal: converted.nextState });
+      setMaps((prev) =>
+        prev.map((entry) =>
+          entry.id === updated.id
+            ? {
+                ...entry,
+                ...updated,
+                cityGlobal: converted.nextState,
+              }
+            : entry
+        )
+      );
+      if (converted.convertedGold > 0 && converted.details.length > 0) {
+        setOverflowNotice({
+          beforeGold,
+          afterGold: Math.max(
+            0,
+            Math.trunc(Number(converted.nextState.values.gold ?? 0) || 0)
+          ),
+          totalGoldGain: converted.convertedGold,
+          details: converted.details,
+        });
+      }
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     } finally {
@@ -991,6 +1605,8 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     if (!selectedMap) return;
     const parsed = Math.trunc(Number(dailyRunDays));
     const days = Number.isFinite(parsed) ? Math.max(1, parsed) : 1;
+    const startDay = Math.max(0, Math.trunc(Number(activeCityGlobal.day ?? 0) || 0));
+    const startGold = Math.max(0, Math.trunc(Number(activeCityGlobal.values.gold ?? 0) || 0));
     setBusy(true);
     setErr(null);
     try {
@@ -1020,14 +1636,9 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         ? Math.max(0, Math.trunc(Number(failedRulesCandidate)))
         : undefined;
 
-      const segments = [`일일 규칙 ${formatWithCommas(days)}일 실행 완료`];
-      if (day != null) segments.push(`Day ${String(day).padStart(3, "0")}`);
-      if (appliedRules != null) segments.push(`적용 규칙 ${formatWithCommas(appliedRules)}개`);
-      if (appliedActions != null) segments.push(`적용 액션 ${formatWithCommas(appliedActions)}개`);
-      if (failedRules != null) segments.push(`실패 ${formatWithCommas(failedRules)}개`);
-      setDailyRunResult(segments.join(" · "));
       const rawLogs = Array.isArray(result?.logs) ? result.logs : [];
-      const lines = rawLogs
+      const failedLines = rawLogs
+        .filter((entry: any) => String(entry?.status ?? "") === "failed")
         .map((entry: any) => {
           const statusRaw = String(entry?.status ?? "");
           const status =
@@ -1055,9 +1666,67 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
           return `[${status}] ${presetName} · 규칙 ${ruleId}${tail}`;
         })
         .slice(-200);
-      setDailyRunLogs(lines);
+      setDailyRunLogs(failedLines);
 
       await refreshCurrentMapOnly(selectedMap.id);
+      const hasFailure =
+        (failedRules != null ? failedRules > 0 : false) ||
+        rawLogs.some((entry: any) => String(entry?.status ?? "") === "failed");
+
+      if (hasFailure) {
+        setDailyRunResult("일일 규칙 실행 중 실패가 있어 날짜를 유지했습니다.");
+        const latest = await getWorldMap(selectedMap.id);
+        if (latest?.id) {
+          const latestCity = normalizeCityGlobalState(latest.cityGlobal);
+          if ((latestCity.day ?? 0) !== startDay) {
+            const rolled = await updateWorldMap(selectedMap.id, {
+              cityGlobal: { ...latestCity, day: startDay },
+            });
+            setMaps((prev) => prev.map((entry) => (entry.id === rolled.id ? rolled : entry)));
+          }
+        }
+        await refreshCurrentMapOnly(selectedMap.id);
+      } else {
+        const segments = [`일일 규칙 ${formatWithCommas(days)}일 실행 완료`];
+        if (day != null) segments.push(`Day ${String(day).padStart(3, "0")}`);
+        if (appliedRules != null) segments.push(`규칙 ${formatWithCommas(appliedRules)}개`);
+        if (appliedActions != null) segments.push(`액션 ${formatWithCommas(appliedActions)}개`);
+        setDailyRunResult(segments.join(" · "));
+      }
+
+      const overflowConvertedGoldCandidate =
+        result?.overflowConvertedGold ?? result?.summary?.overflowConvertedGold;
+      const overflowDetailsCandidate = Array.isArray(result?.overflowDetails)
+        ? result.overflowDetails
+        : Array.isArray(result?.summary?.overflowDetails)
+          ? result.summary.overflowDetails
+          : [];
+      const overflowConvertedGold = Number.isFinite(Number(overflowConvertedGoldCandidate))
+        ? Math.max(0, Math.trunc(Number(overflowConvertedGoldCandidate)))
+        : 0;
+      const overflowDetails = overflowDetailsCandidate
+        .map((entry: any) => {
+          const resourceId = String(entry?.resourceId ?? "").trim() as CappedResourceId;
+          if (!CAPPED_RESOURCE_IDS.includes(resourceId)) return null;
+          const overflowAmount = Number.isFinite(Number(entry?.overflowAmount))
+            ? Math.max(0, Math.trunc(Number(entry.overflowAmount)))
+            : 0;
+          const goldGain = Number.isFinite(Number(entry?.goldGain))
+            ? Math.max(0, Math.trunc(Number(entry.goldGain)))
+            : 0;
+          if (overflowAmount <= 0 || goldGain <= 0) return null;
+          return { resourceId, overflowAmount, goldGain };
+        })
+        .filter((entry: any): entry is OverflowConversionDetail => entry != null);
+      if (overflowConvertedGold > 0 && overflowDetails.length > 0) {
+        setOverflowNotice({
+          beforeGold: startGold,
+          afterGold: startGold + overflowConvertedGold,
+          totalGoldGain: overflowConvertedGold,
+          details: overflowDetails,
+        });
+      }
+
       await releaseWorkersFromCompletedBuildings(selectedMap.id);
     } catch (e: any) {
       setErr(String(e?.message ?? e));
@@ -1261,10 +1930,10 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
 
   const createActionByKind = (kind: BuildingRuleAction["kind"]): BuildingRuleAction => {
     if (kind === "adjustResource") {
-      return { kind, resourceId: "gold", delta: { kind: "const", value: 0 }, target: "self" };
+      return { kind, resourceId: "gold", delta: { kind: "const", value: 0 } };
     }
     if (kind === "adjustResourceCap") {
-      return { kind, resourceId: "wood", delta: { kind: "const", value: 0 }, target: "self" };
+      return { kind, resourceId: "wood", delta: { kind: "const", value: 0 } };
     }
     if (kind === "adjustPopulation") {
       return {
@@ -1272,14 +1941,12 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         populationId: "settlers",
         field: "available",
         delta: { kind: "const", value: 0 },
-        target: "self",
       };
     }
     if (kind === "adjustPopulationCap") {
       return {
         kind,
         delta: { kind: "const", value: 0 },
-        target: "self",
       };
     }
     if (kind === "convertPopulation") {
@@ -1288,7 +1955,6 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         from: "settlers",
         to: "laborers",
         amount: { kind: "const", value: 1 },
-        target: "self",
       };
     }
     if (kind === "adjustTileRegion") {
@@ -1307,13 +1973,141 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
 
   const setDraftResourceValue = (
     field: "buildCost" | "upkeepResources",
-    resourceId: ResourceId,
+    resourceId: BuildingResourceId,
     value: string
   ) => {
     setBuildingDraft((prev) => ({
       ...prev,
       [field]: { ...prev[field], [resourceId]: value.replace(/[^\d]/g, "") },
     }));
+  };
+
+  const persistWarehouseState = useCallback(
+    async (nextWarehouse: Record<string, number>) => {
+      if (!selectedMap) return;
+      const nextState = normalizeCityGlobalState({
+        ...activeCityGlobal,
+        warehouse: nextWarehouse,
+      });
+      setBusy(true);
+      setErr(null);
+      try {
+        const updated = await updateWorldMap(selectedMap.id, { cityGlobal: nextState });
+        setMaps((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
+      } catch (e: any) {
+        setErr(String(e?.message ?? e));
+        throw e;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [selectedMap, activeCityGlobal]
+  );
+
+  const handleAddWarehouseItem = useCallback(
+    async (itemName: string, amount: number) => {
+      const name = String(itemName ?? "").trim();
+      if (!name) {
+        throw new Error("아이템 이름을 입력해 주세요.");
+      }
+      const parsedAmount = Math.max(1, Math.trunc(Number(amount) || 0));
+      const nextWarehouse = { ...(activeCityGlobal.warehouse ?? {}) };
+      const current = Math.max(0, Math.trunc(Number(nextWarehouse[name] ?? 0) || 0));
+      nextWarehouse[name] = current + parsedAmount;
+      await persistWarehouseState(nextWarehouse);
+    },
+    [activeCityGlobal.warehouse, persistWarehouseState]
+  );
+
+  const handleDeleteWarehouseItem = useCallback(
+    async (itemName: string) => {
+      const name = String(itemName ?? "").trim();
+      if (!name) return;
+      const nextWarehouse = { ...(activeCityGlobal.warehouse ?? {}) };
+      delete nextWarehouse[name];
+      await persistWarehouseState(nextWarehouse);
+    },
+    [activeCityGlobal.warehouse, persistWarehouseState]
+  );
+
+  const handleImportWarehouseItem = useCallback(
+    async (owner: string, itemName: string, amount: number) => {
+      const ownerName = String(owner ?? "").trim();
+      const name = String(itemName ?? "").trim();
+      const parsedAmount = Math.max(1, Math.trunc(Number(amount) || 0));
+      if (!ownerName) {
+        throw new Error("캐릭터를 선택해 주세요.");
+      }
+      if (!name) {
+        throw new Error("아이템을 선택해 주세요.");
+      }
+
+      const rows = await listInventory(ownerName);
+      const normalized = Array.isArray(rows)
+        ? rows
+            .map((entry) => ({
+              itemName: String((entry as any)?.itemName ?? "").trim(),
+              amount: Math.max(0, Math.trunc(Number((entry as any)?.amount ?? 0) || 0)),
+            }))
+            .filter((entry) => !!entry.itemName)
+        : [];
+      const found = normalized.find((entry) => entry.itemName === name);
+      const currentAmount = Math.max(0, Math.trunc(Number(found?.amount ?? 0) || 0));
+      if (currentAmount < parsedAmount) {
+        throw new Error("인벤토리 보유량을 초과했습니다.");
+      }
+
+      await useInventoryItem({
+        owner: ownerName,
+        itemName: name,
+        amount: parsedAmount,
+      });
+      await handleAddWarehouseItem(name, parsedAmount);
+    },
+    [handleAddWarehouseItem]
+  );
+
+  const handleExportWarehouseItem = useCallback(
+    async (owner: string, itemName: string, amount: number) => {
+      const ownerName = String(owner ?? "").trim();
+      const name = String(itemName ?? "").trim();
+      const parsedAmount = Math.max(1, Math.trunc(Number(amount) || 0));
+      if (!ownerName) {
+        throw new Error("캐릭터를 선택해 주세요.");
+      }
+      if (!name) {
+        throw new Error("내보낼 아이템을 선택해 주세요.");
+      }
+
+      const nextWarehouse = { ...(activeCityGlobal.warehouse ?? {}) };
+      const current = Math.max(0, Math.trunc(Number(nextWarehouse[name] ?? 0) || 0));
+      if (current < parsedAmount) {
+        throw new Error("창고 보관량을 초과했습니다.");
+      }
+
+      await addInventoryItem({
+        owner: ownerName,
+        itemName: name,
+        amount: parsedAmount,
+      });
+
+      const remain = current - parsedAmount;
+      if (remain <= 0) delete nextWarehouse[name];
+      else nextWarehouse[name] = remain;
+      await persistWarehouseState(nextWarehouse);
+    },
+    [activeCityGlobal.warehouse, persistWarehouseState]
+  );
+
+  const removeDraftResourceValue = (
+    field: "buildCost" | "upkeepResources",
+    resourceId: BuildingResourceId
+  ) => {
+    setBuildingDraft((prev) => {
+      const next = { ...(prev[field] ?? {}) } as Record<string, string>;
+      delete next[resourceId];
+      return { ...prev, [field]: next };
+    });
   };
 
   const setDraftPopulationValue = (
@@ -1424,17 +2218,23 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     }
     const effort = toNonNegativeInt(buildingDraft.effort.trim());
     const space = toNonNegativeInt(buildingDraft.space.trim());
-    const buildCost = toNumberRecordFromDraft(
-      BUILDING_PRESET_RESOURCE_IDS,
-      buildingDraft.buildCost
-    );
-    const upkeepResources = toNumberRecordFromDraft(
-      BUILDING_PRESET_RESOURCE_IDS,
-      buildingDraft.upkeepResources
-    );
-    const upkeepPopulation = toNumberRecordFromDraft(
-      UPKEEP_POPULATION_IDS,
-      buildingDraft.upkeepPopulation
+    const buildCost = Object.fromEntries(
+      Object.entries(toNumberRecordFromResourceDraft(buildingDraft.buildCost)).filter(([, v]) =>
+        Number.isFinite(Number(v))
+      )
+    ) as Record<string, number>;
+    const upkeepResources = Object.fromEntries(
+      Object.entries(toNumberRecordFromResourceDraft(buildingDraft.upkeepResources)).filter(([, v]) =>
+        Number.isFinite(Number(v))
+      )
+    ) as Record<string, number>;
+    const upkeepPopulation = Object.fromEntries(
+      Object.entries(toNumberRecordFromDraft(UPKEEP_POPULATION_IDS, buildingDraft.upkeepPopulation)).filter(
+        ([, v]) => Number.isFinite(Number(v))
+      )
+    ) as Record<string, number>;
+    const hasUniquePerTileRule = buildingDraft.placementRules.some(
+      (rule) => rule.kind === "uniquePerTile"
     );
     const payload = {
       name,
@@ -1443,7 +2243,9 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       effort,
       space,
       description: buildingDraft.description.trim() || undefined,
-      placementRules: buildingDraft.placementRules,
+      placementRules: buildingDraft.id
+        ? convertUniquePerTileRulesForPersist(buildingDraft.placementRules, buildingDraft.id)
+        : buildingDraft.placementRules,
       buildCost,
       upkeep:
         Object.keys(upkeepResources).length > 0 || Object.keys(upkeepPopulation).length > 0
@@ -1462,9 +2264,19 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setBusy(true);
     setErr(null);
     try {
-      const saved = buildingDraft.id
+      const savedInitial = buildingDraft.id
         ? await updateWorldMapBuildingPreset(selectedMap.id, buildingDraft.id, payload)
         : await createWorldMapBuildingPreset(selectedMap.id, payload);
+      const createdPresetId = String(savedInitial?.id ?? "").trim();
+      const saved =
+        !buildingDraft.id && hasUniquePerTileRule && createdPresetId
+          ? await updateWorldMapBuildingPreset(selectedMap.id, createdPresetId, {
+              placementRules: convertUniquePerTileRulesForPersist(
+                buildingDraft.placementRules,
+                createdPresetId
+              ),
+            })
+          : savedInitial;
       const normalizedSaved = normalizeBuildingPresets([saved])[0];
       if (!normalizedSaved) throw new Error("건물 프리셋 저장 결과를 확인할 수 없습니다.");
       setBuildingPresetsByMap((prev) => {
@@ -1517,11 +2329,18 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
 
   const handleOpenTileEditor = (col: number, row: number) => {
     const key = tileKey(col, row);
-    const current = activeTileStates[key] ?? [];
+    const useMultiSelection =
+      selectedHexes.length > 1 && selectedHexes.some((entry) => entry.col === col && entry.row === row);
+    const targets = useMultiSelection
+      ? selectedHexes.map((entry) => ({
+          key: tileKey(entry.col, entry.row),
+          col: entry.col,
+          row: entry.row,
+        }))
+      : [{ key, col, row }];
+    const current = useMultiSelection ? [] : activeTileStates[key] ?? [];
     setTileEditor({
-      key,
-      col,
-      row,
+      targets,
       draft: current.map((entry) => ({ ...entry })),
     });
     setTileContextMenu(null);
@@ -1544,8 +2363,51 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         };
       });
     const nextStates = { ...activeTileStates };
-    if (clean.length > 0) nextStates[tileEditor.key] = clean;
-    else delete nextStates[tileEditor.key];
+    const multiMode = tileEditor.targets.length > 1;
+    if (!multiMode) {
+      const targetKey = tileEditor.targets[0]?.key;
+      if (targetKey) {
+        if (clean.length > 0) nextStates[targetKey] = clean;
+        else delete nextStates[targetKey];
+      }
+    } else {
+      const cleanWithPreset = clean
+        .map((entry) => ({ entry, preset: presetById.get(entry.presetId) }))
+        .filter(
+          (row): row is { entry: MapTileStateAssignment; preset: MapTileStatePreset } =>
+            !!row.preset
+        );
+      for (const target of tileEditor.targets) {
+        const existing = [...(nextStates[target.key] ?? [])];
+        for (const { entry, preset } of cleanWithPreset) {
+          const existingIndex = existing.findIndex((value) => value.presetId === entry.presetId);
+          if (!preset.hasValue) {
+            if (existingIndex >= 0) continue;
+            existing.push({ presetId: entry.presetId });
+            continue;
+          }
+          const deltaRaw = String(entry.value ?? "").trim();
+          if (!deltaRaw) continue;
+          const deltaNum = Number(deltaRaw);
+          if (!Number.isFinite(deltaNum)) continue;
+          if (existingIndex >= 0) {
+            const baseNum = Number(existing[existingIndex]?.value ?? 0);
+            const nextNum = (Number.isFinite(baseNum) ? baseNum : 0) + deltaNum;
+            existing[existingIndex] = {
+              presetId: entry.presetId,
+              value: String(nextNum),
+            };
+          } else {
+            existing.push({
+              presetId: entry.presetId,
+              value: String(deltaNum),
+            });
+          }
+        }
+        if (existing.length > 0) nextStates[target.key] = existing;
+        else delete nextStates[target.key];
+      }
+    }
     setBusy(true);
     setErr(null);
     try {
@@ -1560,9 +2422,17 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     }
   };
 
-  const setSelectedHexIfChanged = useCallback((col: number, row: number) => {
-    setSelectedHex((prev) => (prev && prev.col === col && prev.row === row ? prev : { col, row }));
-  }, []);
+  const setSelectedHexIfChanged = useCallback(
+    (col: number, row: number, additive?: boolean) => {
+      setSelectedHex((prev) => (prev && prev.col === col && prev.row === row ? prev : { col, row }));
+      setSelectedHexes((prev) => {
+        if (!additive) return [{ col, row }];
+        if (prev.some((entry) => entry.col === col && entry.row === row)) return prev;
+        return [...prev, { col, row }];
+      });
+    },
+    []
+  );
 
   const handleOpenTileRegionEditor = (col: number, row: number) => {
     const key = tileKey(col, row);
@@ -1570,7 +2440,6 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     const draft = {
       spaceUsed: current.spaceUsed != null ? String(current.spaceUsed) : "",
       spaceCap: current.spaceCap != null ? String(current.spaceCap) : "",
-      satisfaction: current.satisfaction != null ? String(current.satisfaction) : "",
       threat: current.threat != null ? String(current.threat) : "",
       pollution: current.pollution != null ? String(current.pollution) : "",
     };
@@ -1602,13 +2471,18 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setTileContextMenu(null);
   };
 
+  const handleOpenTileYieldViewer = (col: number, row: number) => {
+    setTileYieldViewer({ col, row });
+    setTileContextMenu(null);
+  };
+
   const handlePlaceBuildingOnTile = async () => {
     if (!tileBuildingEditor || !selectedMap) return;
     if (!tileBuildingEditor.presetId) {
       setErr("배치할 건물 프리셋을 선택해 주세요.");
       return;
     }
-    const selectedPreset =
+    let selectedPreset =
       activeBuildingPresets.find((entry) => entry.id === tileBuildingEditor.presetId) ?? null;
     const createDraft = tileBuildingCreateWorkersDraftRef.current ?? EMPTY_WORKER_ASSIGNMENT_DRAFT;
     const effort = Math.max(0, Math.trunc(Number(selectedPreset?.effort ?? 0)));
@@ -1625,6 +2499,31 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setBusy(true);
     setErr(null);
     try {
+      if (
+        selectedPreset &&
+        Array.isArray(selectedPreset.placementRules) &&
+        selectedPreset.placementRules.some((rule) => rule.kind === "uniquePerTile")
+      ) {
+        const migrated = await updateWorldMapBuildingPreset(selectedMap.id, selectedPreset.id, {
+          placementRules: convertUniquePerTileRulesForPersist(
+            selectedPreset.placementRules,
+            selectedPreset.id
+          ),
+        });
+        const normalizedMigrated = normalizeBuildingPresets([migrated])[0];
+        if (normalizedMigrated) {
+          selectedPreset = normalizedMigrated;
+          setBuildingPresetsByMap((prev) => {
+            const base = prev[selectedMap.id] ?? [];
+            const idx = base.findIndex((entry) => entry.id === normalizedMigrated.id);
+            const next =
+              idx >= 0
+                ? base.map((entry, i) => (i === idx ? normalizedMigrated : entry))
+                : [...base, normalizedMigrated];
+            return { ...prev, [selectedMap.id]: next };
+          });
+        }
+      }
       const created = await createWorldMapBuildingInstance(selectedMap.id, {
         presetId: tileBuildingEditor.presetId,
         col: tileBuildingEditor.col,
@@ -1654,6 +2553,8 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       } else {
         await loadBuildingInstancesForMap(selectedMap.id);
       }
+      // 건물 배치 시점에 건설비/공간 점유가 반영되므로, 즉시 맵 상태를 재조회해 UI를 동기화한다.
+      await refreshCurrentMapOnly(selectedMap.id);
       tileBuildingCreateWorkersDraftRef.current = {
         settlers: String(assignedWorkersByType.settlers),
         engineers: String(assignedWorkersByType.engineers),
@@ -1678,6 +2579,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         ...prev,
         [selectedMap.id]: (prev[selectedMap.id] ?? []).filter((entry) => entry.id !== instanceId),
       }));
+      await refreshCurrentMapOnly(selectedMap.id);
     } catch (e: any) {
       setErr(String(e?.message ?? e));
       await loadBuildingInstancesForMap(selectedMap.id);
@@ -1699,15 +2601,52 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     };
     const preset = activeBuildingPresets.find((entry) => entry.id === instance.presetId) ?? null;
     const status = getInstanceBuildStatus(instance, preset);
-    const safeWorkersByType =
-      status === "active" ? createZeroWorkersByType() : requestedWorkersByType;
+    const requiredAnyNonElderly =
+      status === "active"
+        ? Math.max(
+            0,
+            Math.trunc(
+              Number(
+                (preset?.upkeep?.population as Partial<Record<UpkeepPopulationId, number>> | undefined)
+                  ?.anyNonElderly ?? 0
+              ) || 0
+            )
+          )
+        : 0;
+    if (status === "active" && requiredAnyNonElderly > 0) {
+      const requestedTotal = TRACKED_POPULATION_IDS.reduce(
+        (sum, id) => sum + Math.max(0, requestedWorkersByType[id] ?? 0),
+        0
+      );
+      if (requestedTotal !== requiredAnyNonElderly) {
+        setErr(
+          `노약자 제외 아무나 배치는 총 ${requiredAnyNonElderly}명이 필요합니다. (현재 ${requestedTotal}명)`
+        );
+        return;
+      }
+    }
+    const safeWorkersByType = status === "active" ? createZeroWorkersByType() : requestedWorkersByType;
     const safeWorkers = sumAssignedWorkersByType(safeWorkersByType);
+    const upkeepAnyByType =
+      status === "active"
+        ? {
+            settlers: requestedWorkersByType.settlers,
+            engineers: requestedWorkersByType.engineers,
+            scholars: requestedWorkersByType.scholars,
+            laborers: requestedWorkersByType.laborers,
+          }
+        : undefined;
     const nextMeta = {
       ...(instance.meta && typeof instance.meta === "object"
         ? (instance.meta as Record<string, unknown>)
         : {}),
       assignedWorkers: safeWorkers,
       assignedWorkersByType: safeWorkersByType,
+      ...(upkeepAnyByType
+        ? {
+            upkeepAnyNonElderlyByType: upkeepAnyByType,
+          }
+        : {}),
       buildMeta: {
         ...((instance.meta &&
         typeof instance.meta === "object" &&
@@ -1717,6 +2656,11 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
           : {}) as Record<string, unknown>),
         assignedWorkers: safeWorkers,
         assignedWorkersByType: safeWorkersByType,
+        ...(upkeepAnyByType
+          ? {
+              upkeepAnyNonElderlyByType: upkeepAnyByType,
+            }
+          : {}),
         status,
       },
     };
@@ -1774,6 +2718,38 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     }
   };
 
+  const handleToggleBuildingEnabled = async (instance: WorldMapBuildingInstanceRow) => {
+    if (!selectedMap) return;
+    const nextEnabled = instance.enabled === false ? true : false;
+    setBusy(true);
+    setErr(null);
+    try {
+      const updated = await updateWorldMapBuildingInstance(selectedMap.id, instance.id, {
+        enabled: nextEnabled,
+      });
+      const normalized =
+        normalizeBuildingInstances([updated])[0] ??
+        normalizeBuildingInstances([(updated as any)?.building])[0] ??
+        null;
+      if (normalized) {
+        setBuildingInstancesByMap((prev) => {
+          const base = prev[selectedMap.id] ?? [];
+          return {
+            ...prev,
+            [selectedMap.id]: base.map((entry) => (entry.id === normalized.id ? normalized : entry)),
+          };
+        });
+      } else {
+        await loadBuildingInstancesForMap(selectedMap.id);
+      }
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+      await loadBuildingInstancesForMap(selectedMap.id);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleTileRegionEditorSave = async () => {
     if (!tileRegionEditor || !selectedMap) return;
     const draft = tileRegionDraftRef.current ?? tileRegionEditor.draft;
@@ -1787,7 +2763,6 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     const parsed = {
       spaceUsed: parseInput(draft.spaceUsed),
       spaceCap: parseInput(draft.spaceCap),
-      satisfaction: parseInput(draft.satisfaction),
       threat: parseInput(draft.threat),
       pollution: parseInput(draft.pollution),
     };
@@ -1800,14 +2775,12 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     const nextValue: MapTileRegionState = {
       spaceUsed: parsed.spaceUsed,
       spaceCap: parsed.spaceCap,
-      satisfaction: parsed.satisfaction,
       threat: parsed.threat,
       pollution: parsed.pollution,
     };
     const hasAny =
       nextValue.spaceUsed != null ||
       nextValue.spaceCap != null ||
-      nextValue.satisfaction != null ||
       nextValue.threat != null ||
       nextValue.pollution != null;
     if (hasAny) nextRegionStates[tileRegionEditor.key] = nextValue;
@@ -1834,16 +2807,6 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       (entry) => entry.col === tileBuildingEditor.col && entry.row === tileBuildingEditor.row
     );
   }, [activeBuildingInstances, tileBuildingEditor]);
-
-  const selectedTileBuildingPreset = useMemo(() => {
-    if (!tileBuildingEditor?.presetId) return null;
-    return activeBuildingPresets.find((entry) => entry.id === tileBuildingEditor.presetId) ?? null;
-  }, [activeBuildingPresets, tileBuildingEditor]);
-
-  const selectedTileBuildingPresetNeedsWorkers = useMemo(
-    () => Math.max(0, Math.trunc(Number(selectedTileBuildingPreset?.effort ?? 0))) > 0,
-    [selectedTileBuildingPreset]
-  );
 
   useEffect(() => {
     if (!tileBuildingEditor) {
@@ -1919,76 +2882,78 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     if (viewMode === "drag") setTileContextMenu(null);
   }, [viewMode]);
 
+  const presetPanelCtx = {
+    presetMode, setPresetMode, isAdmin, busy, activeTilePresets, presetDraftName, setPresetDraftName,
+    presetDraftColorHex, setPresetDraftColorHex, presetDraftHasValue, setPresetDraftHasValue,
+    handleCreateTilePreset, handleDeleteTilePreset, activeBuildingPresets, buildingDraft, setBuildingDraft,
+    placementRuleSearch, setPlacementRuleSearch, handleSaveBuildingPreset, handleDeleteBuildingPreset,
+    handleSelectBuildingPreset, resetBuildingDraft, setDraftPlacementRules, handleAddPlacementRule,
+    handleRemovePlacementRule, handleAddExecutionRule, setEffectRuleAt, removeEffectRule, addEffectAction,
+    removeEffectAction, setEffectActionAt, createDefaultRuleAction, getWhenKind, createDefaultWhenByKind,
+    createDefaultComparePredicate, isPlacementRuleKind, createActionByKind, setDraftResourceValue,
+    removeDraftResourceValue, setDraftPopulationValue, handleSetPlacementRuleKind, itemCatalogEntries,
+  };
+
+  const mapModePanelCtx = {
+    selectedMap, settingsOpen, settingsTab, busy, draft, selectedHex, activeTileStates, presetById,
+    activeCityGlobal: effectiveCityGlobal,
+    totalPopulation, dailyRunDays, dailyRunResult, dailyRunLogs, fileInputRef,
+    citySettingsFormRef, setDraft, setSettingsOpen, setSettingsTab, setDailyRunDays, normalizeHexColor,
+    handleDelete, handleUploadImage, handleSaveDraft, handleSaveCityGlobal, handleRunDailyRules,
+    showTileStatePills, showRegionStatusPills, showTileNumbering, viewMode, zoom, setShowTileStatePills,
+    setShowRegionStatusPills, setViewMode, setDragging, dragRef, setZoom, resourceOverlayOpen,
+    setShowTileNumbering,
+    populationOverlayOpen, resourceAdjustOpen, warehouseModalOpen,
+    resourceAdjustTarget, resourceAdjustMode, resourceAdjustAmount, dailyResourceDeltaById, warehouseEntries,
+    itemCatalogEntries,
+    setResourceOverlayOpen, setPopulationOverlayOpen, setResourceAdjustOpen, setWarehouseModalOpen,
+    setResourceAdjustTarget, setResourceAdjustMode, setResourceAdjustAmount, handleApplyResourceAdjust,
+    handleAddWarehouseItem, handleDeleteWarehouseItem, handleImportWarehouseItem,
+    handleExportWarehouseItem,
+    placementReportOpen, setPlacementReportOpen, placementPopulationSummary, placementReportRows,
+    imageUrl, viewportRef, dragging, handleViewportMouseDown, handleViewportMouseMove, endDragging,
+    handleViewportWheel, scheduleVisibleBoundsUpdate, imageWidth, imageHeight, setLoadedSize,
+    syncLoadedImageMeta, polygons, visibleImageBounds, selectedHexKeySet, tileStateBadgesByKey, EMPTY_STATE_BADGES,
+    suppressClickRef, setTileContextMenu, setSelectedHexIfChanged, activeTileRegionStates, tileContextMenu,
+    tileContextMenuRef, handleOpenTileEditor, handleOpenTileRegionEditor, handleOpenTileBuildingEditor,
+    handleOpenTileYieldViewer,
+    tileYieldViewer,
+    setTileYieldViewer,
+    tileYieldRows: tileYieldPreview.rows,
+    tileYieldTotals: tileYieldPreview.totals,
+    tileBuildingEditor, setTileBuildingEditor, setTileBuildingSearchQuery, tileBuildingSearchInputRef,
+    tileBuildingSearchTimerRef, tileBuildingCreateWorkersDraftRef, tileBuildingWorkersDraftByIdRef,
+    tileBuildingSearchQuery, filteredBuildingPresetsForTile, activeBuildingPresets, tileBuildingInstances,
+    instanceOperationalById, instanceUpkeepWorkersByTypeById, instanceUpkeepAnyRequiredById,
+    instanceUpkeepAnyAssignedByTypeById,
+    handlePlaceBuildingOnTile, handleUpdateBuildingWorkers, handleToggleBuildingEnabled,
+    handleDeleteBuildingOnTile, tileEditor, setTileEditor, activeTilePresets, handleTileEditorSave,
+    tileRegionEditor, setTileRegionEditor, tileRegionDraftRef, handleTileRegionEditorSave,
+  };
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
       <div className="mx-auto max-w-[1600px] p-4">
-        <header className="mb-4 flex items-center justify-between gap-3">
-          <div>
-            <div className="text-xl font-semibold">World Map</div>
-            {isAdmin ? <div className="text-xs text-amber-300">관리자</div> : null}
-          </div>
-          <div className="flex items-center gap-2">
-            {!isPresetMode ? (
-              <button
-                type="button"
-                className={[
-                  "rounded-md border px-2 py-1 text-xs",
-                  mapListOpen
-                    ? "border-amber-700/70 bg-amber-950/30 text-amber-200"
-                    : "border-zinc-800 text-zinc-200 hover:border-zinc-600",
-                ].join(" ")}
-                onClick={() => setMapListOpen((prev) => !prev)}
-                disabled={busy}
-              >
-                지도 목록
-              </button>
-            ) : null}
-            {!isPresetMode ? (
-              <button
-                type="button"
-                className={[
-                  "rounded-md border px-2 py-1 text-xs",
-                  settingsOpen
-                    ? "border-sky-700/70 bg-sky-950/30 text-sky-200"
-                    : "border-zinc-800 text-zinc-200 hover:border-zinc-600",
-                ].join(" ")}
-                onClick={() =>
-                  setSettingsOpen((prev) => {
-                    const next = !prev;
-                    if (next) setSettingsTab("map");
-                    return next;
-                  })
-                }
-                disabled={busy || !selectedMap}
-                title="지도 설정"
-              >
-                설정
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-200 hover:border-zinc-600"
-              onClick={onBack}
-              disabled={busy}
-            >
-              Back
-            </button>
-            <button
-              type="button"
-              className="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-200 hover:border-zinc-600"
-              onClick={() => loadMaps(selectedMapId)}
-              disabled={busy}
-            >
-              새로고침
-            </button>
-          </div>
-        </header>
+        <WorldMapHeaderBar
+          isAdmin={isAdmin}
+          isPresetMode={isPresetMode}
+          mapListOpen={mapListOpen}
+          settingsOpen={settingsOpen}
+          busy={busy}
+          hasSelectedMap={!!selectedMap}
+          onBack={onBack}
+          onRefresh={() => void loadMaps(selectedMapId)}
+          onRunDailyRules={() => {
+            if (!selectedMap || busy) return;
+            const ok = window.confirm("일일 규칙을 실행하고 날짜를 넘기시겠습니까?");
+            if (!ok) return;
+            void handleRunDailyRules();
+          }}
+          onToggleMapList={() => setMapListOpen((prev) => !prev)}
+          onToggleSettings={() => setSettingsOpen((prev) => ((prev ? false : (setSettingsTab("map"), true))))}
+        />
 
-        {err ? (
-          <div className="mb-4 rounded-lg border border-red-900 bg-red-950/40 p-3 text-sm text-red-200">
-            {err}
-          </div>
-        ) : null}
+        {err ? <div className="mb-4 rounded-lg border border-red-900 bg-red-950/40 p-3 text-sm text-red-200">{err}</div> : null}
 
         <div
           className={[
@@ -1999,2673 +2964,86 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
           ].join(" ")}
         >
           {!isPresetMode && mapListOpen ? (
-            <aside className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <div className="text-sm font-semibold text-zinc-100">지도 목록</div>
-                <button
-                  type="button"
-                  className="rounded-md border border-zinc-800 px-2 py-1 text-[11px] text-zinc-300 hover:border-zinc-600"
-                  onClick={() => setMapListOpen(false)}
-                  disabled={busy}
-                >
-                  접기
-                </button>
-              </div>
-              <div className="mb-4 flex gap-2">
-                <input
-                  value={createName}
-                  onChange={(e) => setCreateName(e.target.value)}
-                  placeholder="새 지도 이름"
-                  className="h-10 flex-1 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
-                />
-                <button
-                  type="button"
-                  className="rounded-lg border border-emerald-700/60 bg-emerald-950/30 px-3 text-xs font-semibold text-emerald-200 hover:bg-emerald-900/40"
-                  onClick={handleCreate}
-                  disabled={busy}
-                >
-                  생성
-                </button>
-              </div>
-              <div className="space-y-2">
-                {maps.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-zinc-800 px-3 py-4 text-sm text-zinc-500">
-                    아직 등록된 지도가 없습니다.
-                  </div>
-                ) : (
-                  maps.map((map) => {
-                    const active = selectedMapId === map.id;
-                    return (
-                      <button
-                        key={map.id}
-                        type="button"
-                        className={[
-                          "w-full rounded-xl border px-3 py-3 text-left",
-                          active
-                            ? "border-amber-500/70 bg-amber-950/20"
-                            : "border-zinc-800 bg-zinc-950/30 hover:border-zinc-700",
-                        ].join(" ")}
-                        onClick={() => setSelectedMapId(map.id)}
-                      >
-                        <div className="text-sm font-semibold text-zinc-100">{map.name}</div>
-                        <div className="mt-1 text-[11px] text-zinc-500">
-                          {map.imageUrl ? "이미지 등록됨" : "이미지 없음"} · {map.cols} x {map.rows}
-                        </div>
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-            </aside>
+            <MapListPanel
+              maps={maps}
+              selectedMapId={selectedMapId}
+              busy={busy}
+              createName={createName}
+              onCreateNameChange={setCreateName}
+              onCreate={handleCreate}
+              onClose={() => setMapListOpen(false)}
+              onSelectMapId={setSelectedMapId}
+            />
           ) : null}
 
           <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
             {isPresetMode ? (
-              <div className="rounded-xl border border-zinc-800 bg-zinc-950/30 p-4">
-                <div className="mb-3 text-sm font-semibold text-zinc-100">맵 프리셋</div>
-                <div className="mb-4 grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    className={[
-                      "rounded-lg border px-3 py-1.5 text-xs font-semibold",
-                      presetMode === "tile"
-                        ? "border-amber-700/70 bg-amber-950/30 text-amber-200"
-                        : "border-zinc-800 bg-zinc-950/30 text-zinc-300 hover:border-zinc-700",
-                    ].join(" ")}
-                    onClick={() => setPresetMode("tile")}
-                  >
-                    타일 속성 프리셋
-                  </button>
-                  <button
-                    type="button"
-                    className={[
-                      "rounded-lg border px-3 py-1.5 text-xs font-semibold",
-                      presetMode === "building"
-                        ? "border-sky-700/70 bg-sky-950/30 text-sky-200"
-                        : "border-zinc-800 bg-zinc-950/30 text-zinc-300 hover:border-zinc-700",
-                    ].join(" ")}
-                    onClick={() => setPresetMode("building")}
-                  >
-                    건물 프리셋
-                  </button>
-                </div>
-
-                {presetMode === "tile" ? (
-                  <>
-                    <div className="mb-4 text-xs text-zinc-400">
-                      타일 속성에서 사용할 프리셋을 관리합니다.
-                    </div>
-                    {isAdmin ? (
-                      <div className="mb-4 grid gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3 md:grid-cols-[1fr_200px_120px_auto] md:items-end">
-                        <label className="block">
-                          <div className="mb-1 text-[11px] font-semibold text-zinc-400">이름</div>
-                          <input
-                            value={presetDraftName}
-                            onChange={(e) => setPresetDraftName(e.target.value)}
-                            className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
-                            placeholder="새 지형 상태"
-                          />
-                        </label>
-                        <label className="block">
-                          <div className="mb-1 text-[11px] font-semibold text-zinc-400">색상 선택</div>
-                          <div className="flex h-9 items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-2">
-                            <input
-                              type="color"
-                              value={presetDraftColorHex}
-                              onChange={(e) => setPresetDraftColorHex(e.target.value.toLowerCase())}
-                              className="h-6 w-8 cursor-pointer rounded border border-zinc-700 bg-transparent p-0"
-                              title="타일 속성 프리셋 색상"
-                            />
-                            <span className="text-[11px] text-zinc-300">{presetDraftColorHex}</span>
-                          </div>
-                        </label>
-                        <label className="flex h-9 items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3">
-                          <input
-                            type="checkbox"
-                            checked={presetDraftHasValue}
-                            onChange={(e) => setPresetDraftHasValue(e.target.checked)}
-                          />
-                          <span className="text-xs text-zinc-200">값 있음</span>
-                        </label>
-                        <button
-                          type="button"
-                          className="h-9 rounded-lg border border-emerald-700/60 bg-emerald-950/30 px-3 text-xs font-semibold text-emerald-200 hover:bg-emerald-900/40"
-                          onClick={handleCreateTilePreset}
-                          disabled={busy}
-                        >
-                          프리셋 추가
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="mb-4 rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-400">
-                        현재 계정은 조회 전용입니다. 프리셋 등록/삭제는 관리자만 가능합니다.
-                      </div>
-                    )}
-                    <div className="space-y-2">
-                      {activeTilePresets.length === 0 ? (
-                        <div className="rounded-lg border border-dashed border-zinc-800 px-3 py-4 text-sm text-zinc-500">
-                          등록된 맵 프리셋이 없습니다.
-                        </div>
-                      ) : (
-                        activeTilePresets.map((preset) => {
-                          const color = normalizeHexColor(preset.color);
-                          return (
-                            <div
-                              key={preset.id}
-                              className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2"
-                            >
-                              <div className="flex min-w-0 items-center gap-2">
-                                <span
-                                  className="inline-block h-3 w-3 rounded-full"
-                                  style={{ backgroundColor: color }}
-                                  aria-hidden="true"
-                                />
-                                <span className="truncate text-sm font-semibold" style={{ color }}>
-                                  {preset.name}
-                                </span>
-                                <span className="text-[11px] text-zinc-500">
-                                  {preset.hasValue ? "값 있음" : "값 없음"} · {color}
-                                </span>
-                              </div>
-                              {isAdmin ? (
-                                <button
-                                  type="button"
-                                  className="rounded-md border border-red-800/70 bg-red-950/40 px-2 py-1 text-[11px] font-semibold text-red-200 hover:bg-red-900/40"
-                                  onClick={() => handleDeleteTilePreset(preset.id)}
-                                  disabled={busy}
-                                >
-                                  삭제
-                                </button>
-                              ) : null}
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="mb-4 text-xs text-zinc-400">
-                      건물 규칙을 블록 단위로 조합해 관리합니다.
-                    </div>
-                    {isAdmin ? (
-                      <div className="mb-4 space-y-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
-                        <div className="grid gap-2 md:grid-cols-[1fr_160px_120px_120px]">
-                          <label className="block">
-                            <div className="mb-1 text-[11px] font-semibold text-zinc-400">건물 이름</div>
-                            <input
-                              value={buildingDraft.name}
-                              onChange={(e) =>
-                                setBuildingDraft((prev) => ({ ...prev, name: e.target.value }))
-                              }
-                              className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
-                              placeholder="예: 감자밭"
-                            />
-                          </label>
-                          <label className="block">
-                            <div className="mb-1 text-[11px] font-semibold text-zinc-400">색상</div>
-                            <div className="flex h-9 items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-2">
-                              <input
-                                type="color"
-                                value={buildingDraft.color}
-                                onChange={(e) =>
-                                  setBuildingDraft((prev) => ({
-                                    ...prev,
-                                    color: e.target.value.toLowerCase(),
-                                  }))
-                                }
-                                className="h-6 w-8 cursor-pointer rounded border border-zinc-700 bg-transparent p-0"
-                              />
-                              <span className="text-[11px] text-zinc-300">{buildingDraft.color}</span>
-                            </div>
-                          </label>
-                          <label className="block">
-                            <div className="mb-1 text-[11px] font-semibold text-zinc-400">노력치</div>
-                            <input
-                              value={buildingDraft.effort}
-                              onChange={(e) =>
-                                setBuildingDraft((prev) => ({
-                                  ...prev,
-                                  effort: e.target.value.replace(/[^\d]/g, ""),
-                                }))
-                              }
-                              className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-amber-200 outline-none focus:border-zinc-600"
-                              placeholder="예: 25"
-                            />
-                          </label>
-                          <label className="block">
-                            <div className="mb-1 text-[11px] font-semibold text-zinc-400">怨듦컙</div>
-                            <input
-                              value={buildingDraft.space}
-                              onChange={(e) =>
-                                setBuildingDraft((prev) => ({
-                                  ...prev,
-                                  space: e.target.value.replace(/[^\d]/g, ""),
-                                }))
-                              }
-                              className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-sky-200 outline-none focus:border-zinc-600"
-                              placeholder="예: 2"
-                            />
-                          </label>
-                        </div>
-                        <div className="grid gap-2 md:grid-cols-2">
-                          <label className="block">
-                            <div className="mb-1 text-[11px] font-semibold text-zinc-400">티어</div>
-                            <input
-                              value={buildingDraft.tier}
-                              onChange={(e) =>
-                                setBuildingDraft((prev) => ({ ...prev, tier: e.target.value }))
-                              }
-                              className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
-                              placeholder="예: Tier 1"
-                            />
-                          </label>
-                          <label className="block">
-                            <div className="mb-1 text-[11px] font-semibold text-zinc-400">설명</div>
-                            <input
-                              value={buildingDraft.description}
-                              onChange={(e) =>
-                                setBuildingDraft((prev) => ({
-                                  ...prev,
-                                  description: e.target.value,
-                                }))
-                              }
-                              className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
-                              placeholder="요약 설명"
-                            />
-                          </label>
-                        </div>
-                        <div className="grid gap-3 md:grid-cols-3">
-                          <div className="rounded-lg border border-amber-800/60 bg-amber-950/20 p-2.5">
-                            <div className="mb-2 text-xs font-semibold text-zinc-300">건설 비용 블록</div>
-                            <div className="grid grid-cols-2 gap-1.5">
-                              {BUILDING_PRESET_RESOURCE_IDS.map((id) => (
-                                <label key={`build-${id}`} className="block">
-                                  <div className="mb-1 text-[11px] text-zinc-400">{RESOURCE_LABELS[id]}</div>
-                                  <input
-                                    value={buildingDraft.buildCost[id] ?? ""}
-                                    onChange={(e) =>
-                                      setDraftResourceValue("buildCost", id, e.target.value)
-                                    }
-                                    className="h-7 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-amber-200 outline-none focus:border-zinc-600"
-                                    placeholder="0"
-                                  />
-                                </label>
-                              ))}
-                            </div>
-                          </div>
-                          <div className="rounded-lg border border-emerald-800/60 bg-emerald-950/20 p-2.5">
-                            <div className="mb-2 text-xs font-semibold text-zinc-300">유지 자원 블록</div>
-                            <div className="grid grid-cols-2 gap-1.5">
-                              {BUILDING_PRESET_RESOURCE_IDS.map((id) => (
-                                <label key={`upkeep-res-${id}`} className="block">
-                                  <div className="mb-1 text-[11px] text-zinc-400">{RESOURCE_LABELS[id]}</div>
-                                  <input
-                                    value={buildingDraft.upkeepResources[id] ?? ""}
-                                    onChange={(e) =>
-                                      setDraftResourceValue("upkeepResources", id, e.target.value)
-                                    }
-                                    className="h-7 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-emerald-200 outline-none focus:border-zinc-600"
-                                    placeholder="0"
-                                  />
-                                </label>
-                              ))}
-                            </div>
-                          </div>
-                          <div className="rounded-lg border border-fuchsia-800/60 bg-fuchsia-950/20 p-2.5">
-                            <div className="mb-2 text-xs font-semibold text-zinc-300">유지 인구 블록</div>
-                            <div className="grid grid-cols-2 gap-1.5">
-                              {UPKEEP_POPULATION_IDS.map((id) => (
-                                <label key={`upkeep-pop-${id}`} className="block">
-                                  <div className="mb-1 text-[11px] text-zinc-400">
-                                    {UPKEEP_POPULATION_LABELS[id]}
-                                  </div>
-                                  <input
-                                    value={buildingDraft.upkeepPopulation[id] ?? ""}
-                                    onChange={(e) => setDraftPopulationValue(id, e.target.value)}
-                                    className="h-7 w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-fuchsia-200 outline-none focus:border-zinc-600"
-                                    placeholder="0"
-                                  />
-                                </label>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="rounded-lg border border-zinc-800 bg-zinc-950/30 p-3">
-                          <div className="mb-2 flex items-center justify-between">
-                            <div className="text-xs font-semibold text-zinc-300">배치 조건 블록</div>
-                            <button
-                              type="button"
-                              className="rounded-md border border-zinc-700 px-2 py-1 text-[11px] font-semibold text-zinc-200 hover:border-zinc-500"
-                              onClick={handleAddPlacementRule}
-                              disabled={busy}
-                            >
-                                조건 추가
-                            </button>
-                          </div>
-                          <div className="space-y-2">
-                            {buildingDraft.placementRules.length === 0 ? (
-                                <div className="text-xs text-zinc-500">조건 없음</div>
-                            ) : (
-                              buildingDraft.placementRules.map((rule, index) => (
-                                <div
-                                  key={`placement-${index}`}
-                                  className="grid gap-2 rounded-md border border-zinc-800 bg-zinc-950/40 p-2 md:grid-cols-[180px_1fr_auto]"
-                                >
-                                  <select
-                                    value={rule.kind}
-                                    onChange={(e) =>
-                                      handleSetPlacementRuleKind(
-                                        index,
-                                        e.target.value as BuildingPlacementRule["kind"]
-                                      )
-                                    }
-                                    className="h-8 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                  >
-                                    <option value="uniquePerTile">타일당 N개</option>
-                                    <option value="tileRegionCompare">지역 상태 비교</option>
-                                    <option value="requireTagInRange">거리 내 속성 필요</option>
-                                    <option value="requireBuildingInRange">거리 내 건물 필요</option>
-                                    <option value="custom">사용자 정의</option>
-                                  </select>
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    {rule.kind === "uniquePerTile" ? (
-                                      <div className="flex items-center gap-2">
-                                        <span className="text-xs text-zinc-400">최대</span>
-                                        <input
-                                          value={String(rule.maxCount ?? 1)}
-                                          onChange={(e) =>
-                                            setDraftPlacementRules((prev) =>
-                                              prev.map((item, i) =>
-                                                i === index && item.kind === "uniquePerTile"
-                                                  ? {
-                                                      ...item,
-                                                      maxCount: Math.max(
-                                                        1,
-                                                        Math.trunc(
-                                                          Number(
-                                                            e.target.value.replace(/[^\d]/g, "")
-                                                          ) || 1
-                                                        )
-                                                      ),
-                                                    }
-                                                  : item
-                                              )
-                                            )
-                                          }
-                                          className="h-8 w-20 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                          placeholder="1"
-                                        />
-                                        <span className="text-xs text-zinc-400">개</span>
-                                      </div>
-                                    ) : null}
-                                    {rule.kind === "tileRegionCompare" ? (
-                                      <>
-                                        <select
-                                          value={rule.field}
-                                          onChange={(e) =>
-                                            setDraftPlacementRules((prev) =>
-                                              prev.map((item, i) =>
-                                                i === index && item.kind === "tileRegionCompare"
-                                                  ? {
-                                                      ...item,
-                                                      field: e.target.value as
-                                                        | "spaceRemaining"
-                                                        | "pollution"
-                                                        | "threat"
-                                                        | "satisfaction",
-                                                    }
-                                                  : item
-                                              )
-                                            )
-                                          }
-                                          className="h-8 min-w-[140px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                        >
-                                          <option value="spaceRemaining">남은 공간</option>
-                                          <option value="pollution">오염도</option>
-                                          <option value="threat">위협도</option>
-                                          <option value="satisfaction">만족치</option>
-                                        </select>
-                                        <select
-                                          value={rule.op}
-                                          onChange={(e) =>
-                                            setDraftPlacementRules((prev) =>
-                                              prev.map((item, i) =>
-                                                i === index && item.kind === "tileRegionCompare"
-                                                  ? {
-                                                      ...item,
-                                                      op: e.target.value as
-                                                        | "eq"
-                                                        | "ne"
-                                                        | "gt"
-                                                        | "gte"
-                                                        | "lt"
-                                                        | "lte",
-                                                    }
-                                                  : item
-                                              )
-                                            )
-                                          }
-                                          className="h-8 min-w-[90px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                        >
-                                          <option value="eq">==</option>
-                                          <option value="ne">!=</option>
-                                          <option value="gt">{">"}</option>
-                                          <option value="gte">{">="}</option>
-                                          <option value="lt">{"<"}</option>
-                                          <option value="lte">{"<="}</option>
-                                        </select>
-                                        <input
-                                          value={String(rule.value ?? 0)}
-                                          onChange={(e) =>
-                                            setDraftPlacementRules((prev) =>
-                                              prev.map((item, i) =>
-                                                i === index && item.kind === "tileRegionCompare"
-                                                  ? {
-                                                      ...item,
-                                                      value:
-                                                        toNonNegativeInt(
-                                                          e.target.value.replace(/[^\d]/g, "")
-                                                        ) ?? 0,
-                                                    }
-                                                  : item
-                                              )
-                                            )
-                                          }
-                                          className="h-8 w-24 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                          placeholder="값"
-                                        />
-                                      </>
-                                    ) : null}
-                                    {rule.kind === "requireTagInRange" ? (
-                                      <>
-                                        <div className="min-w-[220px] space-y-1">
-                                          <div className="rounded-md border border-zinc-800 bg-zinc-950/50 px-2 py-1 text-[11px] text-zinc-300">
-                                            선택:{" "}
-                                            {activeTilePresets.find((p) => p.id === rule.tagPresetId)?.name ??
-                                              "없음"}
-                                          </div>
-                                          <div className="relative">
-                                            <input
-                                              value={placementRuleSearch[`tag-${index}`] ?? ""}
-                                              onChange={(e) =>
-                                                setPlacementRuleSearch((prev) => ({
-                                                  ...prev,
-                                                  [`tag-${index}`]: e.target.value,
-                                                }))
-                                              }
-                                              className="h-8 min-w-[140px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                              placeholder="속성 검색"
-                                            />
-                                            {(placementRuleSearch[`tag-${index}`] ?? "").trim() ? (
-                                              <div className="absolute left-0 right-0 top-[calc(100%+2px)] z-30 max-h-28 overflow-auto rounded-md border border-zinc-800 bg-zinc-950 p-1 shadow-xl">
-                                                {activeTilePresets
-                                                  .filter((preset) =>
-                                                    preset.name.includes(
-                                                      (placementRuleSearch[`tag-${index}`] ?? "").trim()
-                                                    )
-                                                  )
-                                                  .slice(0, 12)
-                                                  .map((preset) => (
-                                                    <button
-                                                      key={`pick-tag-${index}-${preset.id}`}
-                                                      type="button"
-                                                      className="mb-1 block w-full rounded border border-zinc-800 bg-zinc-900/70 px-2 py-1 text-left text-[11px] text-zinc-200 hover:border-zinc-600"
-                                                      onClick={() => {
-                                                        setDraftPlacementRules((prev) =>
-                                                          prev.map((item, i) =>
-                                                            i === index &&
-                                                            item.kind === "requireTagInRange"
-                                                              ? {
-                                                                  ...item,
-                                                                  tagPresetId: preset.id,
-                                                                }
-                                                              : item
-                                                          )
-                                                        );
-                                                        setPlacementRuleSearch((prev) => ({
-                                                          ...prev,
-                                                          [`tag-${index}`]: "",
-                                                        }));
-                                                      }}
-                                                    >
-                                                      {preset.name}
-                                                    </button>
-                                                  ))}
-                                              </div>
-                                            ) : null}
-                                          </div>
-                                        </div>
-                                        <span className="text-xs text-zinc-400">거리</span>
-                                        <input
-                                          value={String(rule.distance ?? 1)}
-                                          onChange={(e) =>
-                                            setDraftPlacementRules((prev) =>
-                                              prev.map((item, i) =>
-                                                i === index && item.kind === "requireTagInRange"
-                                                  ? {
-                                                      ...item,
-                                                      distance: Math.max(
-                                                        0,
-                                                        Math.trunc(
-                                                          Number(
-                                                            e.target.value.replace(/[^\d]/g, "")
-                                                          ) || 0
-                                                        )
-                                                      ),
-                                                    }
-                                                  : item
-                                              )
-                                            )
-                                          }
-                                          className="h-8 w-20 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                          placeholder="0"
-                                        />
-                                        <label className="inline-flex items-center gap-2 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-200">
-                                          <input
-                                            type="checkbox"
-                                            checked={!!rule.negate}
-                                            onChange={(e) =>
-                                              setDraftPlacementRules((prev) =>
-                                                prev.map((item, i) =>
-                                                  i === index && item.kind === "requireTagInRange"
-                                                    ? { ...item, negate: e.target.checked }
-                                                    : item
-                                                )
-                                              )
-                                            }
-                                          />
-                                          부정
-                                        </label>
-                                        {(() => {
-                                          const selected = activeTilePresets.find(
-                                            (preset) => preset.id === rule.tagPresetId
-                                          );
-                                          if (!selected?.hasValue) return null;
-                                          return (
-                                            <>
-                                              <select
-                                                value={rule.valueMode ?? "equals"}
-                                                onChange={(e) =>
-                                                  setDraftPlacementRules((prev) =>
-                                                    prev.map((item, i) =>
-                                                      i === index &&
-                                                      item.kind === "requireTagInRange"
-                                                        ? {
-                                                            ...item,
-                                                            valueMode: e.target.value as
-                                                              | "equals"
-                                                              | "contains",
-                                                          }
-                                                        : item
-                                                    )
-                                                  )
-                                                }
-                                                className="h-8 min-w-[110px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                              >
-                                                <option value="equals">값 일치</option>
-                                                <option value="contains">값 포함</option>
-                                              </select>
-                                              <input
-                                                value={rule.value ?? ""}
-                                                onChange={(e) =>
-                                                  setDraftPlacementRules((prev) =>
-                                                    prev.map((item, i) =>
-                                                      i === index &&
-                                                      item.kind === "requireTagInRange"
-                                                        ? { ...item, value: e.target.value }
-                                                        : item
-                                                    )
-                                                  )
-                                                }
-                                                className="h-8 min-w-[140px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                placeholder="속성 값"
-                                              />
-                                            </>
-                                          );
-                                        })()}
-                                      </>
-                                    ) : null}
-                                    {rule.kind === "requireBuildingInRange" ? (
-                                      <>
-                                        <div className="min-w-[220px] space-y-1">
-                                          <div className="rounded-md border border-zinc-800 bg-zinc-950/50 px-2 py-1 text-[11px] text-zinc-300">
-                                            선택:{" "}
-                                            {activeBuildingPresets.find((p) => p.id === rule.presetId)?.name ??
-                                              "없음"}
-                                          </div>
-                                          <div className="relative">
-                                            <input
-                                              value={placementRuleSearch[`building-${index}`] ?? ""}
-                                              onChange={(e) =>
-                                                setPlacementRuleSearch((prev) => ({
-                                                  ...prev,
-                                                  [`building-${index}`]: e.target.value,
-                                                }))
-                                              }
-                                              className="h-8 min-w-[140px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                              placeholder="건물 검색"
-                                            />
-                                            {(placementRuleSearch[`building-${index}`] ?? "").trim() ? (
-                                              <div className="absolute left-0 right-0 top-[calc(100%+2px)] z-30 max-h-28 overflow-auto rounded-md border border-zinc-800 bg-zinc-950 p-1 shadow-xl">
-                                                {activeBuildingPresets
-                                                  .filter((preset) =>
-                                                    preset.name.includes(
-                                                      (placementRuleSearch[`building-${index}`] ?? "").trim()
-                                                    )
-                                                  )
-                                                  .slice(0, 12)
-                                                  .map((preset) => (
-                                                    <button
-                                                      key={`pick-building-${index}-${preset.id}`}
-                                                      type="button"
-                                                      className="mb-1 block w-full rounded border border-zinc-800 bg-zinc-900/70 px-2 py-1 text-left text-[11px] text-zinc-200 hover:border-zinc-600"
-                                                      onClick={() => {
-                                                        setDraftPlacementRules((prev) =>
-                                                          prev.map((item, i) =>
-                                                            i === index &&
-                                                            item.kind === "requireBuildingInRange"
-                                                              ? {
-                                                                  ...item,
-                                                                  presetId: preset.id,
-                                                                }
-                                                              : item
-                                                          )
-                                                        );
-                                                        setPlacementRuleSearch((prev) => ({
-                                                          ...prev,
-                                                          [`building-${index}`]: "",
-                                                        }));
-                                                      }}
-                                                    >
-                                                      {preset.name}
-                                                    </button>
-                                                  ))}
-                                              </div>
-                                            ) : null}
-                                          </div>
-                                        </div>
-                                        <span className="text-xs text-zinc-400">거리</span>
-                                        <input
-                                          value={String(rule.distance ?? 1)}
-                                          onChange={(e) =>
-                                            setDraftPlacementRules((prev) =>
-                                              prev.map((item, i) =>
-                                                i === index && item.kind === "requireBuildingInRange"
-                                                  ? {
-                                                      ...item,
-                                                      distance: Math.max(
-                                                        0,
-                                                        Math.trunc(
-                                                          Number(
-                                                            e.target.value.replace(/[^\d]/g, "")
-                                                          ) || 0
-                                                        )
-                                                      ),
-                                                    }
-                                                  : item
-                                              )
-                                            )
-                                          }
-                                          className="h-8 w-20 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                          placeholder="0"
-                                        />
-                                        <label className="inline-flex items-center gap-2 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-200">
-                                          <input
-                                            type="checkbox"
-                                            checked={!!rule.negate}
-                                            onChange={(e) =>
-                                              setDraftPlacementRules((prev) =>
-                                                prev.map((item, i) =>
-                                                  i === index &&
-                                                  item.kind === "requireBuildingInRange"
-                                                    ? { ...item, negate: e.target.checked }
-                                                    : item
-                                                )
-                                              )
-                                            }
-                                          />
-                                          부정
-                                        </label>
-                                      </>
-                                    ) : null}
-                                    {rule.kind === "custom" ? (
-                                      <input
-                                        value={rule.label ?? ""}
-                                        onChange={(e) =>
-                                          setDraftPlacementRules((prev) =>
-                                            prev.map((item, i) =>
-                                              i === index && item.kind === "custom"
-                                                ? { ...item, label: e.target.value }
-                                                : item
-                                            )
-                                          )
-                                        }
-                                        className="h-8 min-w-[180px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                        placeholder="사용자 정의 조건"
-                                      />
-                                    ) : null}
-                                  </div>
-                                  <button
-                                    type="button"
-                                    className="h-8 rounded-md border border-red-800/70 bg-red-950/40 px-2 text-[11px] font-semibold text-red-200 hover:bg-red-900/40"
-                                    onClick={() => handleRemovePlacementRule(index)}
-                                    disabled={busy}
-                                  >
-                                    제거
-                                  </button>
-                                </div>
-                              ))
-                            )}
-                          </div>
-                        </div>
-                        {(
-                          [
-                            ["onBuild", "건설 시 규칙"],
-                            ["daily", "일일 규칙"],
-                            ["onRemove", "철거 시 규칙"],
-                          ] as const
-                        ).map(([field, title]) => (
-                          <div
-                            key={`effects-${field}`}
-                            className="rounded-lg border border-zinc-800 bg-zinc-950/30 p-3"
-                          >
-                            <div className="mb-2 flex items-center justify-between">
-                              <div className="text-xs font-semibold text-zinc-300">{title}</div>
-                              <button
-                                type="button"
-                                className="rounded-md border border-zinc-700 px-2 py-1 text-[11px] font-semibold text-zinc-200 hover:border-zinc-500"
-                                onClick={() => handleAddExecutionRule(field)}
-                                disabled={busy}
-                              >
-                                규칙 추가
-                              </button>
-                            </div>
-                            <div className="space-y-2">
-                              {buildingDraft[field].length === 0 ? (
-                                <div className="text-xs text-zinc-500">규칙 없음</div>
-                              ) : (
-                                buildingDraft[field].map((rule, ruleIndex) => {
-                                  const whenKind = getWhenKind(rule.when);
-                                  const compareWhen =
-                                    whenKind === "compare" && rule.when?.kind === "compare"
-                                      ? rule.when
-                                      : null;
-                                  const tileRegionCompareWhen =
-                                    whenKind === "tileRegionCompare" &&
-                                    rule.when?.kind === "tileRegionCompare"
-                                      ? rule.when
-                                      : null;
-                                  const placementWhen =
-                                    whenKind &&
-                                    whenKind !== "compare" &&
-                                    whenKind !== "tileRegionCompare" &&
-                                    rule.when &&
-                                    isPlacementRuleKind(rule.when.kind)
-                                      ? (rule.when as BuildingPlacementRule)
-                                      : null;
-                                  const leftResource =
-                                    compareWhen?.left.kind === "resource"
-                                      ? compareWhen.left.resourceId
-                                      : "gold";
-                                  return (
-                                    <div
-                                      key={`rule-${field}-${rule.id}-${ruleIndex}`}
-                                      className="rounded-md border border-amber-800/60 bg-amber-950/15 p-2"
-                                    >
-                                      <div className="mb-2 flex items-center justify-between">
-                                        <div className="flex items-center gap-2">
-                                          <label className="flex items-center gap-2 text-xs text-zinc-300">
-                                            <input
-                                              type="checkbox"
-                                              checked={!!rule.when}
-                                              onChange={(e) =>
-                                                setEffectRuleAt(field, ruleIndex, {
-                                                  ...rule,
-                                                  when: e.target.checked
-                                                    ? createDefaultComparePredicate()
-                                                    : undefined,
-                                                })
-                                              }
-                                            />
-                                            조건 사용
-                                          </label>
-                                          {rule.when ? (
-                                            <select
-                                              value={whenKind ?? "compare"}
-                                              onChange={(e) =>
-                                                setEffectRuleAt(field, ruleIndex, {
-                                                  ...rule,
-                                                  when: createDefaultWhenByKind(
-                                                    e.target.value as RuleWhenKind
-                                                  ),
-                                                })
-                                              }
-                                              className="h-7 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-[11px] text-zinc-100"
-                                            >
-                                              <option value="compare">자원 비교</option>
-                                              <option value="tileRegionCompare">
-                                                지역 상태 비교
-                                              </option>
-                                              <option value="uniquePerTile">타일당 N개</option>
-                                              <option value="requireTagInRange">
-                                                거리 내 속성 필요
-                                              </option>
-                                              <option value="requireBuildingInRange">
-                                                거리 내 건물 필요
-                                              </option>
-                                              <option value="custom">사용자 정의</option>
-                                            </select>
-                                          ) : null}
-                                          {field === "daily" ? (
-                                            <div className="flex items-center gap-1">
-                                              <input
-                                                value={String(rule.intervalDays ?? 1)}
-                                               onChange={(e) =>
-                                                 setEffectRuleAt(field, ruleIndex, {
-                                                   ...rule,
-                                                   intervalDays:
-                                                     Math.max(
-                                                       1,
-                                                       Math.trunc(
-                                                         Number(
-                                                           e.target.value.replace(/[^\d]/g, "")
-                                                         ) || 1
-                                                       )
-                                                     ),
-                                                 })
-                                               }
-                                               className="h-7 w-16 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-[11px] text-emerald-200"
-                                               placeholder="1"
-                                             />
-                                               <span className="text-[11px] text-zinc-400">일마다</span>
-                                           </div>
-                                          ) : null}
-                                        </div>
-                                        <button
-                                          type="button"
-                                          className="rounded-md border border-red-800/70 bg-red-950/40 px-2 py-1 text-[11px] font-semibold text-red-200 hover:bg-red-900/40"
-                                          onClick={() => removeEffectRule(field, ruleIndex)}
-                                          disabled={busy}
-                                        >
-                                          규칙 제거
-                                        </button>
-                                      </div>
-                                      {compareWhen ? (
-                                        <div className="mb-2 grid gap-2 rounded-md border border-sky-800/60 bg-sky-950/15 p-2 md:grid-cols-[1fr_90px_110px]">
-                                          <select
-                                            value={leftResource}
-                                            onChange={(e) =>
-                                              setEffectRuleAt(field, ruleIndex, {
-                                                ...rule,
-                                                when: {
-                                                  ...compareWhen,
-                                                  left: {
-                                                    kind: "resource",
-                                                    resourceId: e.target.value as ResourceId,
-                                                  },
-                                                },
-                                              })
-                                            }
-                                            className="h-8 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                          >
-                                            {ALL_RESOURCE_IDS.map((id) => (
-                                              <option key={`cond-r-${id}`} value={id}>
-                                                {RESOURCE_LABELS[id]}
-                                              </option>
-                                            ))}
-                                          </select>
-                                          <select
-                                            value={compareWhen.op}
-                                            onChange={(e) =>
-                                              setEffectRuleAt(field, ruleIndex, {
-                                                ...rule,
-                                                when: {
-                                                  ...compareWhen,
-                                                  op: e.target.value as typeof compareWhen.op,
-                                                },
-                                              })
-                                            }
-                                            className="h-8 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                          >
-                                            <option value="eq">==</option>
-                                            <option value="ne">!=</option>
-                                            <option value="gt">{">"}</option>
-                                            <option value="gte">{">="}</option>
-                                            <option value="lt">{"<"}</option>
-                                            <option value="lte">{"<="}</option>
-                                          </select>
-                                          <input
-                                            value={exprToEditableNumber(compareWhen.right)}
-                                            onChange={(e) =>
-                                              setEffectRuleAt(field, ruleIndex, {
-                                                ...rule,
-                                                when: {
-                                                  ...compareWhen,
-                                                  right: {
-                                                    kind: "const",
-                                                    value:
-                                                      toNonNegativeInt(
-                                                        e.target.value.replace(/[^\d]/g, "")
-                                                      ) ?? 0,
-                                                  },
-                                                },
-                                              })
-                                            }
-                                            className="h-8 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                            placeholder="값"
-                                          />
-                                        </div>
-                                      ) : null}
-                                      {tileRegionCompareWhen ? (
-                                        <div className="mb-2 grid gap-2 rounded-md border border-sky-800/60 bg-sky-950/15 p-2 md:grid-cols-[1fr_90px_110px]">
-                                          <select
-                                            value={tileRegionCompareWhen.field}
-                                            onChange={(e) =>
-                                              setEffectRuleAt(field, ruleIndex, {
-                                                ...rule,
-                                                when: {
-                                                  ...tileRegionCompareWhen,
-                                                  field: e.target.value as
-                                                    | "spaceRemaining"
-                                                    | "pollution"
-                                                    | "threat"
-                                                    | "satisfaction",
-                                                },
-                                              })
-                                            }
-                                            className="h-8 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                          >
-                                            <option value="spaceRemaining">남은 공간</option>
-                                            <option value="pollution">오염도</option>
-                                            <option value="threat">위협도</option>
-                                            <option value="satisfaction">만족치</option>
-                                          </select>
-                                          <select
-                                            value={tileRegionCompareWhen.op}
-                                            onChange={(e) =>
-                                              setEffectRuleAt(field, ruleIndex, {
-                                                ...rule,
-                                                when: {
-                                                  ...tileRegionCompareWhen,
-                                                  op: e.target.value as typeof tileRegionCompareWhen.op,
-                                                },
-                                              })
-                                            }
-                                            className="h-8 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                          >
-                                            <option value="eq">==</option>
-                                            <option value="ne">!=</option>
-                                            <option value="gt">{">"}</option>
-                                            <option value="gte">{">="}</option>
-                                            <option value="lt">{"<"}</option>
-                                            <option value="lte">{"<="}</option>
-                                          </select>
-                                          <input
-                                            value={String(tileRegionCompareWhen.value ?? 0)}
-                                            onChange={(e) =>
-                                              setEffectRuleAt(field, ruleIndex, {
-                                                ...rule,
-                                                when: {
-                                                  ...tileRegionCompareWhen,
-                                                  value:
-                                                    toNonNegativeInt(
-                                                      e.target.value.replace(/[^\d]/g, "")
-                                                    ) ?? 0,
-                                                },
-                                              })
-                                            }
-                                            className="h-8 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                            placeholder="값"
-                                          />
-                                        </div>
-                                      ) : null}
-                                      {!compareWhen && placementWhen ? (
-                                        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-sky-800/60 bg-sky-950/15 p-2">
-                                          {placementWhen.kind === "uniquePerTile" ? (
-                                            <div className="flex items-center gap-2">
-                                              <span className="text-xs text-zinc-400">최대</span>
-                                              <input
-                                                value={String(placementWhen.maxCount ?? 1)}
-                                                onChange={(e) =>
-                                                  setEffectRuleAt(field, ruleIndex, {
-                                                    ...rule,
-                                                    when: {
-                                                      ...placementWhen,
-                                                      maxCount: Math.max(
-                                                        1,
-                                                        Math.trunc(
-                                                          Number(
-                                                            e.target.value.replace(/[^\d]/g, "")
-                                                          ) || 1
-                                                        )
-                                                      ),
-                                                    },
-                                                  })
-                                                }
-                                                className="h-8 w-20 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                placeholder="1"
-                                              />
-                                              <span className="text-xs text-zinc-400">개</span>
-                                            </div>
-                                          ) : null}
-                                          {placementWhen.kind === "requireTagInRange" ? (
-                                            <>
-                                              <div className="min-w-[220px] space-y-1">
-                                                <div className="rounded-md border border-zinc-800 bg-zinc-950/50 px-2 py-1 text-[11px] text-zinc-300">
-                                                  선택:{" "}
-                                                  {activeTilePresets.find(
-                                                    (p) => p.id === placementWhen.tagPresetId
-                                                  )?.name ?? "없음"}
-                                                </div>
-                                                <div className="relative">
-                                                  <input
-                                                    value={
-                                                      placementRuleSearch[
-                                                        `when-tag-${field}-${ruleIndex}`
-                                                      ] ?? ""
-                                                    }
-                                                    onChange={(e) =>
-                                                      setPlacementRuleSearch((prev) => ({
-                                                        ...prev,
-                                                        [`when-tag-${field}-${ruleIndex}`]:
-                                                          e.target.value,
-                                                      }))
-                                                    }
-                                                    className="h-8 min-w-[140px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                    placeholder="속성 검색"
-                                                  />
-                                                  {(
-                                                    placementRuleSearch[
-                                                      `when-tag-${field}-${ruleIndex}`
-                                                    ] ?? ""
-                                                  ).trim() ? (
-                                                    <div className="absolute left-0 right-0 top-[calc(100%+2px)] z-30 max-h-28 overflow-auto rounded-md border border-zinc-800 bg-zinc-950 p-1 shadow-xl">
-                                                      {activeTilePresets
-                                                        .filter((preset) =>
-                                                          preset.name.includes(
-                                                            (
-                                                              placementRuleSearch[
-                                                                `when-tag-${field}-${ruleIndex}`
-                                                              ] ?? ""
-                                                            ).trim()
-                                                          )
-                                                        )
-                                                        .slice(0, 12)
-                                                        .map((preset) => (
-                                                          <button
-                                                            key={`pick-when-tag-${field}-${rule.id}-${ruleIndex}-${preset.id}`}
-                                                            type="button"
-                                                            className="mb-1 block w-full rounded border border-zinc-800 bg-zinc-900/70 px-2 py-1 text-left text-[11px] text-zinc-200 hover:border-zinc-600"
-                                                            onClick={() => {
-                                                              setEffectRuleAt(field, ruleIndex, {
-                                                                ...rule,
-                                                                when: {
-                                                                  ...placementWhen,
-                                                                  tagPresetId: preset.id,
-                                                                },
-                                                              });
-                                                              setPlacementRuleSearch((prev) => ({
-                                                                ...prev,
-                                                                [`when-tag-${field}-${ruleIndex}`]: "",
-                                                              }));
-                                                            }}
-                                                          >
-                                                            {preset.name}
-                                                          </button>
-                                                        ))}
-                                                    </div>
-                                                  ) : null}
-                                                </div>
-                                              </div>
-                                              <span className="text-xs text-zinc-400">거리</span>
-                                              <input
-                                                value={String(placementWhen.distance ?? 1)}
-                                                onChange={(e) =>
-                                                  setEffectRuleAt(field, ruleIndex, {
-                                                    ...rule,
-                                                    when: {
-                                                      ...placementWhen,
-                                                      distance: Math.max(
-                                                        0,
-                                                        Math.trunc(
-                                                          Number(
-                                                            e.target.value.replace(/[^\d]/g, "")
-                                                          ) || 0
-                                                        )
-                                                      ),
-                                                    },
-                                                  })
-                                                }
-                                                className="h-8 w-20 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                placeholder="0"
-                                              />
-                                              <label className="inline-flex items-center gap-2 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-200">
-                                                <input
-                                                  type="checkbox"
-                                                  checked={!!placementWhen.negate}
-                                                  onChange={(e) =>
-                                                    setEffectRuleAt(field, ruleIndex, {
-                                                      ...rule,
-                                                      when: {
-                                                        ...placementWhen,
-                                                        negate: e.target.checked,
-                                                      },
-                                                    })
-                                                  }
-                                                />
-                                                부정
-                                              </label>
-                                              <label className="inline-flex items-center gap-2 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-200">
-                                                <input
-                                                  type="checkbox"
-                                                  checked={!!placementWhen.repeat}
-                                                  onChange={(e) =>
-                                                    setEffectRuleAt(field, ruleIndex, {
-                                                      ...rule,
-                                                      when: {
-                                                        ...placementWhen,
-                                                        repeat: e.target.checked,
-                                                      },
-                                                    })
-                                                  }
-                                                />
-                                                諛섎났
-                                              </label>
-                                              {(() => {
-                                                const selected = activeTilePresets.find(
-                                                  (preset) =>
-                                                    preset.id === placementWhen.tagPresetId
-                                                );
-                                                if (!selected?.hasValue) return null;
-                                                return (
-                                                  <>
-                                                    <select
-                                                      value={placementWhen.valueMode ?? "equals"}
-                                                      onChange={(e) =>
-                                                        setEffectRuleAt(field, ruleIndex, {
-                                                          ...rule,
-                                                          when: {
-                                                            ...placementWhen,
-                                                            valueMode: e.target.value as
-                                                              | "equals"
-                                                              | "contains",
-                                                          },
-                                                        })
-                                                      }
-                                                      className="h-8 min-w-[110px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                    >
-                                                      <option value="equals">값 일치</option>
-                                                      <option value="contains">값 포함</option>
-                                                    </select>
-                                                    <input
-                                                      value={placementWhen.value ?? ""}
-                                                      onChange={(e) =>
-                                                        setEffectRuleAt(field, ruleIndex, {
-                                                          ...rule,
-                                                          when: {
-                                                            ...placementWhen,
-                                                            value: e.target.value,
-                                                          },
-                                                        })
-                                                      }
-                                                      className="h-8 min-w-[140px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                      placeholder="속성 값"
-                                                    />
-                                                  </>
-                                                );
-                                              })()}
-                                            </>
-                                          ) : null}
-                                          {placementWhen.kind === "requireBuildingInRange" ? (
-                                            <>
-                                              <div className="min-w-[220px] space-y-1">
-                                                <div className="rounded-md border border-zinc-800 bg-zinc-950/50 px-2 py-1 text-[11px] text-zinc-300">
-                                                  선택:{" "}
-                                                  {activeBuildingPresets.find(
-                                                    (p) => p.id === placementWhen.presetId
-                                                  )?.name ?? "없음"}
-                                                </div>
-                                                <div className="relative">
-                                                  <input
-                                                    value={
-                                                      placementRuleSearch[
-                                                        `when-building-${field}-${ruleIndex}`
-                                                      ] ?? ""
-                                                    }
-                                                    onChange={(e) =>
-                                                      setPlacementRuleSearch((prev) => ({
-                                                        ...prev,
-                                                        [`when-building-${field}-${ruleIndex}`]:
-                                                          e.target.value,
-                                                      }))
-                                                    }
-                                                    className="h-8 min-w-[140px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                    placeholder="건물 검색"
-                                                  />
-                                                  {(
-                                                    placementRuleSearch[
-                                                      `when-building-${field}-${ruleIndex}`
-                                                    ] ?? ""
-                                                  ).trim() ? (
-                                                    <div className="absolute left-0 right-0 top-[calc(100%+2px)] z-30 max-h-28 overflow-auto rounded-md border border-zinc-800 bg-zinc-950 p-1 shadow-xl">
-                                                      {activeBuildingPresets
-                                                        .filter((preset) =>
-                                                          preset.name.includes(
-                                                            (
-                                                              placementRuleSearch[
-                                                                `when-building-${field}-${ruleIndex}`
-                                                              ] ?? ""
-                                                            ).trim()
-                                                          )
-                                                        )
-                                                        .slice(0, 12)
-                                                        .map((preset) => (
-                                                          <button
-                                                            key={`pick-when-building-${field}-${rule.id}-${ruleIndex}-${preset.id}`}
-                                                            type="button"
-                                                            className="mb-1 block w-full rounded border border-zinc-800 bg-zinc-900/70 px-2 py-1 text-left text-[11px] text-zinc-200 hover:border-zinc-600"
-                                                            onClick={() => {
-                                                              setEffectRuleAt(field, ruleIndex, {
-                                                                ...rule,
-                                                                when: {
-                                                                  ...placementWhen,
-                                                                  presetId: preset.id,
-                                                                },
-                                                              });
-                                                              setPlacementRuleSearch((prev) => ({
-                                                                ...prev,
-                                                                [`when-building-${field}-${ruleIndex}`]: "",
-                                                              }));
-                                                            }}
-                                                          >
-                                                            {preset.name}
-                                                          </button>
-                                                        ))}
-                                                    </div>
-                                                  ) : null}
-                                                </div>
-                                              </div>
-                                              <span className="text-xs text-zinc-400">거리</span>
-                                              <input
-                                                value={String(placementWhen.distance ?? 1)}
-                                                onChange={(e) =>
-                                                  setEffectRuleAt(field, ruleIndex, {
-                                                    ...rule,
-                                                    when: {
-                                                      ...placementWhen,
-                                                      distance: Math.max(
-                                                        0,
-                                                        Math.trunc(
-                                                          Number(
-                                                            e.target.value.replace(/[^\d]/g, "")
-                                                          ) || 0
-                                                        )
-                                                      ),
-                                                    },
-                                                  })
-                                                }
-                                                className="h-8 w-20 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                placeholder="0"
-                                              />
-                                              <label className="inline-flex items-center gap-2 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-200">
-                                                <input
-                                                  type="checkbox"
-                                                  checked={!!placementWhen.negate}
-                                                  onChange={(e) =>
-                                                    setEffectRuleAt(field, ruleIndex, {
-                                                      ...rule,
-                                                      when: {
-                                                        ...placementWhen,
-                                                        negate: e.target.checked,
-                                                      },
-                                                    })
-                                                  }
-                                                />
-                                                부정
-                                              </label>
-                                              <label className="inline-flex items-center gap-2 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-200">
-                                                <input
-                                                  type="checkbox"
-                                                  checked={!!placementWhen.repeat}
-                                                  onChange={(e) =>
-                                                    setEffectRuleAt(field, ruleIndex, {
-                                                      ...rule,
-                                                      when: {
-                                                        ...placementWhen,
-                                                        repeat: e.target.checked,
-                                                      },
-                                                    })
-                                                  }
-                                                />
-                                                반복
-                                              </label>
-                                            </>
-                                          ) : null}
-                                          {placementWhen.kind === "custom" ? (
-                                            <input
-                                              value={placementWhen.label ?? ""}
-                                              onChange={(e) =>
-                                                setEffectRuleAt(field, ruleIndex, {
-                                                  ...rule,
-                                                  when: { ...placementWhen, label: e.target.value },
-                                                })
-                                              }
-                                              className="h-8 min-w-[180px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                              placeholder="사용자 정의 조건"
-                                            />
-                                          ) : null}
-                                        </div>
-                                      ) : null}
-                                      <div className="space-y-2">
-                                        {rule.actions.map((action, actionIndex) => (
-                                          <div
-                                            key={`action-${field}-${rule.id}-${actionIndex}`}
-                                            className="grid gap-2 rounded-md border border-emerald-800/60 bg-emerald-950/15 p-2 md:grid-cols-[170px_1fr_120px_auto]"
-                                          >
-                                            <select
-                                              value={action.kind}
-                                              onChange={(e) =>
-                                                setEffectActionAt(
-                                                  field,
-                                                  ruleIndex,
-                                                  actionIndex,
-                                                  createActionByKind(
-                                                    e.target.value as BuildingRuleAction["kind"]
-                                                  )
-                                                )
-                                              }
-                                              className="h-8 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                            >
-                                              <option value="adjustResource">자원 증감</option>
-                                              <option value="adjustResourceCap">자원 상한 증감</option>
-                                              <option value="adjustPopulation">인구 증감</option>
-                                              <option value="adjustPopulationCap">인구 상한 증감</option>
-                                              <option value="convertPopulation">인구 전환</option>
-                                              <option value="adjustTileRegion">지역 상태 증감</option>
-                                              <option value="addTileState">타일 속성 추가</option>
-                                              <option value="removeTileState">타일 속성 제거</option>
-                                            </select>
-                                            <div className="flex flex-wrap items-center gap-2">
-                                              {action.kind === "adjustResource" ? (
-                                                <select
-                                                  value={action.resourceId}
-                                                  onChange={(e) =>
-                                                    setEffectActionAt(field, ruleIndex, actionIndex, {
-                                                      ...action,
-                                                      resourceId: e.target.value as ResourceId,
-                                                    })
-                                                  }
-                                                  className="h-8 min-w-[120px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                >
-                                                  {ALL_RESOURCE_IDS.map((id) => (
-                                                    <option key={`act-r-${id}`} value={id}>
-                                                      {RESOURCE_LABELS[id]}
-                                                    </option>
-                                                  ))}
-                                                </select>
-                                              ) : null}
-                                              {action.kind === "adjustResourceCap" ? (
-                                                <select
-                                                  value={action.resourceId}
-                                                  onChange={(e) =>
-                                                    setEffectActionAt(field, ruleIndex, actionIndex, {
-                                                      ...action,
-                                                      resourceId: e.target.value as CappedResourceId,
-                                                    })
-                                                  }
-                                                  className="h-8 min-w-[120px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                >
-                                                  {CAPPED_RESOURCE_IDS.map((id) => (
-                                                    <option key={`act-cap-${id}`} value={id}>
-                                                      {RESOURCE_LABELS[id]}
-                                                    </option>
-                                                  ))}
-                                                </select>
-                                              ) : null}
-                                              {action.kind === "adjustPopulation" ? (
-                                                <select
-                                                  value={action.populationId}
-                                                  onChange={(e) =>
-                                                    setEffectActionAt(field, ruleIndex, actionIndex, {
-                                                      ...action,
-                                                      populationId: e.target.value as PopulationTrackedId,
-                                                    })
-                                                  }
-                                                  className="h-8 min-w-[120px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                >
-                                                  {TRACKED_POPULATION_IDS.map((id) => (
-                                                    <option key={`act-p-${id}`} value={id}>
-                                                      {POPULATION_LABELS[id]}
-                                                    </option>
-                                                  ))}
-                                                </select>
-                                              ) : null}
-                                              {action.kind === "adjustPopulationCap" ? (
-                                                <span className="inline-flex h-8 items-center rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-300">
-                                                  전체 인구 상한
-                                                </span>
-                                              ) : null}
-                                              {action.kind === "convertPopulation" ? (
-                                                <>
-                                                  <select
-                                                    value={action.from}
-                                                    onChange={(e) =>
-                                                      setEffectActionAt(field, ruleIndex, actionIndex, {
-                                                        ...action,
-                                                        from: e.target.value as PopulationTrackedId,
-                                                      })
-                                                    }
-                                                    className="h-8 min-w-[120px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                  >
-                                                    {TRACKED_POPULATION_IDS.map((id) => (
-                                                      <option key={`act-from-${id}`} value={id}>
-                                                        {POPULATION_LABELS[id]}
-                                                      </option>
-                                                    ))}
-                                                  </select>
-                                                  <span className="text-xs text-zinc-500">→</span>
-                                                  <select
-                                                    value={action.to}
-                                                    onChange={(e) =>
-                                                      setEffectActionAt(field, ruleIndex, actionIndex, {
-                                                        ...action,
-                                                        to: e.target.value as PopulationTrackedId,
-                                                      })
-                                                    }
-                                                    className="h-8 min-w-[120px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                  >
-                                                    {TRACKED_POPULATION_IDS.map((id) => (
-                                                      <option key={`act-to-${id}`} value={id}>
-                                                        {POPULATION_LABELS[id]}
-                                                      </option>
-                                                    ))}
-                                                  </select>
-                                                </>
-                                              ) : null}
-                                              {action.kind === "adjustTileRegion" ? (
-                                                <select
-                                                  value={action.field}
-                                                  onChange={(e) =>
-                                                    setEffectActionAt(field, ruleIndex, actionIndex, {
-                                                      ...action,
-                                                      field: e.target.value as keyof MapTileRegionState,
-                                                    })
-                                                  }
-                                                  className="h-8 min-w-[120px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                >
-                                                  <option value="spaceUsed">사용 공간</option>
-                                                  <option value="spaceCap">최대 공간</option>
-                                                  <option value="satisfaction">만족치</option>
-                                                  <option value="threat">위협도</option>
-                                                  <option value="pollution">오염도</option>
-                                                </select>
-                                              ) : null}
-                                              {action.kind === "addTileState" ||
-                                              action.kind === "removeTileState" ? (
-                                                <div className="min-w-[220px] space-y-1">
-                                                  <div className="rounded-md border border-zinc-800 bg-zinc-950/50 px-2 py-1 text-[11px] text-zinc-300">
-                                                    선택:{" "}
-                                                    {activeTilePresets.find(
-                                                      (p) => p.id === action.tagPresetId
-                                                    )?.name ?? "없음"}
-                                                  </div>
-                                                  <div className="relative">
-                                                    <input
-                                                      value={
-                                                        placementRuleSearch[
-                                                          `action-tag-${field}-${ruleIndex}-${actionIndex}`
-                                                        ] ?? ""
-                                                      }
-                                                      onChange={(e) =>
-                                                        setPlacementRuleSearch((prev) => ({
-                                                          ...prev,
-                                                          [`action-tag-${field}-${ruleIndex}-${actionIndex}`]:
-                                                            e.target.value,
-                                                        }))
-                                                      }
-                                                      className="h-8 min-w-[140px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                      placeholder="속성 검색"
-                                                    />
-                                                    {(
-                                                      placementRuleSearch[
-                                                        `action-tag-${field}-${ruleIndex}-${actionIndex}`
-                                                      ] ?? ""
-                                                    ).trim() ? (
-                                                      <div className="absolute left-0 right-0 top-[calc(100%+2px)] z-30 max-h-28 overflow-auto rounded-md border border-zinc-800 bg-zinc-950 p-1 shadow-xl">
-                                                        {activeTilePresets
-                                                          .filter((preset) =>
-                                                            preset.name.includes(
-                                                              (
-                                                                placementRuleSearch[
-                                                                  `action-tag-${field}-${ruleIndex}-${actionIndex}`
-                                                                ] ?? ""
-                                                              ).trim()
-                                                            )
-                                                          )
-                                                          .slice(0, 12)
-                                                          .map((preset) => (
-                                                            <button
-                                                              key={`pick-action-tag-${field}-${rule.id}-${ruleIndex}-${actionIndex}-${preset.id}`}
-                                                              type="button"
-                                                              className="mb-1 block w-full rounded border border-zinc-800 bg-zinc-900/70 px-2 py-1 text-left text-[11px] text-zinc-200 hover:border-zinc-600"
-                                                              onClick={() => {
-                                                                setEffectActionAt(
-                                                                  field,
-                                                                  ruleIndex,
-                                                                  actionIndex,
-                                                                  {
-                                                                    ...action,
-                                                                    tagPresetId: preset.id,
-                                                                  }
-                                                                );
-                                                                setPlacementRuleSearch((prev) => ({
-                                                                  ...prev,
-                                                                  [`action-tag-${field}-${ruleIndex}-${actionIndex}`]:
-                                                                    "",
-                                                                }));
-                                                              }}
-                                                            >
-                                                              {preset.name}
-                                                            </button>
-                                                          ))}
-                                                      </div>
-                                                    ) : null}
-                                                  </div>
-                                                </div>
-                                              ) : null}
-                                              {action.kind === "addTileState" &&
-                                              activeTilePresets.find((p) => p.id === action.tagPresetId)
-                                                ?.hasValue ? (
-                                                <input
-                                                  value={action.value ?? ""}
-                                                  onChange={(e) =>
-                                                    setEffectActionAt(field, ruleIndex, actionIndex, {
-                                                      ...action,
-                                                      value: e.target.value,
-                                                    })
-                                                  }
-                                                  className="h-8 min-w-[140px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                  placeholder="속성 값"
-                                                />
-                                              ) : null}
-                                              <select
-                                                value={action.target ?? "self"}
-                                                onChange={(e) => {
-                                                  const target = e.target.value === "range" ? "range" : "self";
-                                                  setEffectActionAt(field, ruleIndex, actionIndex, {
-                                                    ...action,
-                                                    target,
-                                                    distance:
-                                                      target === "range"
-                                                        ? Math.max(
-                                                            0,
-                                                            Math.trunc(
-                                                              Number((action as any).distance ?? 1) || 0
-                                                            )
-                                                          )
-                                                        : undefined,
-                                                  });
-                                                }}
-                                                className="h-8 min-w-[120px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                              >
-                                                <option value="self">현재 타일</option>
-                                                <option value="range">거리 내 타일</option>
-                                              </select>
-                                              {(action.target ?? "self") === "range" ? (
-                                                <>
-                                                  <span className="text-xs text-zinc-400">거리</span>
-                                                  <input
-                                                    value={String(
-                                                      Math.max(
-                                                        0,
-                                                        Number((action as any).distance ?? 1) || 0
-                                                      )
-                                                    )}
-                                                    onChange={(e) =>
-                                                      setEffectActionAt(field, ruleIndex, actionIndex, {
-                                                        ...action,
-                                                        distance: Math.max(
-                                                          0,
-                                                          Math.trunc(
-                                                            Number(e.target.value.replace(/[^\d]/g, "")) || 0
-                                                          )
-                                                        ),
-                                                      })
-                                                    }
-                                                    className="h-8 w-20 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                    placeholder="0"
-                                                  />
-                                                </>
-                                              ) : null}
-                                            </div>
-                                            {action.kind === "convertPopulation" ||
-                                            action.kind === "adjustResource" ||
-                                            action.kind === "adjustResourceCap" ||
-                                            action.kind === "adjustPopulation" ||
-                                            action.kind === "adjustPopulationCap" ||
-                                            action.kind === "adjustTileRegion" ? (
-                                              <input
-                                                value={
-                                                  action.kind === "convertPopulation"
-                                                    ? exprToEditableNumber(action.amount)
-                                                    : exprToEditableNumber(action.delta)
-                                                }
-                                                onChange={(e) => {
-                                                  if (action.kind === "convertPopulation") {
-                                                    const next =
-                                                      toNonNegativeInt(
-                                                        e.target.value.replace(/[^\d]/g, "")
-                                                      ) ?? 0;
-                                                    setEffectActionAt(field, ruleIndex, actionIndex, {
-                                                      ...action,
-                                                      amount: { kind: "const", value: next },
-                                                    });
-                                                    return;
-                                                  }
-                                                  const stripped = e.target.value.replace(/[^\d-]/g, "");
-                                                  const normalized = stripped.startsWith("-")
-                                                    ? `-${stripped.slice(1).replace(/-/g, "")}`
-                                                    : stripped.replace(/-/g, "");
-                                                  const parsed = Math.trunc(Number(normalized));
-                                                  const next = Number.isFinite(parsed) ? parsed : 0;
-                                                  setEffectActionAt(field, ruleIndex, actionIndex, {
-                                                    ...action,
-                                                    delta: { kind: "const", value: next },
-                                                  });
-                                                }}
-                                                className="h-8 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
-                                                placeholder="0"
-                                              />
-                                            ) : (
-                                              <div className="h-8" />
-                                            )}
-                                            <button
-                                              type="button"
-                                              className="h-8 rounded-md border border-red-800/70 bg-red-950/40 px-2 text-[11px] font-semibold text-red-200 hover:bg-red-900/40"
-                                              onClick={() =>
-                                                removeEffectAction(field, ruleIndex, actionIndex)
-                                              }
-                                              disabled={busy}
-                                            >
-                                              제거
-                                            </button>
-                                          </div>
-                                        ))}
-                                      </div>
-                                      <div className="mt-2 flex justify-end">
-                                        <button
-                                          type="button"
-                                          className="rounded-md border border-zinc-700 px-2 py-1 text-[11px] font-semibold text-zinc-100 hover:border-zinc-500"
-                                          onClick={() => addEffectAction(field, ruleIndex)}
-                                          disabled={busy}
-                                        >
-                                          액션 추가
-                                        </button>
-                                      </div>
-                                    </div>
-                                  );
-                                })
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                        <div className="flex flex-wrap items-center justify-end gap-2">
-                          <button
-                            type="button"
-                            className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-semibold text-zinc-200 hover:border-zinc-600"
-                            onClick={resetBuildingDraft}
-                            disabled={busy}
-                          >
-                            입력 초기화
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded-lg border border-emerald-700/60 bg-emerald-950/30 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-900/40"
-                            onClick={handleSaveBuildingPreset}
-                            disabled={busy}
-                          >
-                            {buildingDraft.id ? "건물 프리셋 수정" : "건물 프리셋 추가"}
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="mb-4 rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-400">
-                        현재 계정은 조회 전용입니다. 프리셋 등록/삭제는 관리자만 가능합니다.
-                      </div>
-                    )}
-                    <div className="space-y-2">
-                      {activeBuildingPresets.length === 0 ? (
-                        <div className="rounded-lg border border-dashed border-zinc-800 px-3 py-4 text-sm text-zinc-500">
-                          등록된 건물 프리셋이 없습니다.
-                        </div>
-                      ) : (
-                        activeBuildingPresets.map((preset) => {
-                          const color = normalizeHexColor(preset.color, "#eab308");
-                          return (
-                            <div
-                              key={preset.id}
-                              className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2"
-                            >
-                              <div className="flex items-center justify-between gap-3">
-                                <div className="min-w-0">
-                                  <div className="truncate text-sm font-semibold" style={{ color }}>
-                                    {preset.name}
-                                  </div>
-                                  <div className="mt-0.5 text-[11px] text-zinc-500">
-                                    {preset.tier ? `${preset.tier} · ` : ""}
-                                    노력치 {preset.effort ?? 0} · 공간 {preset.space ?? 0}
-                                    {" · "}조건 {preset.placementRules?.length ?? 0}
-                                    {" · "}일일 규칙 {preset.effects?.daily?.length ?? 0}
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  {isAdmin ? (
-                                    <button
-                                      type="button"
-                                      className="rounded-md border border-zinc-700 px-2 py-1 text-[11px] font-semibold text-zinc-100 hover:border-zinc-500"
-                                      onClick={() => handleSelectBuildingPreset(preset.id)}
-                                      disabled={busy}
-                                    >
-                                      편집
-                                    </button>
-                                  ) : null}
-                                  {isAdmin ? (
-                                    <button
-                                      type="button"
-                                      className="rounded-md border border-red-800/70 bg-red-950/40 px-2 py-1 text-[11px] font-semibold text-red-200 hover:bg-red-900/40"
-                                      onClick={() => handleDeleteBuildingPreset(preset.id)}
-                                      disabled={busy}
-                                    >
-                                      삭제
-                                    </button>
-                                  ) : null}
-                                </div>
-                              </div>
-                              {preset.description ? (
-                                <div className="mt-1 text-xs text-zinc-400">{preset.description}</div>
-                              ) : null}
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-            ) : !selectedMap ? (
-              <div className="rounded-xl border border-dashed border-zinc-800 px-4 py-8 text-sm text-zinc-500">
-                지도를 먼저 선택해 주세요.
-              </div>
+              <MapPresetsPanel ctx={presetPanelCtx} />
             ) : (
-              <>
-                <div className={settingsOpen ? "grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]" : ""}>
-                  {settingsOpen ? (
-                    <div className="rounded-xl border border-zinc-800 bg-zinc-950/30 p-4">
-                      <div className="mb-3 flex items-center justify-between">
-                        <div className="text-sm font-semibold text-zinc-100">설정</div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            className="rounded-md border border-zinc-700 px-2 py-1 text-[11px] font-semibold text-zinc-200 hover:border-zinc-600"
-                            onClick={() => setSettingsOpen(false)}
-                            disabled={busy}
-                          >
-                            닫기
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded-md border border-red-700/60 bg-red-950/30 px-2 py-1 text-[11px] font-semibold text-red-200 hover:bg-red-900/40"
-                            onClick={handleDelete}
-                            disabled={busy}
-                          >
-                            삭제
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="mb-3 grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          className={[
-                            "rounded-lg border px-3 py-1.5 text-xs font-semibold",
-                            settingsTab === "map"
-                              ? "border-amber-700/70 bg-amber-950/30 text-amber-200"
-                              : "border-zinc-800 bg-zinc-950/30 text-zinc-300 hover:border-zinc-700",
-                          ].join(" ")}
-                          onClick={() => setSettingsTab("map")}
-                        >
-                          지도 설정
-                        </button>
-                        <button
-                          type="button"
-                          className={[
-                            "rounded-lg border px-3 py-1.5 text-xs font-semibold",
-                            settingsTab === "city"
-                              ? "border-emerald-700/70 bg-emerald-950/30 text-emerald-200"
-                              : "border-zinc-800 bg-zinc-950/30 text-zinc-300 hover:border-zinc-700",
-                          ].join(" ")}
-                          onClick={() => setSettingsTab("city")}
-                        >
-                          도시 전역 설정
-                        </button>
-                      </div>
-
-                      {settingsTab === "map" ? (
-                        <div className="space-y-3">
-                          <label className="block">
-                            <div className="mb-1 text-[11px] font-semibold text-zinc-400">
-                              지도 이름
-                            </div>
-                            <input
-                              value={draft.name}
-                              onChange={(e) =>
-                                setDraft((prev) => ({ ...prev, name: e.target.value }))
-                              }
-                              className="h-10 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
-                            />
-                          </label>
-
-                          <div>
-                            <div className="mb-1 text-[11px] font-semibold text-zinc-400">
-                              이미지 파일 / URL
-                            </div>
-                            <div className="flex gap-2">
-                              <input
-                                ref={fileInputRef}
-                                type="file"
-                                accept="image/*"
-                                className="block w-full text-xs text-zinc-300 file:mr-3 file:rounded-md file:border-0 file:bg-zinc-800 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-zinc-100 hover:file:bg-zinc-700"
-                                onChange={(e) =>
-                                  handleUploadImage(e.target.files?.[0] ?? null)
-                                }
-                                disabled={busy}
-                              />
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-3">
-                            <label className="block">
-                              <div className="mb-1 text-[11px] font-semibold text-zinc-400">
-                                Hex Size
-                              </div>
-                              <input
-                                type="number"
-                                step="0.1"
-                                value={draft.hexSize}
-                                onChange={(e) =>
-                                  setDraft((prev) => ({ ...prev, hexSize: e.target.value }))
-                                }
-                                className="h-10 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-amber-200 outline-none focus:border-zinc-600"
-                              />
-                            </label>
-                            <label className="block">
-                              <div className="mb-1 text-[11px] font-semibold text-zinc-400">
-                                Orientation
-                              </div>
-                              <select
-                                value={draft.orientation}
-                                onChange={(e) =>
-                                  setDraft((prev) => ({
-                                    ...prev,
-                                    orientation: e.target.value as HexOrientation,
-                                  }))
-                                }
-                                className="h-10 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
-                              >
-                                <option value="pointy">pointy</option>
-                                <option value="flat">flat</option>
-                              </select>
-                            </label>
-                            <label className="block">
-                              <div className="mb-1 text-[11px] font-semibold text-zinc-400">
-                                Origin X
-                              </div>
-                              <input
-                                value={draft.originX}
-                                onChange={(e) =>
-                                  setDraft((prev) => ({ ...prev, originX: e.target.value }))
-                                }
-                                className="h-10 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-sky-200 outline-none focus:border-zinc-600"
-                              />
-                            </label>
-                            <label className="block">
-                              <div className="mb-1 text-[11px] font-semibold text-zinc-400">
-                                Origin Y
-                              </div>
-                              <input
-                                value={draft.originY}
-                                onChange={(e) =>
-                                  setDraft((prev) => ({ ...prev, originY: e.target.value }))
-                                }
-                                className="h-10 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-sky-200 outline-none focus:border-zinc-600"
-                              />
-                            </label>
-                            <label className="block">
-                              <div className="mb-1 text-[11px] font-semibold text-zinc-400">
-                                Columns
-                              </div>
-                              <input
-                                value={draft.cols}
-                                onChange={(e) =>
-                                  setDraft((prev) => ({ ...prev, cols: e.target.value }))
-                                }
-                                className="h-10 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
-                              />
-                            </label>
-                            <label className="block">
-                              <div className="mb-1 text-[11px] font-semibold text-zinc-400">
-                                Rows
-                              </div>
-                              <input
-                                value={draft.rows}
-                                onChange={(e) =>
-                                  setDraft((prev) => ({ ...prev, rows: e.target.value }))
-                                }
-                                className="h-10 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
-                              />
-                            </label>
-                          </div>
-
-                          <button
-                            type="button"
-                            className="w-full rounded-lg border border-amber-700/60 bg-amber-950/30 px-3 py-2 text-sm font-semibold text-amber-200 hover:bg-amber-900/40"
-                            onClick={handleSaveDraft}
-                            disabled={busy}
-                          >
-                            지도 설정 저장
-                          </button>
-
-                          <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-400">
-                            선택 타일:
-                            {selectedHex
-                              ? `col ${selectedHex.col}, row ${selectedHex.row}`
-                              : "없음"}
-                            {selectedHex ? (
-                              <div className="mt-1 flex flex-wrap gap-1">
-                                {(activeTileStates[tileKey(selectedHex.col, selectedHex.row)] ?? []).length ===
-                                0 ? (
-                                  <span className="text-[11px] text-zinc-500">
-                                    등록된 속성이 없습니다.
-                                  </span>
-                                ) : (
-                                    (activeTileStates[tileKey(selectedHex.col, selectedHex.row)] ?? []).map(
-                                    (entry, idx) => {
-                                      const preset = presetById.get(entry.presetId);
-                                      if (!preset) return null;
-                                      const color = normalizeHexColor(preset.color);
-                                      return (
-                                        <span
-                                          key={`${entry.presetId}-${idx}`}
-                                          className="rounded-md border border-zinc-700/70 bg-zinc-900/70 px-1.5 py-0.5"
-                                          style={{ color }}
-                                        >
-                                          {preset.name}
-                                          {preset.hasValue && entry.value != null
-                                            ? `: ${entry.value}`
-                                            : ""}
-                                        </span>
-                                      );
-                                    }
-                                  )
-                                )}
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      ) : (
-                        <form
-                          key={`${selectedMap.id}:${selectedMap.updatedAt ?? "city"}`}
-                          ref={citySettingsFormRef}
-                          className="space-y-4"
-                          onSubmit={(e) => {
-                            e.preventDefault();
-                            void handleSaveCityGlobal();
-                          }}
-                        >
-                          <div className="space-y-2">
-                            <div className="text-xs font-semibold text-zinc-300">상한 있음</div>
-                            {CAPPED_RESOURCE_IDS.map((resourceId) => (
-                              <label
-                                key={resourceId}
-                                className="grid grid-cols-[1fr_120px] items-center gap-2"
-                              >
-                                <span className="text-sm text-zinc-100">
-                                  {RESOURCE_LABELS[resourceId]}
-                                </span>
-                                <input
-                                  type="number"
-                                  min={0}
-                                  step={1}
-                                  name={`cap_${resourceId}`}
-                                  defaultValue={activeCityGlobal.caps[resourceId]}
-                                  className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-emerald-200 outline-none focus:border-zinc-600"
-                                />
-                              </label>
-                            ))}
-                          </div>
-                          <div className="space-y-1 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
-                            <div className="text-xs font-semibold text-zinc-300">상한 없음</div>
-                            <div className="text-sm text-zinc-400">
-                              {UNCAPPED_RESOURCE_IDS.map((id) => RESOURCE_LABELS[id]).join(", ")}
-                            </div>
-                          </div>
-                          <div className="space-y-2 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
-                            <div className="text-xs font-semibold text-zinc-300">날짜 설정</div>
-                            <input
-                              type="number"
-                              min={0}
-                              step={1}
-                              name="day"
-                              defaultValue={activeCityGlobal.day}
-                              className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-sky-200 outline-none focus:border-zinc-600"
-                            />
-                          </div>
-                          <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="text-xs font-semibold text-zinc-300">인구 설정</div>
-                              <div className="text-xs font-semibold text-lime-300">
-                                👥 전체 인구 {formatWithCommas(totalPopulation)} /{" "}
-                                {formatWithCommas(activeCityGlobal.populationCap)}
-                              </div>
-                            </div>
-                            <div className="space-y-2">
-                              {TRACKED_POPULATION_IDS.map((id) => (
-                                <div key={id} className="grid grid-cols-[1fr_110px_110px] items-center gap-2">
-                                  <span className="text-sm text-zinc-100">
-                                    {POPULATION_EMOJIS[id]} {POPULATION_LABELS[id]}
-                                  </span>
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    step={1}
-                                    name={`pop_${id}_available`}
-                                    defaultValue={activeCityGlobal.population[id].available ?? 0}
-                                    className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-sky-200 outline-none focus:border-zinc-600"
-                                    placeholder="가용"
-                                  />
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    step={1}
-                                    name={`pop_${id}_total`}
-                                    defaultValue={activeCityGlobal.population[id].total}
-                                    className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-lime-200 outline-none focus:border-zinc-600"
-                                    placeholder="총"
-                                  />
-                                </div>
-                              ))}
-                              <div className="grid grid-cols-[1fr_110px] items-center gap-2">
-                                <span className="text-sm text-zinc-100">
-                                  {POPULATION_EMOJIS.elderly} {POPULATION_LABELS.elderly}
-                                </span>
-                                <input
-                                  type="number"
-                                  min={0}
-                                  step={1}
-                                  name="pop_elderly_total"
-                                  defaultValue={activeCityGlobal.population.elderly.total}
-                                  className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
-                                  placeholder="총"
-                                />
-                              </div>
-                              <div className="grid grid-cols-[1fr_110px] items-center gap-2">
-                                <span className="text-sm text-zinc-100">🧱 인구 상한</span>
-                                <input
-                                  type="number"
-                                  min={0}
-                                  step={1}
-                                  name="population_cap"
-                                  defaultValue={activeCityGlobal.populationCap}
-                                  className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-lime-200 outline-none focus:border-zinc-600"
-                                  placeholder="인구 상한"
-                                />
-                              </div>
-                            </div>
-                            <div className="grid grid-cols-[1fr_110px_110px] gap-2 text-[11px] text-zinc-500">
-                              <span />
-                              <span className="px-1 text-center">가용</span>
-                                <span className="px-1 text-center">도시 내 총 인구</span>
-                              </div>
-                          </div>
-                          <button
-                            type="submit"
-                            className="w-full rounded-lg border border-emerald-700/60 bg-emerald-950/30 px-3 py-2 text-sm font-semibold text-emerald-200 hover:bg-emerald-900/40"
-                            disabled={busy}
-                          >
-                            도시 전역 설정 저장
-                          </button>
-                          <div className="space-y-2 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
-                            <div className="text-xs font-semibold text-zinc-300">일일 규칙 실행</div>
-                            <div className="grid grid-cols-[120px_1fr] gap-2">
-                              <input
-                                type="number"
-                                min={1}
-                                step={1}
-                                value={dailyRunDays}
-                                onChange={(e) => {
-                                  const raw = e.target.value.replace(/[^\d]/g, "");
-                                  if (!raw) {
-                                    setDailyRunDays("");
-                                    return;
-                                  }
-                                  const n = Math.max(1, Math.trunc(Number(raw)));
-                                  setDailyRunDays(String(n));
-                                }}
-                                className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-amber-200 outline-none focus:border-zinc-600"
-                                placeholder="일수"
-                              />
-                              <button
-                                type="button"
-                                className="h-9 rounded-lg border border-amber-700/60 bg-amber-950/30 px-3 text-sm font-semibold text-amber-200 hover:bg-amber-900/40 disabled:opacity-60"
-                                disabled={busy || !selectedMap}
-                                onClick={() => {
-                                  void handleRunDailyRules();
-                                }}
-                              >
-                                일일 규칙 실행
-                              </button>
-                            </div>
-                            {dailyRunResult ? (
-                              <div className="text-xs text-emerald-300">{dailyRunResult}</div>
-                            ) : null}
-                            {dailyRunLogs.length > 0 ? (
-                              <div className="max-h-40 overflow-auto rounded-md border border-zinc-800 bg-zinc-950/50 p-2">
-                                <div className="space-y-1">
-                                  {dailyRunLogs.map((line, idx) => (
-                                    <div key={`${idx}-${line}`} className="text-[11px] text-zinc-300">
-                                      {line}
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            ) : null}
-                          </div>
-                        </form>
-                      )}
-                    </div>
-                  ) : null}
-
-                  <div className="relative rounded-xl border border-zinc-800 bg-zinc-950/30 p-4">
-                    <div className="mb-3 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
-                      <div className="justify-self-start text-sm font-bold text-lime-300">
-                        {selectedMap.name}{" "}
-                        <span className="text-xs font-semibold text-zinc-200">
-                          [Day {String(activeCityGlobal.day ?? 0).padStart(3, "0")}]
-                        </span>
-                      </div>
-                      <div className="justify-self-center flex items-center gap-2">
-                        <label className="inline-flex items-center gap-1 rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-200 hover:border-zinc-600">
-                          <input
-                            type="checkbox"
-                            checked={showTileStatePills}
-                            onChange={(e) => setShowTileStatePills(e.target.checked)}
-                          />
-                          <span>타일 속성 표시</span>
-                        </label>
-                        <label className="inline-flex items-center gap-1 rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-200 hover:border-zinc-600">
-                          <input
-                            type="checkbox"
-                            checked={showRegionStatusPills}
-                            onChange={(e) => setShowRegionStatusPills(e.target.checked)}
-                          />
-                          <span>지역 상태 표시</span>
-                        </label>
-                      </div>
-                      <div className="justify-self-end flex items-center gap-2 text-xs text-zinc-300">
-                        <button
-                          type="button"
-                          className={[
-                            "rounded-md border px-2 py-1",
-                            viewMode === "scroll"
-                              ? "border-emerald-700/70 bg-emerald-950/30 text-emerald-200"
-                              : "border-zinc-800 text-zinc-300 hover:border-zinc-600",
-                          ].join(" ")}
-                          onClick={() => {
-                            setViewMode("scroll");
-                            setDragging(false);
-                            dragRef.current.active = false;
-                          }}
-                        >
-                          스크롤 모드
-                        </button>
-                        <button
-                          type="button"
-                          className={[
-                            "rounded-md border px-2 py-1",
-                            viewMode === "drag"
-                              ? "border-sky-700/70 bg-sky-950/30 text-sky-200"
-                              : "border-zinc-800 text-zinc-300 hover:border-zinc-600",
-                          ].join(" ")}
-                          onClick={() => setViewMode("drag")}
-                        >
-                          드래그 모드
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-md border border-zinc-800 px-2 py-1 hover:border-zinc-600"
-                          onClick={() => setZoom((prev) => Math.max(0.2, prev - 0.1))}
-                        >
-                          -
-                        </button>
-                        <span>{Math.round(zoom * 100)}%</span>
-                        <button
-                          type="button"
-                          className="rounded-md border border-zinc-800 px-2 py-1 hover:border-zinc-600"
-                          onClick={() => setZoom((prev) => Math.min(2.5, prev + 0.1))}
-                        >
-                          +
-                        </button>
-                      </div>
-                    </div>
-
-                    <ResourcePopulationOverlay
-                      activeCityGlobal={activeCityGlobal}
-                      dailyResourceDeltaById={dailyResourceDeltaById}
-                      resourceOverlayOpen={resourceOverlayOpen}
-                      populationOverlayOpen={populationOverlayOpen}
-                      resourceAdjustOpen={resourceAdjustOpen}
-                      resourceAdjustTarget={resourceAdjustTarget}
-                      resourceAdjustMode={resourceAdjustMode}
-                      resourceAdjustAmount={resourceAdjustAmount}
-                      totalPopulation={totalPopulation}
-                      busy={busy}
-                      onToggleResourceOverlay={() => setResourceOverlayOpen((prev) => !prev)}
-                      onTogglePopulationOverlay={() => setPopulationOverlayOpen((prev) => !prev)}
-                      onToggleResourceAdjust={() => setResourceAdjustOpen((prev) => !prev)}
-                      onResourceAdjustTargetChange={setResourceAdjustTarget}
-                      onResourceAdjustModeChange={setResourceAdjustMode}
-                      onResourceAdjustAmountChange={setResourceAdjustAmount}
-                      onApplyResourceAdjust={handleApplyResourceAdjust}
-                    />
-
-                    {!imageUrl ? (
-                      <div className="rounded-lg border border-dashed border-zinc-800 px-4 py-10 text-sm text-zinc-500">
-                        지도가 없습니다. 먼저 이미지를 등록해 주세요.
-                      </div>
-                    ) : (
-                      <div
-                        ref={viewportRef}
-                        className={[
-                          "relative max-h-[78vh] rounded-lg border border-zinc-800 bg-[#08090c] p-2",
-                          viewMode === "drag" ? "overflow-hidden" : "overflow-auto",
-                          viewMode === "drag" ? "select-none" : "",
-                        ].join(" ")}
-                        style={{
-                          cursor: viewMode === "drag" ? (dragging ? "grabbing" : "grab") : "default",
-                          touchAction: viewMode === "drag" ? "none" : "auto",
-                          overscrollBehavior: viewMode === "drag" ? "none" : "auto",
-                        }}
-                        onMouseDown={handleViewportMouseDown}
-                        onMouseMove={handleViewportMouseMove}
-                        onMouseUp={endDragging}
-                        onMouseLeave={endDragging}
-                        onWheelCapture={handleViewportWheel}
-                        onWheel={handleViewportWheel}
-                        onScroll={viewMode === "scroll" ? scheduleVisibleBoundsUpdate : undefined}
-                      >
-                        <div
-                          className="relative origin-top-left"
-                          style={{
-                            width: imageWidth ? `${imageWidth * zoom}px` : "100%",
-                            height: imageHeight ? `${imageHeight * zoom}px` : "auto",
-                          }}
-                        >
-                          <img
-                            src={imageUrl}
-                            alt={selectedMap.name}
-                            className="block h-full w-full object-contain"
-                            onLoad={(e) => {
-                              const img = e.currentTarget;
-                              setLoadedSize({
-                                width: img.naturalWidth,
-                                height: img.naturalHeight,
-                              });
-                              void syncLoadedImageMeta(
-                                img.naturalWidth,
-                                img.naturalHeight
-                              );
-                            }}
-                          />
-                          {imageWidth > 0 && imageHeight > 0 ? (
-                            <svg
-                              className="absolute inset-0 h-full w-full"
-                              viewBox={`0 0 ${imageWidth} ${imageHeight}`}
-                              preserveAspectRatio="none"
-                            >
-                              {polygons.map((poly) => {
-                                const active =
-                                  selectedHex?.col === poly.col &&
-                                  selectedHex?.row === poly.row;
-                                const pillCullMargin = Math.max(selectedMap.hexSize * 1.4, 90);
-                                const isPillInViewport =
-                                  !visibleImageBounds ||
-                                  (poly.cx >= visibleImageBounds.left - pillCullMargin &&
-                                    poly.cx <= visibleImageBounds.right + pillCullMargin &&
-                                    poly.cy >= visibleImageBounds.top - pillCullMargin &&
-                                    poly.cy <= visibleImageBounds.bottom + pillCullMargin);
-                                const stateBadges: Array<{ text: string; color: string }> =
-                                  showTileStatePills && isPillInViewport
-                                    ? (tileStateBadgesByKey[poly.tileKey] ?? EMPTY_STATE_BADGES)
-                                    : EMPTY_STATE_BADGES;
-                                return (
-                                  <g key={poly.key}>
-                                    <polygon
-                                      points={poly.points}
-                                      fill={
-                                        active
-                                          ? "rgba(245, 158, 11, 0.18)"
-                                          : "rgba(0,0,0,0)"
-                                      }
-                                      stroke={
-                                        active ? "rgba(251,191,36,0.92)" : "rgba(56,189,248,0.48)"
-                                      }
-                                      strokeWidth={active ? 2.2 : 1}
-                                      style={{
-                                        cursor:
-                                          viewMode === "drag"
-                                            ? dragging
-                                              ? "grabbing"
-                                              : "grab"
-                                            : "pointer",
-                                      }}
-                                      onClick={() => {
-                                        if (suppressClickRef.current) return;
-                                        setTileContextMenu(null);
-                                        setSelectedHexIfChanged(poly.col, poly.row);
-                                      }}
-                                      onContextMenu={(e) => {
-                                        if (suppressClickRef.current) return;
-                                        e.preventDefault();
-                                        setSelectedHexIfChanged(poly.col, poly.row);
-                                        setTileContextMenu({
-                                          x: e.clientX,
-                                          y: e.clientY,
-                                          col: poly.col,
-                                          row: poly.row,
-                                        });
-                                      }}
-                                    />
-                                    {showRegionStatusPills && isPillInViewport ? (
-                                      <g pointerEvents="none">
-                                        {(() => {
-                                          const hexSize = selectedMap.hexSize;
-                                          const pillH = 16;
-                                          const statW = Math.max(42, Math.round(hexSize * 0.4));
-                                          const regionState = activeTileRegionStates[poly.tileKey];
-                                          const hasSpace =
-                                            regionState?.spaceUsed != null ||
-                                            regionState?.spaceCap != null;
-                                          const hasSatisfaction =
-                                            regionState?.satisfaction != null;
-                                          const hasThreat = regionState?.threat != null;
-                                          const hasPollution = regionState?.pollution != null;
-                                          const cornerCenters = {
-                                            tl: {
-                                              x: poly.cx - hexSize * 0.36,
-                                              y: poly.cy - hexSize * 0.58,
-                                            },
-                                            tr: {
-                                              x: poly.cx + hexSize * 0.36,
-                                              y: poly.cy - hexSize * 0.58,
-                                            },
-                                            bl: {
-                                              x: poly.cx - hexSize * 0.36,
-                                              y: poly.cy + hexSize * 0.56,
-                                            },
-                                            br: {
-                                              x: poly.cx + hexSize * 0.36,
-                                              y: poly.cy + hexSize * 0.56,
-                                            },
-                                          } as const;
-                                          const metricPills: Array<{
-                                            key: string;
-                                            text: string;
-                                            color: string;
-                                            w: number;
-                                            center: keyof typeof cornerCenters;
-                                          }> = [];
-                                          if (hasSpace) {
-                                            metricPills.push({
-                                              key: "space",
-                                              text: `${regionState?.spaceUsed ?? 0} / ${regionState?.spaceCap ?? 0}`,
-                                              color: "#38bdf8",
-                                              w: statW,
-                                              center: "tl",
-                                            });
-                                          }
-                                          if (hasSatisfaction) {
-                                            metricPills.push({
-                                              key: "satisfaction",
-                                              text: `🙂 ${regionState?.satisfaction ?? 0}`,
-                                              color: "#f8fafc",
-                                              w: statW,
-                                              center: "tr",
-                                            });
-                                          }
-                                          if (hasThreat) {
-                                            metricPills.push({
-                                              key: "threat",
-                                              text: `⚠️ ${regionState?.threat ?? 0}`,
-                                              color: "#ef4444",
-                                              w: statW,
-                                              center: "bl",
-                                            });
-                                          }
-                                          if (hasPollution) {
-                                            metricPills.push({
-                                              key: "pollution",
-                                              text: `☣️ ${regionState?.pollution ?? 0}`,
-                                              color: "#c084fc",
-                                              w: statW,
-                                              center: "br",
-                                            });
-                                          }
-                                          return metricPills.map((pill) => {
-                                            const c = cornerCenters[pill.center];
-                                            const x = c.x - pill.w / 2;
-                                            const y = c.y - pillH / 2;
-                                            return (
-                                              <g key={`metric-${pill.key}`}>
-                                                <rect
-                                                  x={x}
-                                                  y={y}
-                                                  width={pill.w}
-                                                  height={pillH}
-                                                  rx={7}
-                                                  fill="rgba(0,0,0,0.58)"
-                                                  stroke={pill.color}
-                                                  strokeWidth={0.8}
-                                                />
-                                                <text
-                                                  x={c.x}
-                                                  y={c.y}
-                                                  fill={pill.color}
-                                                  textAnchor="middle"
-                                                  dominantBaseline="middle"
-                                                  style={{
-                                                    fontSize: "10px",
-                                                    fontWeight: 700,
-                                                    paintOrder: "stroke",
-                                                    stroke: "rgba(0,0,0,0.65)",
-                                                    strokeWidth: 0.8,
-                                                  }}
-                                                >
-                                                  {pill.text}
-                                                </text>
-                                              </g>
-                                            );
-                                          });
-                                        })()}
-                                      </g>
-                                    ) : null}
-                                    {showTileStatePills && isPillInViewport && stateBadges.length > 0 ? (
-                                      <g pointerEvents="none">
-                                        {(() => {
-                                          const fontSize = 11;
-                                          const pillHeight = 18;
-                                          const pillRadius = 8;
-                                          const colGap = 4;
-                                          const rowGap = 4;
-                                          const maxPerRow = 3;
-                                          const measured = stateBadges.map((badge) => ({
-                                            ...badge,
-                                            width: Math.max(
-                                              53,
-                                              Math.min(
-                                                238,
-                                                Math.round(badge.text.length * 7.75 + 18)
-                                              )
-                                            ),
-                                          }));
-                                          const rows: typeof measured[] = [];
-                                          for (let i = 0; i < measured.length; i += maxPerRow) {
-                                            rows.push(measured.slice(i, i + maxPerRow));
-                                          }
-                                          const totalHeight =
-                                            rows.length * pillHeight +
-                                            Math.max(0, rows.length - 1) * rowGap;
-                                          const top = poly.cy - totalHeight / 2;
-
-                                          return rows.map((rowBadges, rowIdx) => {
-                                            const rowWidth =
-                                              rowBadges.reduce((sum, b) => sum + b.width, 0) +
-                                              Math.max(0, rowBadges.length - 1) * colGap;
-                                            let left = poly.cx - rowWidth / 2;
-                                            const y = top + rowIdx * (pillHeight + rowGap);
-
-                                            return rowBadges.map((badge, colIdx) => {
-                                              const x = left;
-                                              left += badge.width + colGap;
-                                              return (
-                                                <g
-                                                  key={`badge-${rowIdx}-${colIdx}`}
-                                                >
-                                                  <rect
-                                                    x={x}
-                                                    y={y}
-                                                    width={badge.width}
-                                                    height={pillHeight}
-                                                    rx={pillRadius}
-                                                    fill="rgba(0,0,0,0.55)"
-                                                    stroke="rgba(255,255,255,0.12)"
-                                                    strokeWidth={0.7}
-                                                  />
-                                                  <text
-                                                    x={x + badge.width / 2}
-                                                    y={y + pillHeight / 2}
-                                                    fill={badge.color}
-                                                    textAnchor="middle"
-                                                    dominantBaseline="middle"
-                                                    style={{
-                                                      fontSize: `${fontSize}px`,
-                                                      fontWeight: 700,
-                                                      paintOrder: "stroke",
-                                                      stroke: "rgba(0,0,0,0.6)",
-                                                      strokeWidth: 0.8,
-                                                    }}
-                                                  >
-                                                    {badge.text}
-                                                  </text>
-                                                </g>
-                                              );
-                                            });
-                                          });
-                                        })()}
-                                      </g>
-                                    ) : null}
-                                  </g>
-                                );
-                              })}
-                            </svg>
-                          ) : null}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {tileContextMenu ? (
-                    <div
-                      ref={tileContextMenuRef}
-                      className="fixed z-[70] min-w-[180px] rounded-lg border border-zinc-700 bg-zinc-900/95 p-1 text-xs shadow-2xl"
-                      style={{ left: tileContextMenu.x + 8, top: tileContextMenu.y + 8 }}
-                      onMouseDown={(e) => e.stopPropagation()}
-                    >
-                      <button
-                        type="button"
-                        className="w-full rounded-md px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800"
-                        onClick={() =>
-                          handleOpenTileEditor(tileContextMenu.col, tileContextMenu.row)
-                        }
-                      >
-                        타일 속성
-                      </button>
-                      <button
-                        type="button"
-                        className="mt-1 w-full rounded-md px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800"
-                        onClick={() =>
-                          handleOpenTileRegionEditor(tileContextMenu.col, tileContextMenu.row)
-                        }
-                      >
-                        지역 상태
-                      </button>
-                      <button
-                        type="button"
-                        className="mt-1 w-full rounded-md px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800"
-                        onClick={() =>
-                          handleOpenTileBuildingEditor(tileContextMenu.col, tileContextMenu.row)
-                        }
-                      >
-                        건물 배치
-                      </button>
-                    </div>
-                  ) : null}
-
-                  <TileBuildingModal
-                    tileBuildingEditor={tileBuildingEditor}
-                    setTileBuildingEditor={setTileBuildingEditor}
-                    setTileBuildingSearchQuery={setTileBuildingSearchQuery}
-                    tileBuildingSearchInputRef={tileBuildingSearchInputRef}
-                    tileBuildingSearchTimerRef={tileBuildingSearchTimerRef}
-                    tileBuildingCreateWorkersDraftRef={tileBuildingCreateWorkersDraftRef}
-                    tileBuildingWorkersDraftByIdRef={tileBuildingWorkersDraftByIdRef}
-                    tileBuildingSearchQuery={tileBuildingSearchQuery}
-                    filteredBuildingPresetsForTile={filteredBuildingPresetsForTile}
-                    activeBuildingPresets={activeBuildingPresets}
-                    tileBuildingInstances={tileBuildingInstances}
-                    selectedTileBuildingPresetNeedsWorkers={
-                      selectedTileBuildingPresetNeedsWorkers
-                    }
-                    busy={busy}
-                    onPlaceBuilding={handlePlaceBuildingOnTile}
-                    onUpdateBuildingWorkers={handleUpdateBuildingWorkers}
-                    onDeleteBuildingOnTile={handleDeleteBuildingOnTile}
-                  />
-
-                  <TileStateModal
-                    tileEditor={tileEditor}
-                    setTileEditor={setTileEditor}
-                    presetById={presetById}
-                    activeTilePresets={activeTilePresets}
-                    normalizeHexColor={normalizeHexColor}
-                    onSave={handleTileEditorSave}
-                  />
-
-                  <TileRegionModal
-                    tileRegionEditor={tileRegionEditor}
-                    setTileRegionEditor={setTileRegionEditor}
-                    tileRegionDraftRef={tileRegionDraftRef}
-                    onSave={handleTileRegionEditorSave}
-                    busy={busy}
-                  />
-                </div>
-              </>
+              <MapModePanel ctx={mapModePanelCtx} />
             )}
           </section>
         </div>
       </div>
+      {overflowNotice ? (
+        <div
+          className="fixed inset-0 z-[170] flex items-center justify-center bg-black/60 px-4"
+          onClick={() => setOverflowNotice(null)}
+        >
+          <div
+            className="w-full max-w-xl rounded-xl border border-amber-700/60 bg-zinc-950/95 p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-amber-300">잉여 자원 환전 결과</h3>
+              <button
+                type="button"
+                className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
+                onClick={() => setOverflowNotice(null)}
+              >
+                닫기
+              </button>
+            </div>
+
+            <div className="space-y-2 text-sm text-zinc-200">
+              <div>
+                기존 소지금:{" "}
+                <span className="font-semibold text-amber-300">
+                  {formatWithCommas(overflowNotice.beforeGold)}
+                </span>
+              </div>
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3">
+                <div className="mb-2 text-xs text-zinc-400">환전 내역</div>
+                <div className="space-y-1">
+                  {overflowNotice.details.map((entry) => (
+                    <div key={entry.resourceId} className="flex items-center justify-between gap-4">
+                      <div className="text-zinc-200">
+                        {RESOURCE_EMOJIS[entry.resourceId]} {RESOURCE_LABELS[entry.resourceId]}{" "}
+                        {formatWithCommas(entry.overflowAmount)}
+                      </div>
+                      <div className="font-semibold text-amber-300">
+                        +{formatWithCommas(entry.goldGain)}G
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                총 가산 금액:{" "}
+                <span className="font-semibold text-amber-300">
+                  +{formatWithCommas(overflowNotice.totalGoldGain)}G
+                </span>
+              </div>
+              <div>
+                현재 소지금:{" "}
+                <span className="font-semibold text-emerald-300">
+                  {formatWithCommas(overflowNotice.afterGold)}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
-
-

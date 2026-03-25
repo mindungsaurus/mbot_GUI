@@ -458,6 +458,7 @@ export async function updateWorldMap(
     cityGlobal?: {
       day?: number;
       populationCap?: number;
+      warehouse?: Record<string, number>;
       values?: {
         wood?: number;
         stone?: number;
@@ -475,6 +476,13 @@ export async function updateWorldMap(
         weave?: number;
         food?: number;
       };
+      overflowToGold?: {
+        wood?: number;
+        stone?: number;
+        fabric?: number;
+        weave?: number;
+        food?: number;
+      };
       population?: {
         settlers?: { total?: number; available?: number };
         engineers?: { total?: number; available?: number };
@@ -482,6 +490,7 @@ export async function updateWorldMap(
         laborers?: { total?: number; available?: number };
         elderly?: { total?: number };
       };
+      satisfaction?: number;
     };
     tileStatePresets?: Array<{
       id: string;
@@ -501,7 +510,6 @@ export async function updateWorldMap(
       {
         spaceUsed?: number;
         spaceCap?: number;
-        satisfaction?: number;
         threat?: number;
         pollution?: number;
       }

@@ -2,9 +2,7 @@ import type { Dispatch, SetStateAction } from "react";
 import type { MapTileStateAssignment, MapTileStatePreset } from "../../types";
 
 type TileEditorState = {
-  key: string;
-  col: number;
-  row: number;
+  targets: Array<{ key: string; col: number; row: number }>;
   draft: MapTileStateAssignment[];
 };
 
@@ -26,13 +24,17 @@ export default function TileStateModal({
   onSave,
 }: Props) {
   if (!tileEditor) return null;
+  const isMulti = tileEditor.targets.length > 1;
+  const firstTarget = tileEditor.targets[0] ?? null;
 
   return (
     <div className="fixed inset-0 z-[80] bg-black/55 p-4">
       <div className="mx-auto mt-16 w-full max-w-2xl rounded-2xl border border-zinc-700 bg-zinc-950 p-4">
         <div className="mb-3 flex items-center justify-between">
           <div className="text-sm font-semibold text-zinc-100">
-            타일 속성 편집 · col {tileEditor.col}, row {tileEditor.row}
+            {isMulti
+              ? `타일 속성 부여 · ${tileEditor.targets.length}개 타일`
+              : `타일 속성 편집 · col ${firstTarget?.col ?? "-"}, row ${firstTarget?.row ?? "-"}`}
           </div>
           <button
             type="button"
@@ -46,7 +48,9 @@ export default function TileStateModal({
         <div className="mb-3 space-y-2 rounded-lg border border-zinc-800 bg-zinc-900/30 p-3">
           <div className="text-xs font-semibold text-zinc-300">현재 속성</div>
           {tileEditor.draft.length === 0 ? (
-            <div className="text-xs text-zinc-500">설정된 속성이 없습니다.</div>
+            <div className="text-xs text-zinc-500">
+              {isMulti ? "부여할 속성을 아래에서 추가해 주세요." : "설정된 속성이 없습니다."}
+            </div>
           ) : (
             tileEditor.draft.map((entry, idx) => {
               const preset = presetById.get(entry.presetId);
@@ -165,4 +169,3 @@ export default function TileStateModal({
     </div>
   );
 }
-

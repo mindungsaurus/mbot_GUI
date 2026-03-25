@@ -75,6 +75,7 @@ export const UPKEEP_POPULATION_IDS = [...ALL_POPULATION_IDS, "anyNonElderly"] as
 
 export type CappedResourceId = (typeof CAPPED_RESOURCE_IDS)[number];
 export type ResourceId = (typeof ALL_RESOURCE_IDS)[number];
+export type BuildingResourceId = ResourceId | `item:${string}`;
 
 export const RESOURCE_LABELS: Record<ResourceId, string> = {
   wood: "나무",
@@ -94,9 +95,32 @@ export const RESOURCE_EMOJIS: Record<ResourceId, string> = {
   weave: "✨",
   food: "🍽️",
   research: "📘",
-  order: "🛡️",
+  order: "⚖️",
   gold: "🪙",
 };
+
+export function isBaseResourceId(value: unknown): value is ResourceId {
+  return typeof value === "string" && (ALL_RESOURCE_IDS as readonly string[]).includes(value);
+}
+
+export function isBuildingResourceId(value: unknown): value is BuildingResourceId {
+  if (isBaseResourceId(value)) return true;
+  if (typeof value !== "string") return false;
+  if (!value.startsWith("item:")) return false;
+  return value.slice(5).trim().length > 0;
+}
+
+export function getItemNameFromBuildingResourceId(resourceId: BuildingResourceId): string | null {
+  if (typeof resourceId !== "string" || !resourceId.startsWith("item:")) return null;
+  const name = resourceId.slice(5).trim();
+  return name.length > 0 ? name : null;
+}
+
+export function getBuildingResourceLabel(resourceId: BuildingResourceId): string {
+  if (isBaseResourceId(resourceId)) return RESOURCE_LABELS[resourceId];
+  const itemName = getItemNameFromBuildingResourceId(resourceId);
+  return itemName ?? String(resourceId);
+}
 
 export const POPULATION_LABELS: Record<PopulationId, string> = {
   settlers: "정착민",
@@ -121,7 +145,7 @@ export const POPULATION_EMOJIS: Record<PopulationId, string> = {
 
 export const EMPTY_STATE_BADGES: Array<{ text: string; color: string }> = [];
 
-export type ResourceCostDraft = Partial<Record<ResourceId, string>>;
+export type ResourceCostDraft = Partial<Record<BuildingResourceId, string>>;
 export type PopulationCostDraft = Partial<Record<UpkeepPopulationId, string>>;
 export type WorkerAssignmentDraft = Record<PopulationTrackedId, string>;
 
@@ -155,7 +179,7 @@ export function createDefaultPopulationState(): CityPopulationState {
     engineers: { total: 0, available: 0 },
     scholars: { total: 0, available: 0 },
     laborers: { total: 0, available: 0 },
-    elderly: { total: 0 },
+    elderly: { total: 0, available: 0 },
   };
 }
 
@@ -178,7 +202,16 @@ export function createDefaultCityGlobalState(): CityGlobalState {
       weave: 100,
       food: 100,
     },
+    overflowToGold: {
+      wood: 0,
+      stone: 0,
+      fabric: 0,
+      weave: 0,
+      food: 0,
+    },
+    warehouse: {},
     day: 0,
+    satisfaction: 0,
     populationCap: 0,
     population: createDefaultPopulationState(),
   };
@@ -188,22 +221,47 @@ export function normalizeCityGlobalState(input?: Partial<CityGlobalState> | null
   const base = createDefaultCityGlobalState();
   const values = (input?.values ?? {}) as Partial<CityGlobalState["values"]>;
   const caps = (input?.caps ?? {}) as Partial<CityGlobalState["caps"]>;
+  const overflowToGold = (input?.overflowToGold ?? {}) as Partial<CityGlobalState["overflowToGold"]>;
+  const warehouse = (input?.warehouse ?? {}) as Record<string, unknown>;
   const population = (input?.population ?? {}) as Partial<CityGlobalState["population"]>;
   const normalizeInt = (value: unknown, fallback: number) => {
     const n = Math.trunc(Number(value));
     return Number.isFinite(n) ? Math.max(0, n) : fallback;
   };
+  const normalizePercent = (value: unknown, fallback: number) => {
+    const n = Math.trunc(Number(value));
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(0, Math.min(100, n));
+  };
   const nextPopulation = createDefaultPopulationState();
   for (const id of TRACKED_POPULATION_IDS) {
     const entry = (population[id] ?? {}) as Partial<CityPopulationState[PopulationTrackedId]>;
+    const total = normalizeInt(entry.total, 0);
+    const hasAvailable = Object.prototype.hasOwnProperty.call(entry, "available");
     nextPopulation[id] = {
-      total: normalizeInt(entry.total, 0),
-      available: normalizeInt(entry.available, 0),
+      total,
+      // 레거시 데이터 호환: available이 아예 없던 데이터는 total을 기본 가용치로 본다.
+      available: hasAvailable ? normalizeInt(entry.available, total) : total,
     };
   }
+  const elderlyEntry = (population.elderly ?? {}) as Partial<CityPopulationState["elderly"]>;
+  const elderlyTotal = normalizeInt(elderlyEntry.total, 0);
+  const hasElderlyAvailable = Object.prototype.hasOwnProperty.call(elderlyEntry, "available");
   nextPopulation.elderly = {
-    total: normalizeInt(population.elderly?.total, 0),
+    total: elderlyTotal,
+    // 레거시 데이터 호환: available이 아예 없던 데이터는 total을 기본 가용치로 본다.
+    available: hasElderlyAvailable
+      ? normalizeInt(elderlyEntry.available, elderlyTotal)
+      : elderlyTotal,
   };
+  for (const id of TRACKED_POPULATION_IDS) {
+    if ((nextPopulation[id].available ?? 0) > nextPopulation[id].total) {
+      nextPopulation[id].available = nextPopulation[id].total;
+    }
+  }
+  if ((nextPopulation.elderly.available ?? 0) > nextPopulation.elderly.total) {
+    nextPopulation.elderly.available = nextPopulation.elderly.total;
+  }
   const totalPopulation =
     TRACKED_POPULATION_IDS.reduce((sum, id) => sum + (nextPopulation[id].total ?? 0), 0) +
     (nextPopulation.elderly.total ?? 0);
@@ -211,6 +269,14 @@ export function normalizeCityGlobalState(input?: Partial<CityGlobalState> | null
     totalPopulation,
     normalizeInt(input?.populationCap, totalPopulation)
   );
+  const nextWarehouse: Record<string, number> = {};
+  for (const [rawKey, rawValue] of Object.entries(warehouse)) {
+    const itemName = String(rawKey ?? "").trim();
+    if (!itemName) continue;
+    const qty = normalizeInt(rawValue, 0);
+    if (qty <= 0) continue;
+    nextWarehouse[itemName] = qty;
+  }
   return {
     values: {
       wood: normalizeInt(values.wood, base.values.wood),
@@ -229,7 +295,16 @@ export function normalizeCityGlobalState(input?: Partial<CityGlobalState> | null
       weave: normalizeInt(caps.weave, base.caps.weave),
       food: normalizeInt(caps.food, base.caps.food),
     },
+    overflowToGold: {
+      wood: normalizeInt(overflowToGold.wood, base.overflowToGold.wood),
+      stone: normalizeInt(overflowToGold.stone, base.overflowToGold.stone),
+      fabric: normalizeInt(overflowToGold.fabric, base.overflowToGold.fabric),
+      weave: normalizeInt(overflowToGold.weave, base.overflowToGold.weave),
+      food: normalizeInt(overflowToGold.food, base.overflowToGold.food),
+    },
+    warehouse: nextWarehouse,
     day: normalizeInt(input?.day, base.day),
+    satisfaction: normalizePercent(input?.satisfaction, base.satisfaction),
     populationCap,
     population: nextPopulation,
   };
@@ -396,14 +471,12 @@ export function normalizeTileRegionStates(raw: unknown) {
     const next: MapTileRegionState = {
       spaceUsed: parseNum(cast.spaceUsed),
       spaceCap: parseNum(cast.spaceCap),
-      satisfaction: parseNum(cast.satisfaction),
       threat: parseNum(cast.threat),
       pollution: parseNum(cast.pollution),
     };
     const hasAny =
       next.spaceUsed != null ||
       next.spaceCap != null ||
-      next.satisfaction != null ||
       next.threat != null ||
       next.pollution != null;
     if (hasAny) out[key] = next;
@@ -432,16 +505,14 @@ export function normalizeExecutionAction(raw: unknown): BuildingRuleAction {
     return target === "range" ? { target, distance } : { target };
   };
   if (kind === "adjustResource") {
-    const resourceId: ResourceId =
-      typeof (cast as any)?.resourceId === "string" &&
-      ALL_RESOURCE_IDS.includes((cast as any).resourceId as ResourceId)
-        ? ((cast as any).resourceId as ResourceId)
-        : "gold";
+    const rawResourceId = (cast as any)?.resourceId;
+    const resourceId: BuildingResourceId = isBuildingResourceId(rawResourceId)
+      ? (rawResourceId as BuildingResourceId)
+      : "gold";
     return {
       kind,
       resourceId,
       delta: normalizeRuleExpr((cast as any)?.delta, 0),
-      ...normalizeActionTarget(),
     };
   }
   if (kind === "adjustResourceCap") {
@@ -455,7 +526,6 @@ export function normalizeExecutionAction(raw: unknown): BuildingRuleAction {
       kind,
       resourceId,
       delta: normalizeRuleExpr((cast as any)?.delta, 0),
-      ...normalizeActionTarget(),
     };
   }
   if (kind === "adjustPopulation") {
@@ -468,14 +538,12 @@ export function normalizeExecutionAction(raw: unknown): BuildingRuleAction {
       populationId,
       field,
       delta: normalizeRuleExpr((cast as any)?.delta, 0),
-      ...normalizeActionTarget(),
     };
   }
   if (kind === "adjustPopulationCap") {
     return {
       kind,
       delta: normalizeRuleExpr((cast as any)?.delta, 0),
-      ...normalizeActionTarget(),
     };
   }
   if (kind === "convertPopulation") {
@@ -490,7 +558,6 @@ export function normalizeExecutionAction(raw: unknown): BuildingRuleAction {
       from,
       to,
       amount: normalizeRuleExpr((cast as any)?.amount, 1),
-      ...normalizeActionTarget(),
     };
   }
   if (kind === "adjustTileRegion") {
@@ -498,7 +565,6 @@ export function normalizeExecutionAction(raw: unknown): BuildingRuleAction {
     const normalizedField: keyof MapTileRegionState =
       field === "spaceUsed" ||
       field === "spaceCap" ||
-      field === "satisfaction" ||
       field === "threat" ||
       field === "pollution"
         ? field
@@ -572,15 +638,14 @@ export function normalizePlacementRules(raw: unknown): BuildingPlacementRule[] {
       out.push({ kind: "uniquePerTile", maxCount });
       continue;
     }
-    if (kind === "tileRegionCompare") {
-      const fieldRaw = String(cast?.field ?? "").trim();
-      const field: "spaceRemaining" | "pollution" | "threat" | "satisfaction" =
-        fieldRaw === "pollution" ||
-        fieldRaw === "threat" ||
-        fieldRaw === "satisfaction" ||
-        fieldRaw === "spaceRemaining"
-          ? (fieldRaw as "spaceRemaining" | "pollution" | "threat" | "satisfaction")
-          : "spaceRemaining";
+  if (kind === "tileRegionCompare") {
+    const fieldRaw = String(cast?.field ?? "").trim();
+    const field: "spaceRemaining" | "pollution" | "threat" =
+      fieldRaw === "pollution" ||
+      fieldRaw === "threat" ||
+      fieldRaw === "spaceRemaining"
+        ? (fieldRaw as "spaceRemaining" | "pollution" | "threat")
+        : "spaceRemaining";
       const opRaw = String(cast?.op ?? "").trim();
       const op: BuildingRuleComparisonOp =
         opRaw === "eq" ||
@@ -599,6 +664,7 @@ export function normalizePlacementRules(raw: unknown): BuildingPlacementRule[] {
       const tagPresetId = String(cast?.tagPresetId ?? "").trim();
       if (!tagPresetId) continue;
       const distance = Math.max(0, Math.trunc(Number(cast?.distance ?? 1) || 1));
+      const minCount = Math.max(1, Math.trunc(Number(cast?.minCount ?? 1) || 1));
       const negate = !!cast?.negate;
       const repeat = !!cast?.repeat;
       const valueModeRaw = String(cast?.valueMode ?? "").trim();
@@ -608,6 +674,7 @@ export function normalizePlacementRules(raw: unknown): BuildingPlacementRule[] {
         kind: "requireTagInRange",
         tagPresetId,
         distance,
+        minCount,
         negate,
         repeat,
         ...(valueMode ? { valueMode } : {}),
@@ -619,9 +686,10 @@ export function normalizePlacementRules(raw: unknown): BuildingPlacementRule[] {
       const presetId = String(cast?.presetId ?? "").trim();
       if (!presetId) continue;
       const distance = Math.max(0, Math.trunc(Number(cast?.distance ?? 1) || 1));
+      const minCount = Math.max(1, Math.trunc(Number(cast?.minCount ?? 1) || 1));
       const negate = !!cast?.negate;
       const repeat = !!cast?.repeat;
-      out.push({ kind: "requireBuildingInRange", presetId, distance, negate, repeat });
+      out.push({ kind: "requireBuildingInRange", presetId, distance, minCount, negate, repeat });
       continue;
     }
     // Legacy compatibility
@@ -782,6 +850,55 @@ export function readAssignedWorkersByTypeFromInstanceMeta(
   if (total <= 0) {
     const legacy = readAssignedWorkersFromInstanceMeta(meta);
     if (legacy > 0) out.laborers = legacy;
+  }
+  return out;
+}
+
+export function convertUniquePerTileRulesForPersist(
+  rules: BuildingPlacementRule[] | undefined,
+  presetId: string | null | undefined
+): BuildingPlacementRule[] {
+  const normalized = normalizePlacementRules(rules);
+  const targetPresetId = String(presetId ?? "").trim();
+  if (!targetPresetId) return normalized;
+  return normalized.map((rule) => {
+    if (rule.kind !== "uniquePerTile") return rule;
+    const maxCount = Math.max(1, safeInt(rule.maxCount, 1));
+    return {
+      kind: "requireBuildingInRange",
+      presetId: targetPresetId,
+      distance: 0,
+      minCount: maxCount + 1,
+      negate: true,
+      repeat: false,
+    };
+  });
+}
+
+export function readUpkeepAnyNonElderlyByTypeFromInstanceMeta(
+  meta: unknown
+): Record<PopulationTrackedId, number> {
+  const root = (meta && typeof meta === "object" ? (meta as Record<string, unknown>) : {}) ?? {};
+  const buildMeta =
+    root.buildMeta && typeof root.buildMeta === "object"
+      ? (root.buildMeta as Record<string, unknown>)
+      : {};
+  const byTypeRaw =
+    buildMeta.upkeepAnyNonElderlyByType &&
+    typeof buildMeta.upkeepAnyNonElderlyByType === "object"
+      ? (buildMeta.upkeepAnyNonElderlyByType as Record<string, unknown>)
+      : root.upkeepAnyNonElderlyByType && typeof root.upkeepAnyNonElderlyByType === "object"
+        ? (root.upkeepAnyNonElderlyByType as Record<string, unknown>)
+        : {};
+  const out: Record<PopulationTrackedId, number> = {
+    settlers: 0,
+    engineers: 0,
+    scholars: 0,
+    laborers: 0,
+  };
+  for (const id of TRACKED_POPULATION_IDS) {
+    const parsed = Math.trunc(Number(byTypeRaw[id] ?? 0));
+    out[id] = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
   }
   return out;
 }
@@ -974,7 +1091,14 @@ export function getTileMetricValue(
 export function evalRuleExpr(ctx: RuleEvalContext, expr: BuildingRuleExpr | undefined): number {
   if (!expr) return 0;
   if (expr.kind === "const") return Number.isFinite(expr.value) ? expr.value : 0;
-  if (expr.kind === "resource") return safeInt(ctx.cityGlobal.values[expr.resourceId], 0);
+  if (expr.kind === "resource") {
+    if (isBaseResourceId(expr.resourceId)) {
+      return safeInt(ctx.cityGlobal.values[expr.resourceId], 0);
+    }
+    const itemName = getItemNameFromBuildingResourceId(expr.resourceId);
+    if (!itemName) return 0;
+    return safeInt(ctx.cityGlobal.warehouse?.[itemName], 0);
+  }
   if (expr.kind === "population") {
     const entry = ctx.cityGlobal.population[expr.populationId];
     if (!entry) return 0;
@@ -1154,6 +1278,24 @@ export function toNumberRecordFromDraft<T extends string>(
   return out;
 }
 
+export function toNumberRecordFromResourceDraft(
+  source: ResourceCostDraft,
+  allowZero = false
+): Partial<Record<BuildingResourceId, number>> {
+  const out: Partial<Record<BuildingResourceId, number>> = {};
+  for (const [rawId, rawValue] of Object.entries(source ?? {})) {
+    const id = String(rawId ?? "").trim();
+    if (!isBuildingResourceId(id)) continue;
+    const text = String(rawValue ?? "").trim();
+    if (!text) continue;
+    const n = toNonNegativeInt(text);
+    if (n == null) continue;
+    if (!allowZero && n === 0) continue;
+    out[id] = n;
+  }
+  return out;
+}
+
 export function toStringRecordFromNumbers<T extends string>(
   ids: readonly T[],
   source: Partial<Record<string, number>> | undefined
@@ -1162,6 +1304,19 @@ export function toStringRecordFromNumbers<T extends string>(
   for (const id of ids) {
     const n = Number(source?.[id]);
     out[id] = Number.isFinite(n) ? String(Math.max(0, Math.trunc(n))) : "";
+  }
+  return out;
+}
+
+export function toResourceCostDraftFromNumbers(
+  source: Partial<Record<string, number>> | undefined
+): ResourceCostDraft {
+  const out = createEmptyResourceCostDraft();
+  if (!source || typeof source !== "object") return out;
+  for (const [rawId, rawValue] of Object.entries(source)) {
+    if (!isBuildingResourceId(rawId)) continue;
+    const n = Number(rawValue);
+    out[rawId] = Number.isFinite(n) ? String(Math.max(0, Math.trunc(n))) : "";
   }
   return out;
 }
@@ -1182,8 +1337,8 @@ export function buildDraftFromPreset(row: WorldMapBuildingPresetRow): BuildingDr
     space: row.space == null ? "" : String(row.space),
     description: row.description ?? "",
     placementRules: normalizePlacementRules(row.placementRules),
-    buildCost: toStringRecordFromNumbers(BUILDING_PRESET_RESOURCE_IDS, row.buildCost),
-    upkeepResources: toStringRecordFromNumbers(BUILDING_PRESET_RESOURCE_IDS, row.upkeep?.resources),
+    buildCost: toResourceCostDraftFromNumbers(row.buildCost),
+    upkeepResources: toResourceCostDraftFromNumbers(row.upkeep?.resources),
     upkeepPopulation: toStringRecordFromNumbers(UPKEEP_POPULATION_IDS, row.upkeep?.population),
     onBuild: normalizeExecutionRules(row.effects?.onBuild, false),
     daily: normalizeExecutionRules(row.effects?.daily, true),
