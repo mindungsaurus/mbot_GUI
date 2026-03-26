@@ -116,14 +116,16 @@ export default function MapCanvas({ ctx }: Props) {
                     onClick={(e) => {
                       if (suppressClickRef.current) return;
                       setTileContextMenu(null);
-                      setSelectedHexIfChanged(poly.col, poly.row, e.ctrlKey || e.shiftKey);
+                      const withModifier = e.ctrlKey || e.shiftKey;
+                      setSelectedHexIfChanged(poly.col, poly.row, withModifier, withModifier);
                     }}
                     onContextMenu={(e) => {
                       if (suppressClickRef.current) return;
                       e.preventDefault();
+                      const withModifier = e.ctrlKey || e.shiftKey;
                       const keepMulti =
-                        e.ctrlKey || e.shiftKey || (selectedHexKeySet?.has?.(poly.tileKey) ?? false);
-                      setSelectedHexIfChanged(poly.col, poly.row, keepMulti);
+                        withModifier || (selectedHexKeySet?.has?.(poly.tileKey) ?? false);
+                      setSelectedHexIfChanged(poly.col, poly.row, keepMulti, withModifier);
                       setTileContextMenu({
                         x: e.clientX,
                         y: e.clientY,

@@ -2706,12 +2706,39 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   };
 
   const setSelectedHexIfChanged = useCallback(
-    (col: number, row: number, additive?: boolean) => {
-      setSelectedHex((prev) => (prev && prev.col === col && prev.row === row ? prev : { col, row }));
+    (col: number, row: number, additive?: boolean, toggleSelected = false) => {
       setSelectedHexes((prev) => {
-        if (!additive) return [{ col, row }];
-        if (prev.some((entry) => entry.col === col && entry.row === row)) return prev;
-        return [...prev, { col, row }];
+        let next: Array<{ col: number; row: number }>;
+        if (!additive) {
+          next = [{ col, row }];
+        } else {
+          const existingIndex = prev.findIndex((entry) => entry.col === col && entry.row === row);
+          if (existingIndex >= 0) {
+            if (!toggleSelected) {
+              next = prev;
+            } else {
+              next = prev.filter((_, idx) => idx !== existingIndex);
+            }
+          } else {
+            next = [...prev, { col, row }];
+          }
+        }
+
+        setSelectedHex((prevSelected) => {
+          if (next.length === 0) return null;
+          if (!additive) return { col, row };
+          if (next.some((entry) => entry.col === col && entry.row === row)) return { col, row };
+          if (
+            prevSelected &&
+            next.some((entry) => entry.col === prevSelected.col && entry.row === prevSelected.row)
+          ) {
+            return prevSelected;
+          }
+          const fallback = next[next.length - 1];
+          return fallback ? { col: fallback.col, row: fallback.row } : null;
+        });
+
+        return next;
       });
     },
     []
