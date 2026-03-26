@@ -1,15 +1,20 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createWorldMapBuildingInstance,
-  createWorldMapBuildingPreset,
+  createSharedWorldMapBuildingPreset,
+  createSharedWorldMapTilePreset,
   createWorldMap,
   addInventoryItem,
   getWorldMap,
   deleteWorldMapBuildingInstance,
   deleteWorldMapBuildingPreset,
+  deleteSharedWorldMapBuildingPreset,
+  deleteSharedWorldMapTilePreset,
   deleteWorldMap,
   listWorldMapBuildingInstances,
   listWorldMapBuildingPresets,
+  listSharedWorldMapBuildingPresets,
+  listSharedWorldMapTilePresets,
   listWorldMaps,
   runWorldMapDaily,
   listInventory,
@@ -17,6 +22,7 @@ import {
   useInventoryItem,
   updateWorldMapBuildingInstance,
   updateWorldMapBuildingPreset,
+  updateSharedWorldMapBuildingPreset,
   updateWorldMap,
   uploadWorldMapImage,
 } from "./api";
@@ -115,7 +121,6 @@ import {
   sumAssignedWorkersByType,
   getInstanceBuildStatus,
   createZeroWorkersByType,
-  makeLocalId,
   formatWithCommas,
   roundTo2,
   safeInt,
@@ -176,6 +181,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     null
   );
   const [tilePresetsByMap, setTilePresetsByMap] = useState<TilePresetsByMap>({});
+  const [sharedTilePresets, setSharedTilePresets] = useState<MapTileStatePreset[]>([]);
   const [tileStatesByMap, setTileStatesByMap] = useState<TileStatesByMap>({});
   const [tileRegionStatesByMap, setTileRegionStatesByMap] = useState<TileRegionStatesByMap>({});
   const [buildingPresetsByMap, setBuildingPresetsByMap] = useState<BuildingPresetsByMap>({});
@@ -262,9 +268,13 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setBusy(true);
     setErr(null);
     try {
-      const res = await listWorldMaps();
+      const [res, sharedTileRows] = await Promise.all([
+        listWorldMaps(),
+        listSharedWorldMapTilePresets().catch(() => []),
+      ]);
       const items = Array.isArray(res) ? res : [];
       setMaps(items);
+      setSharedTilePresets(normalizeTilePresets(Array.isArray(sharedTileRows) ? sharedTileRows : []));
       setTilePresetsByMap(() => {
         const next: TilePresetsByMap = {};
         for (const entry of items) {
@@ -429,6 +439,12 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       }
       await loadBuildingPresetsForMap(mapId);
       await loadBuildingInstancesForMap(mapId);
+      try {
+        const sharedRows = await listSharedWorldMapTilePresets();
+        setSharedTilePresets(normalizeTilePresets(sharedRows));
+      } catch {
+        // ignore
+      }
     },
     [loadBuildingInstancesForMap, loadBuildingPresetsForMap]
   );
@@ -509,10 +525,30 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     () => (selectedMapId ? tileStatesByMap[selectedMapId] ?? {} : {}),
     [selectedMapId, tileStatesByMap]
   );
-  const activeTilePresets = useMemo(
+  const activeLocalTilePresets = useMemo(
     () => (selectedMapId ? tilePresetsByMap[selectedMapId] ?? [] : []),
     [selectedMapId, tilePresetsByMap]
   );
+  const activeTilePresets = useMemo(() => {
+    const next: MapTileStatePreset[] = [];
+    const seenById = new Set<string>();
+    const seenByName = new Set<string>();
+
+    for (const preset of sharedTilePresets) {
+      next.push(preset);
+      seenById.add(preset.id);
+      seenByName.add(String(preset.name ?? "").trim().toLowerCase());
+    }
+
+    for (const preset of activeLocalTilePresets) {
+      const nameKey = String(preset.name ?? "").trim().toLowerCase();
+      if (seenById.has(preset.id) || seenByName.has(nameKey)) continue;
+      next.push(preset);
+      seenById.add(preset.id);
+      seenByName.add(nameKey);
+    }
+    return next;
+  }, [activeLocalTilePresets, sharedTilePresets]);
   const activeTileRegionStates = useMemo(
     () => (selectedMapId ? tileRegionStatesByMap[selectedMapId] ?? {} : {}),
     [selectedMapId, tileRegionStatesByMap]
@@ -525,6 +561,14 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     () => (selectedMapId ? buildingInstancesByMap[selectedMapId] ?? [] : []),
     [selectedMapId, buildingInstancesByMap]
   );
+  const normalizePresetKeyPart = (value: unknown) =>
+    String(value ?? "")
+      .trim()
+      .toLowerCase();
+  const getTilePresetNameKey = (preset: Pick<MapTileStatePreset, "name">) =>
+    normalizePresetKeyPart(preset.name);
+  const getBuildingPresetSharedKey = (preset: Pick<WorldMapBuildingPresetRow, "name" | "tier">) =>
+    `${normalizePresetKeyPart(preset.name)}::${normalizePresetKeyPart(preset.tier ?? "")}`;
   const selectedHexKeySet = useMemo(
     () => new Set(selectedHexes.map((hex) => tileKey(hex.col, hex.row))),
     [selectedHexes]
@@ -1752,11 +1796,6 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setTileStatesByMap((prev) => ({ ...prev, [selectedMapId]: next }));
   };
 
-  const setPresetsForCurrentMap = (next: MapTileStatePreset[]) => {
-    if (!selectedMapId) return;
-    setTilePresetsByMap((prev) => ({ ...prev, [selectedMapId]: next }));
-  };
-
   const setRegionStatesForCurrentMap = (next: Record<string, MapTileRegionState>) => {
     if (!selectedMapId) return;
     setTileRegionStatesByMap((prev) => ({ ...prev, [selectedMapId]: next }));
@@ -1797,23 +1836,27 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       setErr("프리셋 이름을 입력해 주세요.");
       return;
     }
-    const next: MapTileStatePreset = {
-      id: makeLocalId(),
-      name,
-      color: normalizeHexColor(presetDraftColorHex),
-      hasValue: presetDraftHasValue,
-    };
-    const nextPresets = [...activeTilePresets, next];
+    const color = normalizeHexColor(presetDraftColorHex);
+    const hasValue = presetDraftHasValue;
+    const nameKey = getTilePresetNameKey({ name });
+    if (sharedTilePresets.some((preset) => getTilePresetNameKey(preset) === nameKey)) {
+      setErr("동일한 이름의 타일 속성 프리셋이 이미 존재합니다.");
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
-      setPresetsForCurrentMap(nextPresets);
-      await persistCurrentMapTileData(nextPresets, activeTileStates, activeTileRegionStates);
+      await createSharedWorldMapTilePreset({
+        name,
+        color,
+        hasValue,
+      });
+      const latestShared = await listSharedWorldMapTilePresets();
+      setSharedTilePresets(normalizeTilePresets(latestShared));
       setPresetDraftName("");
       setPresetDraftHasValue(false);
     } catch (e: any) {
       setErr(String(e?.message ?? e));
-      await refreshCurrentMapOnly(selectedMap.id);
     } finally {
       setBusy(false);
     }
@@ -1832,12 +1875,6 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     if (!target) return;
     const ok = window.confirm(`프리셋을 삭제합니다: ${target.name}`);
     if (!ok) return;
-    const nextPresets = activeTilePresets.filter((entry) => entry.id !== presetId);
-    const nextStates: Record<string, MapTileStateAssignment[]> = {};
-    for (const [key, values] of Object.entries(activeTileStates)) {
-      const filtered = values.filter((entry) => entry.presetId !== presetId);
-      if (filtered.length > 0) nextStates[key] = filtered;
-    }
     setTileEditor((prev) =>
       prev
         ? {
@@ -1849,12 +1886,31 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setBusy(true);
     setErr(null);
     try {
-      setPresetsForCurrentMap(nextPresets);
-      setStatesForCurrentMap(nextStates);
-      await persistCurrentMapTileData(nextPresets, nextStates, activeTileRegionStates);
+      const isSharedTarget = sharedTilePresets.some((preset) => preset.id === presetId);
+      if (isSharedTarget) {
+        await deleteSharedWorldMapTilePreset(presetId);
+        const latestShared = await listSharedWorldMapTilePresets();
+        setSharedTilePresets(normalizeTilePresets(latestShared));
+      } else if (selectedMap) {
+        const nextPresets = activeLocalTilePresets.filter((preset) => preset.id !== presetId);
+        const nextStates: Record<string, MapTileStateAssignment[]> = {};
+        for (const [key, values] of Object.entries(activeTileStates)) {
+          const filtered = values.filter((state) => state.presetId !== presetId);
+          if (filtered.length > 0) nextStates[key] = filtered;
+        }
+        await updateWorldMap(selectedMap.id, {
+          tileStatePresets: normalizeTilePresets(nextPresets),
+          tileStateAssignments: nextStates,
+          tileRegionStates: activeTileRegionStates,
+        });
+        setTilePresetsByMap((prev) => ({ ...prev, [selectedMap.id]: nextPresets }));
+        setTileStatesByMap((prev) => ({ ...prev, [selectedMap.id]: nextStates }));
+      }
+      if (selectedMap) {
+        await refreshCurrentMapOnly(selectedMap.id);
+      }
     } catch (e: any) {
       setErr(String(e?.message ?? e));
-      await refreshCurrentMapOnly(selectedMap.id);
     } finally {
       setBusy(false);
     }
@@ -2261,37 +2317,55 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       },
     };
 
+    const sourcePreset =
+      buildingDraft.id != null
+        ? activeBuildingPresets.find((entry) => entry.id === buildingDraft.id) ?? null
+        : null;
+    const isSharedPreset = sourcePreset ? sourcePreset.mapId == null : true;
+
     setBusy(true);
     setErr(null);
     try {
-      const savedInitial = buildingDraft.id
-        ? await updateWorldMapBuildingPreset(selectedMap.id, buildingDraft.id, payload)
-        : await createWorldMapBuildingPreset(selectedMap.id, payload);
-      const createdPresetId = String(savedInitial?.id ?? "").trim();
-      const saved =
-        !buildingDraft.id && hasUniquePerTileRule && createdPresetId
-          ? await updateWorldMapBuildingPreset(selectedMap.id, createdPresetId, {
-              placementRules: convertUniquePerTileRulesForPersist(
-                buildingDraft.placementRules,
-                createdPresetId
-              ),
-            })
-          : savedInitial;
-      const normalizedSaved = normalizeBuildingPresets([saved])[0];
-      if (!normalizedSaved) throw new Error("건물 프리셋 저장 결과를 확인할 수 없습니다.");
-      setBuildingPresetsByMap((prev) => {
-        const base = prev[selectedMap.id] ?? [];
-        const idx = base.findIndex((entry) => entry.id === normalizedSaved.id);
-        const next =
-          idx >= 0
-            ? base.map((entry, i) => (i === idx ? normalizedSaved : entry))
-            : [...base, normalizedSaved];
-        return { ...prev, [selectedMap.id]: next };
-      });
-      setBuildingDraft(buildDraftFromPreset(normalizedSaved));
+      const savedInitial =
+        sourcePreset && buildingDraft.id
+          ? isSharedPreset
+            ? await updateSharedWorldMapBuildingPreset(sourcePreset.id, payload)
+            : await updateWorldMapBuildingPreset(
+                sourcePreset.mapId ?? selectedMap.id,
+                sourcePreset.id,
+                payload
+              )
+          : await createSharedWorldMapBuildingPreset(payload);
+      const savedId = String(savedInitial?.id ?? "").trim();
+      if (hasUniquePerTileRule && savedId) {
+        const fixedPlacementRules = convertUniquePerTileRulesForPersist(
+          buildingDraft.placementRules,
+          savedId
+        );
+        if (sourcePreset && buildingDraft.id && !isSharedPreset) {
+          await updateWorldMapBuildingPreset(sourcePreset.mapId ?? selectedMap.id, sourcePreset.id, {
+            placementRules: fixedPlacementRules,
+          });
+        } else {
+          await updateSharedWorldMapBuildingPreset(savedId, {
+            placementRules: fixedPlacementRules,
+          });
+        }
+      }
+      await loadMaps(selectedMap.id);
+      const latestSelectedRows = normalizeBuildingPresets(
+        await listSharedWorldMapBuildingPresets()
+      );
+      const latestSaved =
+        latestSelectedRows.find(
+          (entry) =>
+            getBuildingPresetSharedKey(entry) ===
+            getBuildingPresetSharedKey({ name, tier: buildingDraft.tier })
+        ) ?? null;
+      if (latestSaved) setBuildingDraft(buildDraftFromPreset(latestSaved));
+      else resetBuildingDraft();
     } catch (e: any) {
       setErr(String(e?.message ?? e));
-      await loadBuildingPresetsForMap(selectedMap.id);
     } finally {
       setBusy(false);
     }
@@ -2313,15 +2387,15 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setBusy(true);
     setErr(null);
     try {
-      await deleteWorldMapBuildingPreset(selectedMap.id, presetId);
-      setBuildingPresetsByMap((prev) => ({
-        ...prev,
-        [selectedMap.id]: (prev[selectedMap.id] ?? []).filter((entry) => entry.id !== presetId),
-      }));
+      if (target.mapId == null) {
+        await deleteSharedWorldMapBuildingPreset(presetId);
+      } else {
+        await deleteWorldMapBuildingPreset(target.mapId, presetId);
+      }
+      await loadMaps(selectedMap.id);
       if (buildingDraft.id === presetId) resetBuildingDraft();
     } catch (e: any) {
       setErr(String(e?.message ?? e));
-      await loadBuildingPresetsForMap(selectedMap.id);
     } finally {
       setBusy(false);
     }
@@ -2412,7 +2486,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setErr(null);
     try {
       setStatesForCurrentMap(nextStates);
-      await persistCurrentMapTileData(activeTilePresets, nextStates, activeTileRegionStates);
+      await persistCurrentMapTileData(activeLocalTilePresets, nextStates, activeTileRegionStates);
       setTileEditor(null);
     } catch (e: any) {
       setErr(String(e?.message ?? e));
@@ -2790,7 +2864,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setErr(null);
     try {
       setRegionStatesForCurrentMap(nextRegionStates);
-      await persistCurrentMapTileData(activeTilePresets, activeTileStates, nextRegionStates);
+      await persistCurrentMapTileData(activeLocalTilePresets, activeTileStates, nextRegionStates);
       setTileRegionEditor(null);
       tileRegionDraftRef.current = null;
     } catch (e: any) {

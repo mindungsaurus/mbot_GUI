@@ -728,7 +728,7 @@ export function normalizeBuildingPresets(raw: unknown): WorldMapBuildingPresetRo
     seen.add(id);
     out.push({
       id,
-      mapId: String(cast?.mapId ?? "").trim(),
+      mapId: String(cast?.mapId ?? "").trim() || null,
       name,
       color: normalizeHexColor(cast?.color, "#eab308"),
       tier: String(cast?.tier ?? "").trim() || undefined,

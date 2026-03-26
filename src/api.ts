@@ -569,6 +569,132 @@ export async function listWorldMapBuildingPresets(mapId: string) {
   return res.json();
 }
 
+export async function listSharedWorldMapTilePresets() {
+  const res = await fetch(`${API_BASE}/world-maps/shared/tile-presets`, {
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createSharedWorldMapTilePreset(body: {
+  name?: string;
+  color?: string;
+  hasValue?: boolean;
+}) {
+  const res = await fetch(`${API_BASE}/world-maps/shared/tile-presets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateSharedWorldMapTilePreset(
+  presetId: string,
+  body: {
+    name?: string;
+    color?: string;
+    hasValue?: boolean;
+  }
+) {
+  const res = await fetch(`${API_BASE}/world-maps/shared/tile-presets/${presetId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteSharedWorldMapTilePreset(presetId: string) {
+  const res = await fetch(`${API_BASE}/world-maps/shared/tile-presets/${presetId}`, {
+    method: "DELETE",
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listSharedWorldMapBuildingPresets() {
+  const res = await fetch(`${API_BASE}/world-maps/shared/building-presets`, {
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createSharedWorldMapBuildingPreset(body: {
+  name?: string;
+  color?: string;
+  tier?: string;
+  effort?: number | null;
+  space?: number | null;
+  description?: string | null;
+  placementRules?: Array<Record<string, unknown>> | null;
+  buildCost?: Record<string, number> | null;
+  researchCost?: Record<string, number> | null;
+  upkeep?: {
+    resources?: Record<string, number>;
+    population?: Record<string, number>;
+  } | null;
+  effects?: {
+    onBuild?: Array<Record<string, unknown>>;
+    daily?: Array<Record<string, unknown>>;
+    onRemove?: Array<Record<string, unknown>>;
+  } | null;
+}) {
+  const res = await fetch(`${API_BASE}/world-maps/shared/building-presets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateSharedWorldMapBuildingPreset(
+  presetId: string,
+  body: {
+    name?: string;
+    color?: string;
+    tier?: string;
+    effort?: number | null;
+    space?: number | null;
+    description?: string | null;
+    placementRules?: Array<Record<string, unknown>> | null;
+    buildCost?: Record<string, number> | null;
+    researchCost?: Record<string, number> | null;
+    upkeep?: {
+      resources?: Record<string, number>;
+      population?: Record<string, number>;
+    } | null;
+    effects?: {
+      onBuild?: Array<Record<string, unknown>>;
+      daily?: Array<Record<string, unknown>>;
+      onRemove?: Array<Record<string, unknown>>;
+    } | null;
+  }
+) {
+  const res = await fetch(`${API_BASE}/world-maps/shared/building-presets/${presetId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteSharedWorldMapBuildingPreset(presetId: string) {
+  const res = await fetch(`${API_BASE}/world-maps/shared/building-presets/${presetId}`, {
+    method: "DELETE",
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function createWorldMapBuildingPreset(
   mapId: string,
   body: {
