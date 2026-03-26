@@ -143,6 +143,28 @@ import MapPresetsPanel from "./world-map/components/MapPresetsPanel";
 import MapModePanel from "./world-map/components/MapModePanel";
 import WorldMapHeaderBar from "./world-map/components/WorldMapHeaderBar";
 
+const normalizePresetKeyPart = (value: unknown) =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase();
+
+const getBuildingPresetMergeKey = (preset: Pick<WorldMapBuildingPresetRow, "id" | "name" | "tier">) => {
+  const nameKey = normalizePresetKeyPart(preset.name);
+  const tierKey = normalizePresetKeyPart(preset.tier ?? "");
+  if (nameKey) return `${nameKey}::${tierKey}`;
+  return `id:${String(preset.id ?? "").trim()}`;
+};
+
+const mergeSharedAndLocalBuildingPresets = (
+  sharedRows: WorldMapBuildingPresetRow[],
+  localRows: WorldMapBuildingPresetRow[]
+) => {
+  const merged = new Map<string, WorldMapBuildingPresetRow>();
+  for (const row of sharedRows) merged.set(getBuildingPresetMergeKey(row), row);
+  for (const row of localRows) merged.set(getBuildingPresetMergeKey(row), row);
+  return Array.from(merged.values());
+};
+
 export default function WorldMapManager({ authUser, mode = "map", onBack }: Props) {
   const isAdmin = !!authUser.isAdmin;
   const isPresetMode = mode === "presets";
@@ -268,11 +290,15 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setBusy(true);
     setErr(null);
     try {
-      const [res, sharedTileRows] = await Promise.all([
+      const [res, sharedTileRows, sharedBuildingRows] = await Promise.all([
         listWorldMaps(),
         listSharedWorldMapTilePresets().catch(() => []),
+        listSharedWorldMapBuildingPresets().catch(() => []),
       ]);
       const items = Array.isArray(res) ? res : [];
+      const normalizedSharedBuildingPresets = normalizeBuildingPresets(
+        Array.isArray(sharedBuildingRows) ? sharedBuildingRows : []
+      );
       setMaps(items);
       setSharedTilePresets(normalizeTilePresets(Array.isArray(sharedTileRows) ? sharedTileRows : []));
       setTilePresetsByMap(() => {
@@ -304,7 +330,10 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         const next: BuildingPresetsByMap = {};
         for (const entry of items) {
           if (!entry?.id) continue;
-          next[entry.id] = normalizeBuildingPresets(entry.buildingPresetRows ?? []);
+          next[entry.id] = mergeSharedAndLocalBuildingPresets(
+            normalizedSharedBuildingPresets,
+            normalizeBuildingPresets(entry.buildingPresetRows ?? [])
+          );
         }
         return next;
       });
@@ -362,8 +391,14 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   const loadBuildingPresetsForMap = useCallback(
     async (mapId: string) => {
       try {
-        const rows = await listWorldMapBuildingPresets(mapId);
-        const normalized = normalizeBuildingPresets(rows);
+        const [rows, sharedRows] = await Promise.all([
+          listWorldMapBuildingPresets(mapId),
+          listSharedWorldMapBuildingPresets().catch(() => []),
+        ]);
+        const normalized = mergeSharedAndLocalBuildingPresets(
+          normalizeBuildingPresets(Array.isArray(sharedRows) ? sharedRows : []),
+          normalizeBuildingPresets(rows)
+        );
         setBuildingPresetsByMap((prev) => ({ ...prev, [mapId]: normalized }));
       } catch (e: any) {
         setErr(String(e?.message ?? e));
@@ -390,6 +425,14 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       const latest = await getWorldMap(mapId);
       if (!latest?.id) return;
       const latestAny = latest as any;
+      let latestSharedBuildingRows: WorldMapBuildingPresetRow[] = [];
+      try {
+        latestSharedBuildingRows = normalizeBuildingPresets(
+          await listSharedWorldMapBuildingPresets()
+        );
+      } catch {
+        latestSharedBuildingRows = [];
+      }
       setMaps((prev) => {
         const has = prev.some((entry) => entry.id === latest.id);
         if (!has) return [...prev, latest];
@@ -424,8 +467,11 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       if (Object.prototype.hasOwnProperty.call(latestAny, "buildingPresetRows")) {
         setBuildingPresetsByMap((prev) => ({
           ...prev,
-          [latest.id]: normalizeBuildingPresets(
-            Array.isArray(latestAny.buildingPresetRows) ? latestAny.buildingPresetRows : []
+          [latest.id]: mergeSharedAndLocalBuildingPresets(
+            latestSharedBuildingRows,
+            normalizeBuildingPresets(
+              Array.isArray(latestAny.buildingPresetRows) ? latestAny.buildingPresetRows : []
+            )
           ),
         }));
       }
@@ -440,8 +486,18 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       await loadBuildingPresetsForMap(mapId);
       await loadBuildingInstancesForMap(mapId);
       try {
-        const sharedRows = await listSharedWorldMapTilePresets();
-        setSharedTilePresets(normalizeTilePresets(sharedRows));
+        const [sharedTileRows, sharedBuildingRows] = await Promise.all([
+          listSharedWorldMapTilePresets(),
+          listSharedWorldMapBuildingPresets().catch(() => []),
+        ]);
+        setSharedTilePresets(normalizeTilePresets(sharedTileRows));
+        setBuildingPresetsByMap((prev) => ({
+          ...prev,
+          [mapId]: mergeSharedAndLocalBuildingPresets(
+            normalizeBuildingPresets(Array.isArray(sharedBuildingRows) ? sharedBuildingRows : []),
+            prev[mapId] ?? []
+          ),
+        }));
       } catch {
         // ignore
       }
@@ -561,10 +617,6 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     () => (selectedMapId ? buildingInstancesByMap[selectedMapId] ?? [] : []),
     [selectedMapId, buildingInstancesByMap]
   );
-  const normalizePresetKeyPart = (value: unknown) =>
-    String(value ?? "")
-      .trim()
-      .toLowerCase();
   const getTilePresetNameKey = (preset: Pick<MapTileStatePreset, "name">) =>
     normalizePresetKeyPart(preset.name);
   const getBuildingPresetSharedKey = (preset: Pick<WorldMapBuildingPresetRow, "name" | "tier">) =>
