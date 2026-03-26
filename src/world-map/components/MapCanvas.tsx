@@ -122,10 +122,6 @@ export default function MapCanvas({ ctx }: Props) {
                     onContextMenu={(e) => {
                       if (suppressClickRef.current) return;
                       e.preventDefault();
-                      const withModifier = e.ctrlKey || e.shiftKey;
-                      const keepMulti =
-                        withModifier || (selectedHexKeySet?.has?.(poly.tileKey) ?? false);
-                      setSelectedHexIfChanged(poly.col, poly.row, keepMulti, withModifier);
                       setTileContextMenu({
                         x: e.clientX,
                         y: e.clientY,
