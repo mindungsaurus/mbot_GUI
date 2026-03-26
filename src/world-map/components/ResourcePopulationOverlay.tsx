@@ -61,7 +61,7 @@ export default function ResourcePopulationOverlay({
   return (
     <div className="pointer-events-none absolute right-4 top-14 z-30">
       <div className="pointer-events-auto flex flex-col gap-3">
-        <div className="w-[250px] rounded-xl border border-zinc-700/70 bg-zinc-900/55 backdrop-blur-sm">
+        <div className="w-[220px] max-w-[220px] rounded-xl border border-zinc-700/70 bg-zinc-900/55 backdrop-blur-sm">
           <div className="flex items-center justify-between gap-2 border-b border-zinc-700/70 px-3 py-2">
             <div className="text-xs font-semibold text-zinc-100">자원</div>
             <button
@@ -79,10 +79,10 @@ export default function ResourcePopulationOverlay({
                   key={id}
                   className="grid w-full grid-cols-[1fr_auto] gap-3 text-zinc-100"
                 >
-                  <span>
+                  <span className="truncate">
                     {RESOURCE_EMOJIS[id]} {RESOURCE_LABELS[id]}
                   </span>
-                  <span className="font-semibold text-emerald-300">
+                  <span className="text-right font-semibold text-emerald-300 whitespace-nowrap">
                     {formatWithCommas(activeCityGlobal.values[id])}
                     <span
                       className={[
@@ -106,10 +106,10 @@ export default function ResourcePopulationOverlay({
                   key={id}
                   className="grid w-full grid-cols-[1fr_auto] gap-3 text-zinc-100"
                 >
-                  <span>
+                  <span className="truncate">
                     {RESOURCE_EMOJIS[id]} {RESOURCE_LABELS[id]}
                   </span>
-                  <span className="font-semibold text-amber-300">
+                  <span className="text-right font-semibold text-amber-300 whitespace-nowrap">
                     {formatWithCommas(activeCityGlobal.values[id])}
                     <span
                       className={[
@@ -128,10 +128,10 @@ export default function ResourcePopulationOverlay({
               ))}
               <div className="my-1 border-t border-zinc-700/70" />
               <div className="grid w-full grid-cols-[1fr_auto] gap-3 text-zinc-100">
-                <span>
+                <span className="truncate">
                   {RESOURCE_EMOJIS.order} {RESOURCE_LABELS.order}
                 </span>
-                <span className="font-semibold text-amber-300">
+                <span className="text-right font-semibold text-amber-300 whitespace-nowrap">
                   {formatWithCommas(activeCityGlobal.values.order)}
                   <span
                     className={[
@@ -148,8 +148,8 @@ export default function ResourcePopulationOverlay({
                 </span>
               </div>
               <div className="grid w-full grid-cols-[1fr_auto] gap-3 text-zinc-100">
-                <span>🙂 만족도</span>
-                <span className="font-semibold text-amber-300">
+                <span className="truncate">🙂 만족도</span>
+                <span className="text-right font-semibold text-amber-300 whitespace-nowrap">
                   {`${Math.max(0, Math.min(100, Number(activeCityGlobal.satisfaction ?? 0))).toFixed(1)}%`}
                 </span>
               </div>
@@ -228,7 +228,7 @@ export default function ResourcePopulationOverlay({
           ) : null}
         </div>
 
-        <div className="w-[250px] rounded-xl border border-zinc-700/70 bg-zinc-900/55 backdrop-blur-sm">
+        <div className="w-[220px] max-w-[220px] rounded-xl border border-zinc-700/70 bg-zinc-900/55 backdrop-blur-sm">
           <div className="flex items-center justify-between gap-2 border-b border-zinc-700/70 px-3 py-2">
             <div className="text-xs font-semibold text-zinc-100">인구</div>
             <button
@@ -242,12 +242,12 @@ export default function ResourcePopulationOverlay({
           {populationOverlayOpen ? (
             <div className="space-y-1 px-3 py-2 text-[11px]">
               <div className="grid w-full grid-cols-[1fr_auto] gap-3 text-zinc-100">
-                <span>👥 전체 인구</span>
-                <span className="font-semibold text-lime-300">{formatWithCommas(totalPopulation)}</span>
+                <span className="truncate">👥 전체 인구</span>
+                <span className="text-right font-semibold text-lime-300 whitespace-nowrap">{formatWithCommas(totalPopulation)}</span>
               </div>
               <div className="grid w-full grid-cols-[1fr_auto] gap-3 text-zinc-100">
-                <span>🧱 인구 상한</span>
-                <span className="font-semibold text-lime-300">
+                <span className="truncate">🧱 인구 상한</span>
+                <span className="text-right font-semibold text-lime-300 whitespace-nowrap">
                   {formatWithCommas(activeCityGlobal.populationCap)}
                 </span>
               </div>
@@ -257,20 +257,20 @@ export default function ResourcePopulationOverlay({
                   key={id}
                   className="grid w-full grid-cols-[1fr_auto] gap-3 text-zinc-100"
                 >
-                  <span>
+                  <span className="truncate">
                     {POPULATION_EMOJIS[id]} {POPULATION_LABELS[id]}
                   </span>
-                  <span className="font-semibold text-sky-300">
+                  <span className="text-right font-semibold text-sky-300 whitespace-nowrap">
                     {formatWithCommas(activeCityGlobal.population[id].available ?? 0)} /{" "}
                     {formatWithCommas(activeCityGlobal.population[id].total)}
                   </span>
                 </div>
               ))}
               <div className="grid w-full grid-cols-[1fr_auto] gap-3 text-zinc-100">
-                <span>
+                <span className="truncate">
                   {POPULATION_EMOJIS.elderly} {POPULATION_LABELS.elderly}
                 </span>
-                <span className="font-semibold text-sky-300">
+                <span className="text-right font-semibold text-sky-300 whitespace-nowrap">
                   {formatWithCommas(activeCityGlobal.population.elderly.available ?? 0)} /{" "}
                   {formatWithCommas(activeCityGlobal.population.elderly.total)}
                 </span>
