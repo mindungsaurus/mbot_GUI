@@ -31,6 +31,7 @@ type Props = {
   onResourceAdjustAmountChange: (value: string) => void;
   onApplyResourceAdjust: () => void;
   onOpenPlacementReport: () => void;
+  onOpenResourceStatus: () => void;
 };
 
 export default function ResourcePopulationOverlay({
@@ -53,13 +54,14 @@ export default function ResourcePopulationOverlay({
   onResourceAdjustAmountChange,
   onApplyResourceAdjust,
   onOpenPlacementReport,
+  onOpenResourceStatus,
 }: Props) {
   const uncappedCore: ResourceId[] = ["research", "gold"];
 
   return (
     <div className="pointer-events-none absolute right-4 top-14 z-30">
       <div className="pointer-events-auto flex flex-col gap-3">
-        <div className="rounded-xl border border-zinc-700/70 bg-zinc-900/55 backdrop-blur-sm">
+        <div className="w-[250px] rounded-xl border border-zinc-700/70 bg-zinc-900/55 backdrop-blur-sm">
           <div className="flex items-center justify-between gap-2 border-b border-zinc-700/70 px-3 py-2">
             <div className="text-xs font-semibold text-zinc-100">자원</div>
             <button
@@ -75,7 +77,7 @@ export default function ResourcePopulationOverlay({
               {CAPPED_RESOURCE_IDS.map((id) => (
                 <div
                   key={id}
-                  className="grid min-w-[190px] grid-cols-[1fr_auto] gap-3 text-zinc-100"
+                  className="grid w-full grid-cols-[1fr_auto] gap-3 text-zinc-100"
                 >
                   <span>
                     {RESOURCE_EMOJIS[id]} {RESOURCE_LABELS[id]}
@@ -102,7 +104,7 @@ export default function ResourcePopulationOverlay({
               {uncappedCore.map((id) => (
                 <div
                   key={id}
-                  className="grid min-w-[190px] grid-cols-[1fr_auto] gap-3 text-zinc-100"
+                  className="grid w-full grid-cols-[1fr_auto] gap-3 text-zinc-100"
                 >
                   <span>
                     {RESOURCE_EMOJIS[id]} {RESOURCE_LABELS[id]}
@@ -125,7 +127,7 @@ export default function ResourcePopulationOverlay({
                 </div>
               ))}
               <div className="my-1 border-t border-zinc-700/70" />
-              <div className="grid min-w-[190px] grid-cols-[1fr_auto] gap-3 text-zinc-100">
+              <div className="grid w-full grid-cols-[1fr_auto] gap-3 text-zinc-100">
                 <span>
                   {RESOURCE_EMOJIS.order} {RESOURCE_LABELS.order}
                 </span>
@@ -145,7 +147,7 @@ export default function ResourcePopulationOverlay({
                   </span>
                 </span>
               </div>
-              <div className="grid min-w-[190px] grid-cols-[1fr_auto] gap-3 text-zinc-100">
+              <div className="grid w-full grid-cols-[1fr_auto] gap-3 text-zinc-100">
                 <span>🙂 만족도</span>
                 <span className="font-semibold text-amber-300">
                   {`${Math.max(0, Math.min(100, Number(activeCityGlobal.satisfaction ?? 0))).toFixed(1)}%`}
@@ -213,12 +215,20 @@ export default function ResourcePopulationOverlay({
                 >
                   창고 열기
                 </button>
+                <button
+                  type="button"
+                  className="mt-2 w-full rounded-md border border-zinc-700 px-2 py-1 text-left text-[11px] text-zinc-200 hover:border-zinc-500"
+                  onClick={onOpenResourceStatus}
+                  disabled={busy}
+                >
+                  자원 현황 확인
+                </button>
               </div>
             </div>
           ) : null}
         </div>
 
-        <div className="rounded-xl border border-zinc-700/70 bg-zinc-900/55 backdrop-blur-sm">
+        <div className="w-[250px] rounded-xl border border-zinc-700/70 bg-zinc-900/55 backdrop-blur-sm">
           <div className="flex items-center justify-between gap-2 border-b border-zinc-700/70 px-3 py-2">
             <div className="text-xs font-semibold text-zinc-100">인구</div>
             <button
@@ -231,11 +241,11 @@ export default function ResourcePopulationOverlay({
           </div>
           {populationOverlayOpen ? (
             <div className="space-y-1 px-3 py-2 text-[11px]">
-              <div className="grid min-w-[190px] grid-cols-[1fr_auto] gap-3 text-zinc-100">
+              <div className="grid w-full grid-cols-[1fr_auto] gap-3 text-zinc-100">
                 <span>👥 전체 인구</span>
                 <span className="font-semibold text-lime-300">{formatWithCommas(totalPopulation)}</span>
               </div>
-              <div className="grid min-w-[190px] grid-cols-[1fr_auto] gap-3 text-zinc-100">
+              <div className="grid w-full grid-cols-[1fr_auto] gap-3 text-zinc-100">
                 <span>🧱 인구 상한</span>
                 <span className="font-semibold text-lime-300">
                   {formatWithCommas(activeCityGlobal.populationCap)}
@@ -245,7 +255,7 @@ export default function ResourcePopulationOverlay({
               {TRACKED_POPULATION_IDS.map((id) => (
                 <div
                   key={id}
-                  className="grid min-w-[190px] grid-cols-[1fr_auto] gap-3 text-zinc-100"
+                  className="grid w-full grid-cols-[1fr_auto] gap-3 text-zinc-100"
                 >
                   <span>
                     {POPULATION_EMOJIS[id]} {POPULATION_LABELS[id]}
@@ -256,7 +266,7 @@ export default function ResourcePopulationOverlay({
                   </span>
                 </div>
               ))}
-              <div className="grid min-w-[190px] grid-cols-[1fr_auto] gap-3 text-zinc-100">
+              <div className="grid w-full grid-cols-[1fr_auto] gap-3 text-zinc-100">
                 <span>
                   {POPULATION_EMOJIS.elderly} {POPULATION_LABELS.elderly}
                 </span>

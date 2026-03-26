@@ -77,6 +77,27 @@ type TileYieldBuildingRow = {
   deltas: TileYieldDelta[];
 };
 
+type ResourceStatusTileRow = {
+  tileKey: string;
+  tileNumber: number;
+  col: number;
+  row: number;
+  value: number;
+  buildings: Array<{
+    instanceId: string;
+    buildingName: string;
+    color: string;
+    value: number;
+  }>;
+};
+
+type ResourceStatusGroupRow = {
+  resourceId: string;
+  label: string;
+  total: number;
+  tiles: ResourceStatusTileRow[];
+};
+
 import type {
   CappedResourceId,
   Draft,
@@ -179,6 +200,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   const [resourceAdjustOpen, setResourceAdjustOpen] = useState(false);
   const [warehouseModalOpen, setWarehouseModalOpen] = useState(false);
   const [placementReportOpen, setPlacementReportOpen] = useState(false);
+  const [resourceStatusModalOpen, setResourceStatusModalOpen] = useState(false);
   const [resourceAdjustTarget, setResourceAdjustTarget] = useState<ResourceId>("gold");
   const [resourceAdjustMode, setResourceAdjustMode] = useState<"inc" | "dec">("inc");
   const [resourceAdjustAmount, setResourceAdjustAmount] = useState("0");
@@ -1053,6 +1075,137 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     selectedMap,
   ]);
 
+  const resourceStatusRows = useMemo(() => {
+    if (!selectedMap) return [] as ResourceStatusGroupRow[];
+
+    const targetResourceIdSet = new Set<ResourceId>([
+      "wood",
+      "stone",
+      "fabric",
+      "weave",
+      "food",
+      "research",
+      "gold",
+    ]);
+
+    const activeBuiltInstances = activeBuildingInstances.filter((entry) => {
+      if (entry.enabled === false) return false;
+      const preset = buildingPresetById.get(entry.presetId) ?? null;
+      return getInstanceBuildStatus(entry, preset) === "active";
+    });
+    const operationalInstances = activeBuiltInstances.filter(
+      (entry) => instanceOperationalById[entry.id]
+    );
+    const nextDay = Math.max(0, safeInt(effectiveCityGlobal.day, 0) + 1);
+
+    const toLabel = (resourceId: string) => RESOURCE_LABELS[resourceId as ResourceId];
+    const resourceMap = new Map<string, ResourceStatusGroupRow>();
+
+    for (const instance of operationalInstances) {
+      const preset = buildingPresetById.get(instance.presetId);
+      if (!preset) continue;
+
+      const deltasById = new Map<string, number>();
+      const upkeepResources = preset.upkeep?.resources ?? {};
+      for (const id of BUILDING_PRESET_RESOURCE_IDS) {
+        const resourceId = String(id ?? "").trim();
+        if (!resourceId || !targetResourceIdSet.has(resourceId as ResourceId)) continue;
+        const upkeepValue = Number(upkeepResources[id] ?? 0);
+        if (!Number.isFinite(upkeepValue) || upkeepValue === 0) continue;
+        deltasById.set(resourceId, (deltasById.get(resourceId) ?? 0) - upkeepValue);
+      }
+
+      const ruleContext: RuleEvalContext = {
+        col: instance.col,
+        row: instance.row,
+        map: selectedMap,
+        cityGlobal: effectiveCityGlobal,
+        tileStates: activeTileStates,
+        tileRegions: activeTileRegionStates,
+        buildingInstances: activeBuiltInstances,
+      };
+      for (const rule of preset.effects?.daily ?? []) {
+        const intervalDays = Math.max(1, safeInt(rule.intervalDays, 1));
+        const shouldApplyThisTick = intervalDays <= 1 || nextDay % intervalDays === 0;
+        if (!shouldApplyThisTick) continue;
+        const evalResult = evaluateRulePredicatePreview(ruleContext, rule.when);
+        if (!evalResult.matched || evalResult.repeatCount <= 0) continue;
+        const repeatMultiplier = Math.max(1, evalResult.repeatCount);
+        for (const action of rule.actions ?? []) {
+          if (action.kind !== "adjustResource") continue;
+          const resourceId = String(action.resourceId ?? "").trim();
+          if (!resourceId || !targetResourceIdSet.has(resourceId as ResourceId)) continue;
+          const value = evalRuleExpr(ruleContext, action.delta);
+          if (!Number.isFinite(value) || value === 0) continue;
+          deltasById.set(resourceId, (deltasById.get(resourceId) ?? 0) + value * repeatMultiplier);
+        }
+      }
+
+      const deltas = [...deltasById.entries()]
+        .map(([resourceId, value]) => ({
+          resourceId,
+          label: toLabel(resourceId),
+          value: roundTo2(value),
+        }))
+        .filter((entry) => entry.value !== 0)
+        .sort((a, b) => a.label.localeCompare(b.label, "ko"));
+      if (deltas.length === 0) continue;
+
+      const tileK = tileKey(instance.col, instance.row);
+      const tileNumber = instance.row * selectedMap.cols + instance.col + 1;
+      for (const delta of deltas) {
+        const group =
+          resourceMap.get(delta.resourceId) ??
+          ({
+            resourceId: delta.resourceId,
+            label: delta.label,
+            total: 0,
+            tiles: [],
+          } satisfies ResourceStatusGroupRow);
+        group.total = roundTo2(group.total + delta.value);
+        const tileExisting =
+          group.tiles.find((entry) => entry.tileKey === tileK) ??
+          ({
+            tileKey: tileK,
+            tileNumber,
+            col: instance.col,
+            row: instance.row,
+            value: 0,
+            buildings: [],
+          } satisfies ResourceStatusTileRow);
+        tileExisting.value = roundTo2(tileExisting.value + delta.value);
+        tileExisting.buildings.push({
+          instanceId: instance.id,
+          buildingName: preset.name,
+          color: preset.color,
+          value: delta.value,
+        });
+        if (!group.tiles.some((entry) => entry.tileKey === tileK)) {
+          group.tiles.push(tileExisting);
+        }
+        resourceMap.set(delta.resourceId, group);
+      }
+    }
+
+    const rows = [...resourceMap.values()];
+    for (const row of rows) {
+      row.tiles.sort((a, b) => a.tileNumber - b.tileNumber);
+      for (const tile of row.tiles) {
+        tile.buildings.sort((a, b) => a.buildingName.localeCompare(b.buildingName, "ko"));
+      }
+    }
+    rows.sort((a, b) => a.label.localeCompare(b.label, "ko"));
+    return rows;
+  }, [
+    selectedMap,
+    activeBuildingInstances,
+    buildingPresetById,
+    instanceOperationalById,
+    effectiveCityGlobal,
+    activeTileStates,
+    activeTileRegionStates,
+  ]);
+
   const tileYieldPreview = useMemo(() => {
     if (!selectedMap || !tileYieldViewer) {
       return { rows: [] as TileYieldBuildingRow[], totals: [] as TileYieldDelta[] };
@@ -1177,6 +1330,10 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
 
   useEffect(() => {
     if (!selectedMapId) setPlacementReportOpen(false);
+  }, [selectedMapId]);
+
+  useEffect(() => {
+    if (!selectedMapId) setResourceStatusModalOpen(false);
   }, [selectedMapId]);
 
   useEffect(() => {
@@ -3036,6 +3193,9 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setResourceAdjustTarget, setResourceAdjustMode, setResourceAdjustAmount, handleApplyResourceAdjust,
     handleAddWarehouseItem, handleDeleteWarehouseItem, handleImportWarehouseItem,
     handleExportWarehouseItem,
+    resourceStatusModalOpen,
+    setResourceStatusModalOpen,
+    resourceStatusRows,
     placementReportOpen, setPlacementReportOpen, placementPopulationSummary, placementReportRows,
     imageUrl, viewportRef, dragging, handleViewportMouseDown, handleViewportMouseMove, endDragging,
     handleViewportWheel, scheduleVisibleBoundsUpdate, imageWidth, imageHeight, setLoadedSize,

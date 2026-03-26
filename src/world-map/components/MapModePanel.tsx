@@ -10,6 +10,7 @@ import TileRegionModal from "./TileRegionModal";
 import WarehouseModal from "./WarehouseModal";
 import PlacementReportModal from "./PlacementReportModal";
 import TileYieldModal from "./TileYieldModal";
+import ResourceStatusModal from "./ResourceStatusModal";
 
 type Props = { ctx: any };
 
@@ -69,6 +70,9 @@ export default function MapModePanel({ ctx }: Props) {
     handleDeleteWarehouseItem,
     handleImportWarehouseItem,
     handleExportWarehouseItem,
+    resourceStatusModalOpen,
+    setResourceStatusModalOpen,
+    resourceStatusRows,
     placementReportOpen,
     setPlacementReportOpen,
     placementPopulationSummary,
@@ -209,6 +213,7 @@ export default function MapModePanel({ ctx }: Props) {
             onResourceAdjustAmountChange={setResourceAdjustAmount}
             onApplyResourceAdjust={handleApplyResourceAdjust}
             onOpenPlacementReport={() => setPlacementReportOpen(true)}
+            onOpenResourceStatus={() => setResourceStatusModalOpen(true)}
           />
 
           <MapCanvas
@@ -310,6 +315,12 @@ export default function MapModePanel({ ctx }: Props) {
           rows={placementReportRows}
           populationSummary={placementPopulationSummary}
           onClose={() => setPlacementReportOpen(false)}
+        />
+
+        <ResourceStatusModal
+          open={resourceStatusModalOpen}
+          rows={resourceStatusRows}
+          onClose={() => setResourceStatusModalOpen(false)}
         />
 
         <TileYieldModal
