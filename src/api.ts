@@ -483,6 +483,7 @@ export async function updateWorldMap(
         weave?: number;
         food?: number;
       };
+      foodDeficitGoldRate?: number;
       population?: {
         settlers?: { total?: number; available?: number };
         engineers?: { total?: number; available?: number };

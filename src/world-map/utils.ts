@@ -209,6 +209,7 @@ export function createDefaultCityGlobalState(): CityGlobalState {
       weave: 0,
       food: 0,
     },
+    foodDeficitGoldRate: 0,
     warehouse: {},
     day: 0,
     satisfaction: 0,
@@ -222,6 +223,7 @@ export function normalizeCityGlobalState(input?: Partial<CityGlobalState> | null
   const values = (input?.values ?? {}) as Partial<CityGlobalState["values"]>;
   const caps = (input?.caps ?? {}) as Partial<CityGlobalState["caps"]>;
   const overflowToGold = (input?.overflowToGold ?? {}) as Partial<CityGlobalState["overflowToGold"]>;
+  const foodDeficitGoldRate = Number((input as any)?.foodDeficitGoldRate);
   const warehouse = (input?.warehouse ?? {}) as Record<string, unknown>;
   const population = (input?.population ?? {}) as Partial<CityGlobalState["population"]>;
   const normalizeInt = (value: unknown, fallback: number) => {
@@ -302,6 +304,9 @@ export function normalizeCityGlobalState(input?: Partial<CityGlobalState> | null
       weave: normalizeInt(overflowToGold.weave, base.overflowToGold.weave),
       food: normalizeInt(overflowToGold.food, base.overflowToGold.food),
     },
+    foodDeficitGoldRate: Number.isFinite(foodDeficitGoldRate)
+      ? Math.max(0, Math.trunc(foodDeficitGoldRate))
+      : base.foodDeficitGoldRate,
     warehouse: nextWarehouse,
     day: normalizeInt(input?.day, base.day),
     satisfaction: normalizePercent(input?.satisfaction, base.satisfaction),

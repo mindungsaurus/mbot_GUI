@@ -282,6 +282,20 @@ export default function WorldMapSettingsPanel({
             </div>
           </div>
           <div className="space-y-2 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+            <div className="text-xs font-semibold text-zinc-300">식량 부족 시 금 차감 비율</div>
+            <label className="grid grid-cols-[1fr_120px] items-center gap-2">
+              <span className="text-sm text-zinc-100">식량 1당 금 차감</span>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                name="food_deficit_gold_rate"
+                defaultValue={activeCityGlobal.foodDeficitGoldRate ?? 0}
+                className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-amber-200 outline-none focus:border-zinc-600"
+              />
+            </label>
+          </div>
+          <div className="space-y-2 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
             <div className="text-xs font-semibold text-zinc-300">날짜 설정</div>
             <input
               type="number"

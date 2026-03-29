@@ -1058,6 +1058,30 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         }
       }
     }
+    const foodDemand = Math.max(0, Math.trunc(Number(totalPopulation ?? 0) || 0));
+    if (foodDemand > 0) {
+      const currentFood = Math.max(0, Math.trunc(Number(effectiveCityGlobal.values.food ?? 0) || 0));
+      const projectedFood = Math.max(0, currentFood + totals.food);
+      const consumedFood = Math.min(projectedFood, foodDemand);
+      totals.food -= consumedFood;
+      const deficitFood = Math.max(0, foodDemand - consumedFood);
+      if (deficitFood > 0) {
+        const rate = Math.max(
+          0,
+          Math.trunc(Number(effectiveCityGlobal.foodDeficitGoldRate ?? 0) || 0)
+        );
+        if (rate > 0) {
+          const currentGold = Math.max(
+            0,
+            Math.trunc(Number(effectiveCityGlobal.values.gold ?? 0) || 0)
+          );
+          const projectedGold = Math.max(0, currentGold + totals.gold);
+          const goldNeed = deficitFood * rate;
+          const goldSpend = Math.min(projectedGold, goldNeed);
+          totals.gold -= goldSpend;
+        }
+      }
+    }
     for (const id of ALL_RESOURCE_IDS) {
       totals[id] = roundTo2(totals[id]);
     }
@@ -1071,6 +1095,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     activeTileStates,
     buildingPresetById,
     selectedMap,
+    totalPopulation,
   ]);
 
   const resourceStatusRows = useMemo(() => {
@@ -1668,6 +1693,10 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         weave: parseNonNegativeInt("overflow_rate_weave", effectiveCityGlobal.overflowToGold.weave),
         food: parseNonNegativeInt("overflow_rate_food", effectiveCityGlobal.overflowToGold.food),
       },
+      foodDeficitGoldRate: parseNonNegativeInt(
+        "food_deficit_gold_rate",
+        effectiveCityGlobal.foodDeficitGoldRate ?? 0
+      ),
       warehouse: {
         ...(effectiveCityGlobal.warehouse ?? {}),
       },
