@@ -663,7 +663,8 @@ export function normalizePlacementRules(raw: unknown): BuildingPlacementRule[] {
     if (kind === "requireTagInRange") {
       const tagPresetId = String(cast?.tagPresetId ?? "").trim();
       if (!tagPresetId) continue;
-      const distance = Math.max(0, Math.trunc(Number(cast?.distance ?? 1) || 1));
+      const parsedDistance = Math.trunc(Number(cast?.distance ?? 1));
+      const distance = Number.isFinite(parsedDistance) ? Math.max(0, parsedDistance) : 1;
       const minCount = Math.max(1, Math.trunc(Number(cast?.minCount ?? 1) || 1));
       const negate = !!cast?.negate;
       const repeat = !!cast?.repeat;
@@ -685,7 +686,8 @@ export function normalizePlacementRules(raw: unknown): BuildingPlacementRule[] {
     if (kind === "requireBuildingInRange") {
       const presetId = String(cast?.presetId ?? "").trim();
       if (!presetId) continue;
-      const distance = Math.max(0, Math.trunc(Number(cast?.distance ?? 1) || 1));
+      const parsedDistance = Math.trunc(Number(cast?.distance ?? 1));
+      const distance = Number.isFinite(parsedDistance) ? Math.max(0, parsedDistance) : 1;
       const minCount = Math.max(1, Math.trunc(Number(cast?.minCount ?? 1) || 1));
       const negate = !!cast?.negate;
       const repeat = !!cast?.repeat;
