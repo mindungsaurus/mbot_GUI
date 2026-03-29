@@ -2566,11 +2566,13 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         await listSharedWorldMapBuildingPresets()
       );
       const latestSaved =
+        latestSelectedRows.find((entry) => String(entry.id ?? "") === savedId) ??
         latestSelectedRows.find(
           (entry) =>
             getBuildingPresetSharedKey(entry) ===
             getBuildingPresetSharedKey({ name, tier: buildingDraft.tier })
-        ) ?? null;
+        ) ??
+        null;
       if (latestSaved) setBuildingDraft(buildDraftFromPreset(latestSaved));
       else resetBuildingDraft();
     } catch (e: any) {
