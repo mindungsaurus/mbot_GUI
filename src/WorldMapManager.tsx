@@ -250,9 +250,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     draft: MapTileStateAssignment[];
   } | null>(null);
   const [tileRegionEditor, setTileRegionEditor] = useState<{
-    key: string;
-    col: number;
-    row: number;
+    targets: Array<{ key: string; col: number; row: number }>;
     draft: {
       spaceUsed: string;
       spaceCap: string;
@@ -2748,7 +2746,16 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
 
   const handleOpenTileRegionEditor = (col: number, row: number) => {
     const key = tileKey(col, row);
-    const current = activeTileRegionStates[key] ?? {};
+    const useMultiSelection =
+      selectedHexes.length > 1 && selectedHexes.some((entry) => entry.col === col && entry.row === row);
+    const targets = useMultiSelection
+      ? selectedHexes.map((entry) => ({
+          key: tileKey(entry.col, entry.row),
+          col: entry.col,
+          row: entry.row,
+        }))
+      : [{ key, col, row }];
+    const current = useMultiSelection ? {} : activeTileRegionStates[key] ?? {};
     const draft = {
       spaceUsed: current.spaceUsed != null ? String(current.spaceUsed) : "",
       spaceCap: current.spaceCap != null ? String(current.spaceCap) : "",
@@ -2757,9 +2764,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     };
     tileRegionDraftRef.current = draft;
     setTileRegionEditor({
-      key,
-      col,
-      row,
+      targets,
       draft,
     });
     setTileContextMenu(null);
@@ -3084,19 +3089,49 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       return;
     }
     const nextRegionStates = { ...activeTileRegionStates };
-    const nextValue: MapTileRegionState = {
-      spaceUsed: parsed.spaceUsed,
-      spaceCap: parsed.spaceCap,
-      threat: parsed.threat,
-      pollution: parsed.pollution,
-    };
-    const hasAny =
-      nextValue.spaceUsed != null ||
-      nextValue.spaceCap != null ||
-      nextValue.threat != null ||
-      nextValue.pollution != null;
-    if (hasAny) nextRegionStates[tileRegionEditor.key] = nextValue;
-    else delete nextRegionStates[tileRegionEditor.key];
+    const multiMode = tileRegionEditor.targets.length > 1;
+    if (!multiMode) {
+      const targetKey = tileRegionEditor.targets[0]?.key;
+      if (!targetKey) return;
+      const nextValue: MapTileRegionState = {
+        spaceUsed: parsed.spaceUsed,
+        spaceCap: parsed.spaceCap,
+        threat: parsed.threat,
+        pollution: parsed.pollution,
+      };
+      const hasAny =
+        nextValue.spaceUsed != null ||
+        nextValue.spaceCap != null ||
+        nextValue.threat != null ||
+        nextValue.pollution != null;
+      if (hasAny) nextRegionStates[targetKey] = nextValue;
+      else delete nextRegionStates[targetKey];
+    } else {
+      const fields: Array<keyof Pick<MapTileRegionState, "spaceCap" | "threat" | "pollution">> = [
+        "spaceCap",
+        "threat",
+        "pollution",
+      ];
+      for (const target of tileRegionEditor.targets) {
+        const existing = nextRegionStates[target.key] ?? {};
+        const nextValue: MapTileRegionState = {
+          ...existing,
+        };
+        for (const field of fields) {
+          const delta = parsed[field];
+          if (delta == null) continue;
+          const current = existing[field];
+          nextValue[field] = current == null ? delta : Math.trunc(current + delta);
+        }
+        const hasAny =
+          nextValue.spaceUsed != null ||
+          nextValue.spaceCap != null ||
+          nextValue.threat != null ||
+          nextValue.pollution != null;
+        if (hasAny) nextRegionStates[target.key] = nextValue;
+        else delete nextRegionStates[target.key];
+      }
+    }
 
     setBusy(true);
     setErr(null);

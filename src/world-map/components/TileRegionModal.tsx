@@ -8,10 +8,16 @@ type TileRegionDraft = {
 };
 
 type TileRegionEditorState = {
-  key: string;
-  col: number;
-  row: number;
+  targets: Array<{ key: string; col: number; row: number }>;
   draft: TileRegionDraft;
+};
+
+type TileRegionField = keyof TileRegionDraft;
+
+type TileRegionFieldConfig = {
+  field: TileRegionField;
+  label: string;
+  color: string;
 };
 
 type Props = {
@@ -30,13 +36,29 @@ export default function TileRegionModal({
   busy,
 }: Props) {
   if (!tileRegionEditor) return null;
+  const isMulti = tileRegionEditor.targets.length > 1;
+  const firstTarget = tileRegionEditor.targets[0];
+  const fields: TileRegionFieldConfig[] = isMulti
+    ? [
+        { field: "spaceCap", label: "🧊 최대 공간", color: "#38bdf8" },
+        { field: "threat", label: "⚠️ 위협도", color: "#ef4444" },
+        { field: "pollution", label: "☣️ 오염도", color: "#c084fc" },
+      ]
+    : [
+        { field: "spaceUsed", label: "💠 사용 공간", color: "#38bdf8" },
+        { field: "spaceCap", label: "🧊 최대 공간", color: "#38bdf8" },
+        { field: "threat", label: "⚠️ 위협도", color: "#ef4444" },
+        { field: "pollution", label: "☣️ 오염도", color: "#c084fc" },
+      ];
 
   return (
     <div className="fixed inset-0 z-[82] bg-black/55 p-4">
       <div className="mx-auto mt-20 w-full max-w-lg rounded-2xl border border-zinc-700 bg-zinc-950 p-4">
         <div className="mb-3 flex items-center justify-between">
           <div className="text-sm font-semibold text-zinc-100">
-            지역 상태 편집 · col {tileRegionEditor.col}, row {tileRegionEditor.row}
+            {isMulti
+              ? `지역 상태 일괄 편집 · ${tileRegionEditor.targets.length}개 타일`
+              : `지역 상태 편집 · col ${firstTarget?.col ?? 0}, row ${firstTarget?.row ?? 0}`}
           </div>
           <button
             type="button"
@@ -50,15 +72,15 @@ export default function TileRegionModal({
           </button>
         </div>
 
+        {isMulti ? (
+          <div className="mb-3 rounded-md border border-zinc-700 bg-zinc-900/40 px-3 py-2 text-[11px] text-zinc-300">
+            여러 타일 동시 적용: 입력값은 기존 수치에 증감으로 반영되며, 값이 없던 타일에는 입력값이
+            그대로 할당됩니다.
+          </div>
+        ) : null}
+
         <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-900/30 p-3">
-          {(
-            [
-              { field: "spaceUsed", label: "💠 사용 공간", color: "#38bdf8" },
-              { field: "spaceCap", label: "🧊 최대 공간", color: "#38bdf8" },
-              { field: "threat", label: "⚠️ 위협도", color: "#ef4444" },
-              { field: "pollution", label: "☣️ 오염도", color: "#c084fc" },
-            ] as const
-          ).map(({ field, label, color }) => (
+          {fields.map(({ field, label, color }) => (
             <label key={field} className="grid grid-cols-[92px_1fr] items-center gap-2">
               <span className="text-xs font-semibold" style={{ color }}>
                 {label}
