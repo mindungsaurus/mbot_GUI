@@ -32,6 +32,7 @@ export default function MapCanvas({ ctx }: Props) {
     setSelectedHexIfChanged,
     showRegionStatusPills,
     activeTileRegionStates,
+    activeTileMemos,
   } = ctx;
 
   return !imageUrl ? (
@@ -102,6 +103,9 @@ export default function MapCanvas({ ctx }: Props) {
                   : EMPTY_STATE_BADGES;
               const tileNumber = poly.row * selectedMap.cols + poly.col + 1;
               const tileNumberFontSize = Math.max(18, Math.round(selectedMap.hexSize * 0.7));
+              const hasMemo =
+                typeof activeTileMemos?.[poly.tileKey] === "string" &&
+                String(activeTileMemos[poly.tileKey]).trim().length > 0;
               return (
                 <g key={poly.key}>
                   <polygon
@@ -148,6 +152,47 @@ export default function MapCanvas({ ctx }: Props) {
                       >
                         {tileNumber}
                       </text>
+                    </g>
+                  ) : null}
+                  {hasMemo && isPillInViewport ? (
+                    <g pointerEvents="none">
+                      {(() => {
+                        const hexSize = selectedMap.hexSize;
+                        const w = 18;
+                        const h = 14;
+                        const x = poly.cx - w / 2;
+                        const y = poly.cy - hexSize * 0.66 - h / 2;
+                        return (
+                          <>
+                            <rect
+                              x={x}
+                              y={y}
+                              width={w}
+                              height={h}
+                              rx={6}
+                              fill="rgba(0,0,0,0.62)"
+                              stroke="rgba(250,204,21,0.8)"
+                              strokeWidth={0.8}
+                            />
+                            <text
+                              x={x + w / 2}
+                              y={y + h / 2}
+                              fill="#facc15"
+                              textAnchor="middle"
+                              dominantBaseline="middle"
+                              style={{
+                                fontSize: "9px",
+                                fontWeight: 700,
+                                paintOrder: "stroke",
+                                stroke: "rgba(0,0,0,0.7)",
+                                strokeWidth: 1,
+                              }}
+                            >
+                              📝
+                            </text>
+                          </>
+                        );
+                      })()}
                     </g>
                   ) : null}
                   {showRegionStatusPills && isPillInViewport ? (

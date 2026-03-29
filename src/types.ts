@@ -228,6 +228,8 @@ export type MapTileRegionState = {
   pollution?: number;
 };
 
+export type MapTileMemoMap = Record<string, string>;
+
 export type BuildingPresetLine = {
   id: string;
   text: string;
@@ -451,6 +453,7 @@ export type WorldMap = {
   tileStatePresets?: MapTileStatePreset[];
   tileStateAssignments?: Record<string, MapTileStateAssignment[]>;
   tileRegionStates?: Record<string, MapTileRegionState>;
+  tileMemos?: MapTileMemoMap;
   buildingPresets?: BuildingPreset[];
   buildingPresetRows?: WorldMapBuildingPresetRow[];
   buildingInstances?: WorldMapBuildingInstanceRow[];

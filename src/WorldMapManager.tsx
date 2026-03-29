@@ -64,6 +64,11 @@ type OverflowConversionNotice = {
   details: OverflowConversionDetail[];
 };
 
+type FoodCompensationNotice = {
+  deficitFood: number;
+  goldSpent: number;
+};
+
 type TileYieldDelta = {
   resourceId: string;
   label: string;
@@ -108,6 +113,7 @@ import type {
   TileStatesByMap,
   TilePresetsByMap,
   TileRegionStatesByMap,
+  TileMemosByMap,
   BuildingPresetsByMap,
   BuildingInstancesByMap,
   ImageViewportBounds,
@@ -135,6 +141,7 @@ import {
   normalizeTilePresets,
   normalizeTileStateAssignments,
   normalizeTileRegionStates,
+  normalizeTileMemos,
   normalizeBuildingPresets,
   normalizeBuildingInstances,
   readAssignedWorkersByTypeFromInstanceMeta,
@@ -209,6 +216,9 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   const [dailyRunResult, setDailyRunResult] = useState<string | null>(null);
   const [dailyRunLogs, setDailyRunLogs] = useState<string[]>([]);
   const [overflowNotice, setOverflowNotice] = useState<OverflowConversionNotice | null>(null);
+  const [foodCompensationNotice, setFoodCompensationNotice] =
+    useState<FoodCompensationNotice | null>(null);
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [createName, setCreateName] = useState("");
@@ -228,6 +238,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   const [sharedTilePresets, setSharedTilePresets] = useState<MapTileStatePreset[]>([]);
   const [tileStatesByMap, setTileStatesByMap] = useState<TileStatesByMap>({});
   const [tileRegionStatesByMap, setTileRegionStatesByMap] = useState<TileRegionStatesByMap>({});
+  const [tileMemosByMap, setTileMemosByMap] = useState<TileMemosByMap>({});
   const [buildingPresetsByMap, setBuildingPresetsByMap] = useState<BuildingPresetsByMap>({});
   const [buildingInstancesByMap, setBuildingInstancesByMap] = useState<BuildingInstancesByMap>(
     {}
@@ -248,6 +259,10 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   const [tileEditor, setTileEditor] = useState<{
     targets: Array<{ key: string; col: number; row: number }>;
     draft: MapTileStateAssignment[];
+  } | null>(null);
+  const [tileMemoEditor, setTileMemoEditor] = useState<{
+    targets: Array<{ key: string; col: number; row: number }>;
+    draft: string;
   } | null>(null);
   const [tileRegionEditor, setTileRegionEditor] = useState<{
     targets: Array<{ key: string; col: number; row: number }>;
@@ -297,6 +312,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     threat: string;
     pollution: string;
   } | null>(null);
+  const tileMemoDraftRef = useRef("");
   const visibleBoundsRafRef = useRef<number | null>(null);
   const tileBuildingSearchInputRef = useRef<HTMLInputElement | null>(null);
   const tileBuildingSearchTimerRef = useRef<number | null>(null);
@@ -343,6 +359,19 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         for (const entry of items) {
           if (!entry?.id) continue;
           next[entry.id] = normalizeTileRegionStates(entry.tileRegionStates ?? {});
+        }
+        return next;
+      });
+      setTileMemosByMap((prev) => {
+        const next: TileMemosByMap = {};
+        for (const entry of items) {
+          if (!entry?.id) continue;
+          const entryAny = entry as any;
+          if (Object.prototype.hasOwnProperty.call(entryAny, "tileMemos")) {
+            next[entry.id] = normalizeTileMemos(entryAny.tileMemos ?? {});
+          } else {
+            next[entry.id] = prev[entry.id] ?? {};
+          }
         }
         return next;
       });
@@ -481,6 +510,14 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
             latestAny.tileRegionStates && typeof latestAny.tileRegionStates === "object"
               ? latestAny.tileRegionStates
               : {}
+          ),
+        }));
+      }
+      if (Object.prototype.hasOwnProperty.call(latestAny, "tileMemos")) {
+        setTileMemosByMap((prev) => ({
+          ...prev,
+          [latest.id]: normalizeTileMemos(
+            latestAny.tileMemos && typeof latestAny.tileMemos === "object" ? latestAny.tileMemos : {}
           ),
         }));
       }
@@ -628,6 +665,10 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   const activeTileRegionStates = useMemo(
     () => (selectedMapId ? tileRegionStatesByMap[selectedMapId] ?? {} : {}),
     [selectedMapId, tileRegionStatesByMap]
+  );
+  const activeTileMemos = useMemo(
+    () => (selectedMapId ? tileMemosByMap[selectedMapId] ?? {} : {}),
+    [selectedMapId, tileMemosByMap]
   );
   const activeBuildingPresets = useMemo(
     () => (selectedMapId ? buildingPresetsByMap[selectedMapId] ?? [] : []),
@@ -1061,10 +1102,12 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     const foodDemand = Math.max(0, Math.trunc(Number(totalPopulation ?? 0) || 0));
     if (foodDemand > 0) {
       const currentFood = Math.max(0, Math.trunc(Number(effectiveCityGlobal.values.food ?? 0) || 0));
-      const projectedFood = Math.max(0, currentFood + totals.food);
-      const consumedFood = Math.min(projectedFood, foodDemand);
-      totals.food -= consumedFood;
-      const deficitFood = Math.max(0, foodDemand - consumedFood);
+      // 식량 증감은 현재 보유량으로 중간 클램프하지 않고 "최종 순증감"으로 계산한다.
+      // 예) +12 생산, 인구 200 소모 => -188
+      totals.food -= foodDemand;
+      // 금 대체 소비는 최종 예상 식량이 0 미만일 때 부족분만큼만 적용
+      const projectedFoodAfter = currentFood + totals.food;
+      const deficitFood = Math.max(0, -projectedFoodAfter);
       if (deficitFood > 0) {
         const rate = Math.max(
           0,
@@ -1520,6 +1563,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     if (!selectedMap) return;
     setBusy(true);
     setErr(null);
+    setSaveNotice(null);
     try {
       const updated = await updateWorldMap(selectedMap.id, {
         name: draft.name.trim(),
@@ -1532,6 +1576,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       });
       setMaps((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
       setDraft(buildDraft(updated));
+      setSaveNotice("저장되었습니다.");
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     } finally {
@@ -1765,6 +1810,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     const converted = applyOverflowToGold(nextState);
     setBusy(true);
     setErr(null);
+    setSaveNotice(null);
     try {
       const updated = await updateWorldMap(selectedMap.id, {
         cityGlobal: converted.nextState,
@@ -1788,6 +1834,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
           details: converted.details,
         });
       }
+      setSaveNotice("저장되었습니다.");
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     } finally {
@@ -1889,6 +1936,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     const startGold = Math.max(0, Math.trunc(Number(activeCityGlobal.values.gold ?? 0) || 0));
     setBusy(true);
     setErr(null);
+    setFoodCompensationNotice(null);
     try {
       const result = await runWorldMapDaily(selectedMap.id, days);
       const dayCandidate =
@@ -2007,6 +2055,23 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         });
       }
 
+      const foodDeficitCandidate =
+        result?.foodDeficit ?? result?.summary?.foodDeficit;
+      const foodGoldSpentCandidate =
+        result?.foodGoldSpent ?? result?.summary?.foodGoldSpent;
+      const foodDeficit = Number.isFinite(Number(foodDeficitCandidate))
+        ? Math.max(0, Math.trunc(Number(foodDeficitCandidate)))
+        : 0;
+      const foodGoldSpent = Number.isFinite(Number(foodGoldSpentCandidate))
+        ? Math.max(0, Math.trunc(Number(foodGoldSpentCandidate)))
+        : 0;
+      if (foodDeficit > 0 && foodGoldSpent > 0) {
+        setFoodCompensationNotice({
+          deficitFood: foodDeficit,
+          goldSpent: foodGoldSpent,
+        });
+      }
+
       await releaseWorkersFromCompletedBuildings(selectedMap.id);
     } catch (e: any) {
       setErr(String(e?.message ?? e));
@@ -2019,12 +2084,14 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     updated: WorldMap,
     nextPresets: MapTileStatePreset[],
     nextStates: Record<string, MapTileStateAssignment[]>,
-    nextRegionStates: Record<string, MapTileRegionState>
+    nextRegionStates: Record<string, MapTileRegionState>,
+    nextMemos: Record<string, string>
   ) => {
     setMaps((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
     setTilePresetsByMap((prev) => ({ ...prev, [updated.id]: nextPresets }));
     setTileStatesByMap((prev) => ({ ...prev, [updated.id]: nextStates }));
     setTileRegionStatesByMap((prev) => ({ ...prev, [updated.id]: nextRegionStates }));
+    setTileMemosByMap((prev) => ({ ...prev, [updated.id]: nextMemos }));
   };
 
   const setStatesForCurrentMap = (next: Record<string, MapTileStateAssignment[]>) => {
@@ -2037,16 +2104,23 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setTileRegionStatesByMap((prev) => ({ ...prev, [selectedMapId]: next }));
   };
 
+  const setMemosForCurrentMap = (next: Record<string, string>) => {
+    if (!selectedMapId) return;
+    setTileMemosByMap((prev) => ({ ...prev, [selectedMapId]: next }));
+  };
+
   const persistCurrentMapTileData = async (
     nextPresets: MapTileStatePreset[],
     nextStates: Record<string, MapTileStateAssignment[]>,
-    nextRegionStates: Record<string, MapTileRegionState> = activeTileRegionStates
+    nextRegionStates: Record<string, MapTileRegionState> = activeTileRegionStates,
+    nextMemos: Record<string, string> = activeTileMemos
   ) => {
     if (!selectedMap) return;
     const updated = await updateWorldMap(selectedMap.id, {
       tileStatePresets: nextPresets,
       tileStateAssignments: nextStates,
       tileRegionStates: nextRegionStates,
+      tileMemos: nextMemos,
     });
     const normalizedPresets = normalizeTilePresets(updated.tileStatePresets ?? []);
     const normalizedStates = normalizeTileStateAssignments(
@@ -2055,7 +2129,14 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     const normalizedRegionStates = normalizeTileRegionStates(
       updated.tileRegionStates ?? nextRegionStates
     );
-    syncMapAfterTileUpdate(updated, normalizedPresets, normalizedStates, normalizedRegionStates);
+    const normalizedMemos = normalizeTileMemos((updated as any).tileMemos ?? nextMemos);
+    syncMapAfterTileUpdate(
+      updated,
+      normalizedPresets,
+      normalizedStates,
+      normalizedRegionStates,
+      normalizedMemos
+    );
   };
 
   const handleCreateTilePreset = async () => {
@@ -2561,6 +2642,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
 
     setBusy(true);
     setErr(null);
+    setSaveNotice(null);
     try {
       const savedInitial =
         sourcePreset && buildingDraft.id
@@ -2602,6 +2684,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         null;
       if (latestSaved) setBuildingDraft(buildDraftFromPreset(latestSaved));
       else resetBuildingDraft();
+      setSaveNotice("저장되었습니다.");
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     } finally {
@@ -2654,6 +2737,26 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setTileEditor({
       targets,
       draft: current.map((entry) => ({ ...entry })),
+    });
+    setTileContextMenu(null);
+  };
+
+  const handleOpenTileMemoEditor = (col: number, row: number) => {
+    const key = tileKey(col, row);
+    const useMultiSelection =
+      selectedHexes.length > 1 && selectedHexes.some((entry) => entry.col === col && entry.row === row);
+    const targets = useMultiSelection
+      ? selectedHexes.map((entry) => ({
+          key: tileKey(entry.col, entry.row),
+          col: entry.col,
+          row: entry.row,
+        }))
+      : [{ key, col, row }];
+    const current = useMultiSelection ? "" : activeTileMemos[key] ?? "";
+    tileMemoDraftRef.current = current;
+    setTileMemoEditor({
+      targets,
+      draft: current,
     });
     setTileContextMenu(null);
   };
@@ -2797,6 +2900,42 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       draft,
     });
     setTileContextMenu(null);
+  };
+
+  const handleTileMemoEditorSave = async () => {
+    if (!tileMemoEditor || !selectedMap) return;
+    const text = String(tileMemoDraftRef.current ?? tileMemoEditor.draft ?? "").trim();
+    const nextMemos = { ...activeTileMemos };
+    if (tileMemoEditor.targets.length <= 1) {
+      const targetKey = tileMemoEditor.targets[0]?.key;
+      if (!targetKey) return;
+      if (text) nextMemos[targetKey] = text;
+      else delete nextMemos[targetKey];
+    } else {
+      for (const target of tileMemoEditor.targets) {
+        if (text) nextMemos[target.key] = text;
+        else delete nextMemos[target.key];
+      }
+    }
+
+    setBusy(true);
+    setErr(null);
+    try {
+      setMemosForCurrentMap(nextMemos);
+      await persistCurrentMapTileData(
+        activeLocalTilePresets,
+        activeTileStates,
+        activeTileRegionStates,
+        nextMemos
+      );
+      setTileMemoEditor(null);
+      tileMemoDraftRef.current = "";
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+      await refreshCurrentMapOnly(selectedMap.id);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleOpenTileBuildingEditor = (col: number, row: number) => {
@@ -3053,6 +3192,12 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
             [latest.id]: normalizeTileRegionStates(latest.tileRegionStates ?? {}),
           }));
         }
+        if ((latest as any).tileMemos && typeof (latest as any).tileMemos === "object") {
+          setTileMemosByMap((prev) => ({
+            ...prev,
+            [latest.id]: normalizeTileMemos((latest as any).tileMemos ?? {}),
+          }));
+        }
       }
       await loadBuildingPresetsForMap(selectedMap.id);
       await loadBuildingInstancesForMap(selectedMap.id);
@@ -3294,7 +3439,8 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     handleViewportWheel, scheduleVisibleBoundsUpdate, imageWidth, imageHeight, setLoadedSize,
     syncLoadedImageMeta, polygons, visibleImageBounds, selectedHexKeySet, tileStateBadgesByKey, EMPTY_STATE_BADGES,
     suppressClickRef, setTileContextMenu, setSelectedHexIfChanged, activeTileRegionStates, tileContextMenu,
-    tileContextMenuRef, handleOpenTileEditor, handleOpenTileRegionEditor, handleOpenTileBuildingEditor,
+    activeTileMemos,
+    tileContextMenuRef, handleOpenTileEditor, handleOpenTileMemoEditor, handleOpenTileRegionEditor, handleOpenTileBuildingEditor,
     handleOpenTileYieldViewer,
     tileYieldViewer,
     setTileYieldViewer,
@@ -3307,6 +3453,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     instanceUpkeepAnyAssignedByTypeById,
     handlePlaceBuildingOnTile, handleUpdateBuildingWorkers, handleToggleBuildingEnabled,
     handleDeleteBuildingOnTile, tileEditor, setTileEditor, activeTilePresets, handleTileEditorSave,
+    tileMemoEditor, setTileMemoEditor, tileMemoDraftRef, handleTileMemoEditorSave,
     tileRegionEditor, setTileRegionEditor, tileRegionDraftRef, handleTileRegionEditorSave,
   };
 
@@ -3420,6 +3567,67 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
                 </span>
               </div>
             </div>
+          </div>
+        </div>
+      ) : null}
+      {foodCompensationNotice ? (
+        <div
+          className="fixed inset-0 z-[171] flex items-center justify-center bg-black/60 px-4"
+          onClick={() => setFoodCompensationNotice(null)}
+        >
+          <div
+            className="w-full max-w-lg rounded-xl border border-rose-700/60 bg-zinc-950/95 p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-rose-300">식량 부족분 금 대체 결과</h3>
+              <button
+                type="button"
+                className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
+                onClick={() => setFoodCompensationNotice(null)}
+              >
+                닫기
+              </button>
+            </div>
+            <div className="space-y-2 text-sm text-zinc-200">
+              <div>
+                부족 식량:{" "}
+                <span className="font-semibold text-amber-300">
+                  {formatWithCommas(foodCompensationNotice.deficitFood)}
+                </span>
+              </div>
+              <div>
+                금 대체 차감:{" "}
+                <span className="font-semibold text-rose-300">
+                  -{formatWithCommas(foodCompensationNotice.goldSpent)}G
+                </span>
+              </div>
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3 text-xs text-zinc-400">
+                식량 부족분을 금으로 충당했습니다.
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {saveNotice ? (
+        <div
+          className="fixed inset-0 z-[172] flex items-center justify-center bg-black/50 px-4"
+          onClick={() => setSaveNotice(null)}
+        >
+          <div
+            className="w-full max-w-sm rounded-xl border border-emerald-700/60 bg-zinc-950/95 p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 text-center text-base font-semibold text-emerald-300">
+              {saveNotice}
+            </div>
+            <button
+              type="button"
+              className="w-full rounded-md bg-emerald-700 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-600"
+              onClick={() => setSaveNotice(null)}
+            >
+              확인
+            </button>
           </div>
         </div>
       ) : null}

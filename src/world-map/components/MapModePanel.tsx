@@ -6,6 +6,7 @@ import MapCanvas from "./MapCanvas";
 import TileContextMenu from "./TileContextMenu";
 import TileBuildingModal from "./TileBuildingModal";
 import TileStateModal from "./TileStateModal";
+import TileMemoModal from "./TileMemoModal";
 import TileRegionModal from "./TileRegionModal";
 import WarehouseModal from "./WarehouseModal";
 import PlacementReportModal from "./PlacementReportModal";
@@ -98,9 +99,11 @@ export default function MapModePanel({ ctx }: Props) {
     setTileContextMenu,
     setSelectedHexIfChanged,
     activeTileRegionStates,
+    activeTileMemos,
     tileContextMenu,
     tileContextMenuRef,
     handleOpenTileEditor,
+    handleOpenTileMemoEditor,
     handleOpenTileRegionEditor,
     handleOpenTileBuildingEditor,
     handleOpenTileYieldViewer,
@@ -128,8 +131,12 @@ export default function MapModePanel({ ctx }: Props) {
     handleDeleteBuildingOnTile,
     tileEditor,
     setTileEditor,
+    tileMemoEditor,
+    setTileMemoEditor,
+    tileMemoDraftRef,
     activeTilePresets,
     handleTileEditorSave,
+    handleTileMemoEditorSave,
     tileRegionEditor,
     setTileRegionEditor,
     tileRegionDraftRef,
@@ -242,18 +249,20 @@ export default function MapModePanel({ ctx }: Props) {
               tileStateBadgesByKey,
               EMPTY_STATE_BADGES,
               suppressClickRef,
-              setTileContextMenu,
-              setSelectedHexIfChanged,
-              showRegionStatusPills,
-              activeTileRegionStates,
-            }}
-          />
+                setTileContextMenu,
+                setSelectedHexIfChanged,
+                showRegionStatusPills,
+                activeTileRegionStates,
+                activeTileMemos,
+              }}
+            />
         </div>
 
         <TileContextMenu
           tileContextMenu={tileContextMenu}
           tileContextMenuRef={tileContextMenuRef}
           onOpenTileEditor={handleOpenTileEditor}
+          onOpenTileMemoEditor={handleOpenTileMemoEditor}
           onOpenTileRegionEditor={handleOpenTileRegionEditor}
           onOpenTileBuildingEditor={handleOpenTileBuildingEditor}
           onOpenTileYieldViewer={handleOpenTileYieldViewer}
@@ -288,6 +297,14 @@ export default function MapModePanel({ ctx }: Props) {
           activeTilePresets={activeTilePresets}
           normalizeHexColor={normalizeHexColor}
           onSave={handleTileEditorSave}
+        />
+
+        <TileMemoModal
+          tileMemoEditor={tileMemoEditor}
+          setTileMemoEditor={setTileMemoEditor}
+          tileMemoDraftRef={tileMemoDraftRef}
+          onSave={handleTileMemoEditorSave}
+          busy={busy}
         />
 
         <TileRegionModal

@@ -515,6 +515,7 @@ export async function updateWorldMap(
         pollution?: number;
       }
     >;
+    tileMemos?: Record<string, string>;
     buildingPresets?: Array<{
       id: string;
       name: string;

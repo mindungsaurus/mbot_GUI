@@ -36,6 +36,7 @@ export type PresetMode = "tile" | "building";
 export type TileStatesByMap = Record<string, Record<string, MapTileStateAssignment[]>>;
 export type TilePresetsByMap = Record<string, MapTileStatePreset[]>;
 export type TileRegionStatesByMap = Record<string, Record<string, MapTileRegionState>>;
+export type TileMemosByMap = Record<string, Record<string, string>>;
 export type BuildingPresetsByMap = Record<string, WorldMapBuildingPresetRow[]>;
 export type BuildingInstancesByMap = Record<string, WorldMapBuildingInstanceRow[]>;
 export type ImageViewportBounds = {
@@ -857,6 +858,18 @@ export function readAssignedWorkersByTypeFromInstanceMeta(
   if (total <= 0) {
     const legacy = readAssignedWorkersFromInstanceMeta(meta);
     if (legacy > 0) out.laborers = legacy;
+  }
+  return out;
+}
+
+export function normalizeTileMemos(raw: unknown) {
+  const src = raw as Record<string, unknown>;
+  if (!src || typeof src !== "object") return {} as Record<string, string>;
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(src)) {
+    const text = String(value ?? "").trim();
+    if (!text) continue;
+    out[key] = text;
   }
   return out;
 }

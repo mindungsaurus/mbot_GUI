@@ -11,6 +11,7 @@ type Props = {
   tileContextMenu: TileContextMenuState | null;
   tileContextMenuRef: MutableRefObject<HTMLDivElement | null>;
   onOpenTileEditor: (col: number, row: number) => void;
+  onOpenTileMemoEditor: (col: number, row: number) => void;
   onOpenTileRegionEditor: (col: number, row: number) => void;
   onOpenTileBuildingEditor: (col: number, row: number) => void;
   onOpenTileYieldViewer: (col: number, row: number) => void;
@@ -20,6 +21,7 @@ export default function TileContextMenu({
   tileContextMenu,
   tileContextMenuRef,
   onOpenTileEditor,
+  onOpenTileMemoEditor,
   onOpenTileRegionEditor,
   onOpenTileBuildingEditor,
   onOpenTileYieldViewer,
@@ -39,6 +41,13 @@ export default function TileContextMenu({
         onClick={() => onOpenTileEditor(tileContextMenu.col, tileContextMenu.row)}
       >
         타일 속성
+      </button>
+      <button
+        type="button"
+        className="mt-1 w-full rounded-md px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800"
+        onClick={() => onOpenTileMemoEditor(tileContextMenu.col, tileContextMenu.row)}
+      >
+        타일 메모
       </button>
       <button
         type="button"
