@@ -231,7 +231,7 @@ export default function MapCanvas({ ctx }: Props) {
                         if (hasThreat) {
                           metricPills.push({
                             key: "threat",
-                            text: `⚠️ ${regionState?.threat ?? 0}`,
+                            text: `⚠️ ${Math.max(0, Math.trunc(Number(regionState?.threat ?? 0) || 0))}`,
                             color: "#ef4444",
                             w: statW,
                             center: "bl",

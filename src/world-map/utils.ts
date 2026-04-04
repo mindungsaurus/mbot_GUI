@@ -662,7 +662,7 @@ export function normalizePlacementRules(raw: unknown): BuildingPlacementRule[] {
         opRaw === "lte"
           ? (opRaw as BuildingRuleComparisonOp)
           : "gte";
-      const value = Math.max(0, Math.trunc(Number(cast?.value ?? 0) || 0));
+      const value = Math.trunc(Number(cast?.value ?? 0) || 0);
       out.push({ kind: "tileRegionCompare", field, op, value });
       continue;
     }
