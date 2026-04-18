@@ -12,11 +12,14 @@ import WarehouseModal from "./WarehouseModal";
 import PlacementReportModal from "./PlacementReportModal";
 import TileYieldModal from "./TileYieldModal";
 import ResourceStatusModal from "./ResourceStatusModal";
+import TroopModal from "./TroopModal";
+import CarriageModal from "./CarriageModal";
 
 type Props = { ctx: any };
 
 export default function MapModePanel({ ctx }: Props) {
   const {
+    isReadOnly,
     selectedMap,
     settingsOpen,
     settingsTab,
@@ -26,6 +29,7 @@ export default function MapModePanel({ ctx }: Props) {
     activeTileStates,
     presetById,
     activeCityGlobal,
+    troopPowerByTile,
     totalPopulation,
     fileInputRef,
     citySettingsFormRef,
@@ -78,6 +82,7 @@ export default function MapModePanel({ ctx }: Props) {
     setPlacementReportOpen,
     placementPopulationSummary,
     placementReportRows,
+    troopCommittedByPreset,
     imageUrl,
     viewportRef,
     dragging,
@@ -106,7 +111,24 @@ export default function MapModePanel({ ctx }: Props) {
     handleOpenTileMemoEditor,
     handleOpenTileRegionEditor,
     handleOpenTileBuildingEditor,
+    handleOpenTileTroopEditor,
     handleOpenTileYieldViewer,
+    troopModalOpen,
+    troopModalScope,
+    setTroopModalScope,
+    setTroopModalOpen,
+    activeTroopPresets,
+    troopState,
+    handleStartTroopTraining,
+    handleCancelTroopTraining,
+    handleDeployTroopToSelectedTile,
+    handleWithdrawTroopFromSelectedTile,
+    handleDisbandTroop,
+    carriageModalOpen,
+    setCarriageModalOpen,
+    activeCarriagePresets,
+    handleRecruitCarriage,
+    handleCancelCarriageRecruit,
     tileYieldViewer,
     setTileYieldViewer,
     tileYieldRows,
@@ -201,6 +223,7 @@ export default function MapModePanel({ ctx }: Props) {
           />
 
           <ResourcePopulationOverlay
+            readOnly={isReadOnly}
             activeCityGlobal={activeCityGlobal}
             dailyResourceDeltaById={dailyResourceDeltaById}
             resourceOverlayOpen={resourceOverlayOpen}
@@ -221,6 +244,11 @@ export default function MapModePanel({ ctx }: Props) {
             onApplyResourceAdjust={handleApplyResourceAdjust}
             onOpenPlacementReport={() => setPlacementReportOpen(true)}
             onOpenResourceStatus={() => setResourceStatusModalOpen(true)}
+            onOpenTroopModal={() => {
+              setTroopModalScope("full");
+              setTroopModalOpen(true);
+            }}
+            onOpenCarriageModal={() => setCarriageModalOpen(true)}
           />
 
           <MapCanvas
@@ -254,17 +282,20 @@ export default function MapModePanel({ ctx }: Props) {
                 showRegionStatusPills,
                 activeTileRegionStates,
                 activeTileMemos,
+                troopPowerByTile,
               }}
             />
         </div>
 
         <TileContextMenu
+          readOnly={isReadOnly}
           tileContextMenu={tileContextMenu}
           tileContextMenuRef={tileContextMenuRef}
           onOpenTileEditor={handleOpenTileEditor}
           onOpenTileMemoEditor={handleOpenTileMemoEditor}
           onOpenTileRegionEditor={handleOpenTileRegionEditor}
           onOpenTileBuildingEditor={handleOpenTileBuildingEditor}
+          onOpenTileTroopEditor={handleOpenTileTroopEditor}
           onOpenTileYieldViewer={handleOpenTileYieldViewer}
         />
 
@@ -317,6 +348,7 @@ export default function MapModePanel({ ctx }: Props) {
 
         <WarehouseModal
           open={warehouseModalOpen}
+          readOnly={isReadOnly}
           busy={busy}
           warehouseEntries={warehouseEntries}
           itemCatalogEntries={itemCatalogEntries}
@@ -331,6 +363,7 @@ export default function MapModePanel({ ctx }: Props) {
           open={placementReportOpen}
           rows={placementReportRows}
           populationSummary={placementPopulationSummary}
+          troopCommittedByPreset={troopCommittedByPreset}
           onClose={() => setPlacementReportOpen(false)}
         />
 
@@ -345,6 +378,58 @@ export default function MapModePanel({ ctx }: Props) {
           setTileYieldViewer={setTileYieldViewer}
           tileYieldRows={tileYieldRows}
           tileYieldTotals={tileYieldTotals}
+        />
+
+        <TroopModal
+          open={troopModalOpen}
+          readOnly={isReadOnly}
+          busy={busy}
+          map={selectedMap}
+          troopState={troopState}
+          troopPresets={activeTroopPresets}
+          selectedHex={selectedHex}
+          scope={troopModalScope}
+          onClose={() => {
+            setTroopModalOpen(false);
+            setTroopModalScope("full");
+          }}
+          onStartTraining={(presetId, qty) => {
+            if (isReadOnly) return;
+            void handleStartTroopTraining(presetId, qty);
+          }}
+          onCancelTraining={(orderId) => {
+            if (isReadOnly) return;
+            void handleCancelTroopTraining(orderId);
+          }}
+          onDeployToSelectedTile={(presetId, qty) => {
+            if (isReadOnly) return;
+            void handleDeployTroopToSelectedTile(presetId, qty);
+          }}
+          onWithdrawFromSelectedTile={(presetId, qty) => {
+            if (isReadOnly) return;
+            void handleWithdrawTroopFromSelectedTile(presetId, qty);
+          }}
+          onDisbandTroop={(presetId, qty) => {
+            if (isReadOnly) return;
+            void handleDisbandTroop(presetId, qty);
+          }}
+        />
+
+        <CarriageModal
+          open={carriageModalOpen}
+          readOnly={isReadOnly}
+          busy={busy}
+          carriagePresets={activeCarriagePresets}
+          carriageQueue={activeCityGlobal?.carriage?.recruiting ?? []}
+          onClose={() => setCarriageModalOpen(false)}
+          onRecruit={(presetId, qty) => {
+            if (isReadOnly) return;
+            void handleRecruitCarriage(presetId, qty);
+          }}
+          onCancelRecruit={(orderId) => {
+            if (isReadOnly) return;
+            void handleCancelCarriageRecruit(orderId);
+          }}
         />
       </div>
     </>

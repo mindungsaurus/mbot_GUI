@@ -33,7 +33,7 @@ export default function WorldMapHeaderBar({
         {isAdmin ? <div className="text-xs text-amber-300">관리자</div> : null}
       </div>
       <div className="pointer-events-none absolute left-1/2 top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center">
-        {!isPresetMode ? (
+        {!isPresetMode && isAdmin ? (
           <button
             type="button"
             className="pointer-events-auto rounded-md border border-amber-700/70 bg-amber-950/30 px-3 py-1.5 text-xs font-semibold text-amber-200 hover:bg-amber-900/40 disabled:opacity-60"
@@ -60,7 +60,7 @@ export default function WorldMapHeaderBar({
             지도 목록
           </button>
         ) : null}
-        {!isPresetMode ? (
+        {!isPresetMode && isAdmin ? (
           <button
             type="button"
             className={[

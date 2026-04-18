@@ -1,3 +1,5 @@
+import { getTileDisplayNumber } from "../utils";
+
 type Props = {
   ctx: any;
 };
@@ -33,6 +35,7 @@ export default function MapCanvas({ ctx }: Props) {
     showRegionStatusPills,
     activeTileRegionStates,
     activeTileMemos,
+    troopPowerByTile,
   } = ctx;
 
   return !imageUrl ? (
@@ -101,7 +104,7 @@ export default function MapCanvas({ ctx }: Props) {
                 showTileStatePills && isPillInViewport
                   ? (tileStateBadgesByKey[poly.tileKey] ?? EMPTY_STATE_BADGES)
                   : EMPTY_STATE_BADGES;
-              const tileNumber = poly.row * selectedMap.cols + poly.col + 1;
+              const tileNumber = getTileDisplayNumber(selectedMap.cols, poly.col, poly.row);
               const tileNumberFontSize = Math.max(18, Math.round(selectedMap.hexSize * 0.7));
               const hasMemo =
                 typeof activeTileMemos?.[poly.tileKey] === "string" &&
@@ -206,7 +209,13 @@ export default function MapCanvas({ ctx }: Props) {
                           regionState?.spaceUsed != null || regionState?.spaceCap != null;
                         const hasThreat = regionState?.threat != null;
                         const hasPollution = regionState?.pollution != null;
+                        const troopPower = Math.max(
+                          0,
+                          Math.trunc(Number(troopPowerByTile?.[poly.tileKey] ?? 0) || 0)
+                        );
+                        const hasTroopPower = troopPower > 0;
                         const cornerCenters = {
+                          tc: { x: poly.cx, y: poly.cy - hexSize * 0.58 },
                           tl: { x: poly.cx - hexSize * 0.36, y: poly.cy - hexSize * 0.58 },
                           tr: { x: poly.cx + hexSize * 0.36, y: poly.cy - hexSize * 0.58 },
                           bl: { x: poly.cx - hexSize * 0.36, y: poly.cy + hexSize * 0.56 },
@@ -228,10 +237,24 @@ export default function MapCanvas({ ctx }: Props) {
                             center: "tl",
                           });
                         }
+                        if (hasTroopPower) {
+                          metricPills.push({
+                            key: "troopPower",
+                            text: `⚔️ ${troopPower}`,
+                            color: "#fbbf24",
+                            w: statW,
+                            center: "tr",
+                          });
+                        }
                         if (hasThreat) {
+                          const rawThreat = Math.max(
+                            0,
+                            Math.trunc(Number(regionState?.threat ?? 0) || 0)
+                          );
+                          const effectiveThreat = Math.max(0, rawThreat - troopPower);
                           metricPills.push({
                             key: "threat",
-                            text: `⚠️ ${Math.max(0, Math.trunc(Number(regionState?.threat ?? 0) || 0))}`,
+                            text: `⚠️ ${effectiveThreat}`,
                             color: "#ef4444",
                             w: statW,
                             center: "bl",

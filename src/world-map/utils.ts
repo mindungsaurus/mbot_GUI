@@ -6,7 +6,9 @@
   BuildingRuleExpr,
   BuildingRulePredicate,
   CityGlobalState,
+  CityCarriageState,
   CityPopulationState,
+  CityTroopState,
   HexOrientation,
   MapTileRegionState,
   MapTileStateAssignment,
@@ -32,7 +34,7 @@ export type Draft = {
 export type SelectedHex = { col: number; row: number } | null;
 export type ViewMode = "scroll" | "drag";
 export type SettingsTab = "map" | "city";
-export type PresetMode = "tile" | "building";
+export type PresetMode = "tile" | "building" | "troop" | "carriage";
 export type TileStatesByMap = Record<string, Record<string, MapTileStateAssignment[]>>;
 export type TilePresetsByMap = Record<string, MapTileStatePreset[]>;
 export type TileRegionStatesByMap = Record<string, Record<string, MapTileRegionState>>;
@@ -159,11 +161,13 @@ export const EMPTY_WORKER_ASSIGNMENT_DRAFT: WorkerAssignmentDraft = {
 
 export type BuildingDraftState = {
   id: string | null;
+  presetType: "building" | "troop" | "carriage";
   name: string;
   color: string;
   tier: string;
   effort: string;
   space: string;
+  troopThreatReduction: string;
   description: string;
   placementRules: BuildingPlacementRule[];
   buildCost: ResourceCostDraft;
@@ -171,6 +175,7 @@ export type BuildingDraftState = {
   upkeepPopulation: PopulationCostDraft;
   onBuild: BuildingExecutionRule[];
   daily: BuildingExecutionRule[];
+  sustain: BuildingExecutionRule[];
   onRemove: BuildingExecutionRule[];
 };
 
@@ -181,6 +186,183 @@ export function createDefaultPopulationState(): CityPopulationState {
     scholars: { total: 0, available: 0 },
     laborers: { total: 0, available: 0 },
     elderly: { total: 0, available: 0 },
+  };
+}
+
+export function createDefaultTroopState(): CityTroopState {
+  return {
+    stock: {},
+    deployed: {},
+    training: [],
+    committedPopulation: {
+      settlers: 0,
+      engineers: 0,
+      scholars: 0,
+      laborers: 0,
+      elderly: 0,
+    },
+  };
+}
+
+export function createDefaultCarriageState(): CityCarriageState {
+  return {
+    recruiting: [],
+  };
+}
+
+function normalizeTroopState(input: unknown): CityTroopState {
+  const base = createDefaultTroopState();
+  const raw =
+    input && typeof input === "object" ? (input as Partial<CityTroopState>) : ({} as Partial<CityTroopState>);
+  const normalizeInt = (value: unknown) => {
+    const n = Math.trunc(Number(value));
+    return Number.isFinite(n) ? Math.max(0, n) : 0;
+  };
+  const normalizePopulationRecord = (value: unknown) => {
+    const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+    return {
+      settlers: normalizeInt(record.settlers),
+      engineers: normalizeInt(record.engineers),
+      scholars: normalizeInt(record.scholars),
+      laborers: normalizeInt(record.laborers),
+      elderly: normalizeInt(record.elderly),
+    };
+  };
+  const normalizeCostsRecord = (value: unknown) => {
+    const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(record)) {
+      const key = String(k ?? "").trim();
+      if (!key) continue;
+      const n = normalizeInt(v);
+      if (n <= 0) continue;
+      out[key] = n;
+    }
+    return out;
+  };
+
+  const nextStock: Record<string, number> = {};
+  for (const [presetIdRaw, amountRaw] of Object.entries(
+    raw.stock && typeof raw.stock === "object" ? (raw.stock as Record<string, unknown>) : {}
+  )) {
+    const presetId = String(presetIdRaw ?? "").trim();
+    if (!presetId) continue;
+    const amount = normalizeInt(amountRaw);
+    if (amount <= 0) continue;
+    nextStock[presetId] = amount;
+  }
+
+  const nextDeployed: Record<string, Record<string, number>> = {};
+  for (const [tileKeyRaw, byPresetRaw] of Object.entries(
+    raw.deployed && typeof raw.deployed === "object"
+      ? (raw.deployed as Record<string, unknown>)
+      : {}
+  )) {
+    const key = String(tileKeyRaw ?? "").trim();
+    if (!key) continue;
+    const byPreset = byPresetRaw && typeof byPresetRaw === "object"
+      ? (byPresetRaw as Record<string, unknown>)
+      : {};
+    const nextByPreset: Record<string, number> = {};
+    for (const [presetIdRaw, amountRaw] of Object.entries(byPreset)) {
+      const presetId = String(presetIdRaw ?? "").trim();
+      if (!presetId) continue;
+      const amount = normalizeInt(amountRaw);
+      if (amount <= 0) continue;
+      nextByPreset[presetId] = amount;
+    }
+    if (Object.keys(nextByPreset).length > 0) nextDeployed[key] = nextByPreset;
+  }
+
+  const nextTraining = Array.isArray(raw.training)
+    ? raw.training
+        .map((order) => {
+          if (!order || typeof order !== "object") return null;
+          const row = order as Record<string, unknown>;
+          const id = String(row.id ?? "").trim();
+          const presetId = String(row.presetId ?? "").trim();
+          const quantity = normalizeInt(row.quantity);
+          const remainingDays = normalizeInt(row.remainingDays);
+          if (!id || !presetId || quantity <= 0) return null;
+          const committedCosts = normalizeCostsRecord((row as any).committedCosts);
+          const normalized: CityTroopState["training"][number] = {
+            id,
+            presetId,
+            quantity,
+            remainingDays,
+            committedPopulation: normalizePopulationRecord(row.committedPopulation),
+            ...(Object.keys(committedCosts).length > 0 ? { committedCosts } : {}),
+          };
+          return normalized;
+        })
+        .filter((v): v is CityTroopState["training"][number] => v !== null)
+    : [];
+
+  return {
+    ...base,
+    stock: nextStock,
+    deployed: nextDeployed,
+    training: nextTraining,
+    committedPopulation: normalizePopulationRecord(raw.committedPopulation),
+  };
+}
+
+function normalizeCarriageState(input: unknown): CityCarriageState {
+  const base = createDefaultCarriageState();
+  const raw =
+    input && typeof input === "object"
+      ? (input as Partial<CityCarriageState>)
+      : ({} as Partial<CityCarriageState>);
+  const normalizeInt = (value: unknown) => {
+    const n = Math.trunc(Number(value));
+    return Number.isFinite(n) ? Math.max(0, n) : 0;
+  };
+  const normalizePopulationRecord = (value: unknown) => {
+    const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+    return {
+      settlers: normalizeInt(record.settlers),
+      engineers: normalizeInt(record.engineers),
+      scholars: normalizeInt(record.scholars),
+      laborers: normalizeInt(record.laborers),
+      elderly: normalizeInt(record.elderly),
+    };
+  };
+  const normalizeResourceRecord = (value: unknown) => {
+    const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+    const out: Partial<Record<BuildingResourceId, number>> = {};
+    for (const [k, v] of Object.entries(record)) {
+      if (!isBuildingResourceId(k)) continue;
+      const amount = normalizeInt(v);
+      if (amount <= 0) continue;
+      out[k] = amount;
+    }
+    return out;
+  };
+  const recruiting = Array.isArray(raw.recruiting) ? raw.recruiting : [];
+  const nextRecruiting = recruiting
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const row = entry as Record<string, unknown>;
+      const id = String(row.id ?? "").trim();
+      const presetId = String(row.presetId ?? "").trim();
+      const quantity = normalizeInt(row.quantity);
+      const remainingDays = Math.max(1, normalizeInt(row.remainingDays));
+      if (!id || !presetId || quantity <= 0) return null;
+      return {
+        id,
+        presetId,
+        quantity,
+        remainingDays,
+        gainPopulation: normalizePopulationRecord(row.gainPopulation),
+        gainResources: normalizeResourceRecord(row.gainResources),
+        committedCosts: normalizeResourceRecord(row.committedCosts),
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => row != null);
+
+  return {
+    ...base,
+    recruiting: nextRecruiting,
   };
 }
 
@@ -216,6 +398,8 @@ export function createDefaultCityGlobalState(): CityGlobalState {
     satisfaction: 0,
     populationCap: 0,
     population: createDefaultPopulationState(),
+    troops: createDefaultTroopState(),
+    carriage: createDefaultCarriageState(),
   };
 }
 
@@ -227,6 +411,8 @@ export function normalizeCityGlobalState(input?: Partial<CityGlobalState> | null
   const foodDeficitGoldRate = Number((input as any)?.foodDeficitGoldRate);
   const warehouse = (input?.warehouse ?? {}) as Record<string, unknown>;
   const population = (input?.population ?? {}) as Partial<CityGlobalState["population"]>;
+  const troops = normalizeTroopState((input as any)?.troops);
+  const carriage = normalizeCarriageState((input as any)?.carriage);
   const normalizeInt = (value: unknown, fallback: number) => {
     const n = Math.trunc(Number(value));
     return Number.isFinite(n) ? Math.max(0, n) : fallback;
@@ -313,6 +499,8 @@ export function normalizeCityGlobalState(input?: Partial<CityGlobalState> | null
     satisfaction: normalizePercent(input?.satisfaction, base.satisfaction),
     populationCap,
     population: nextPopulation,
+    troops,
+    carriage,
   };
 }
 
@@ -387,6 +575,18 @@ export function getHexLayout(
 
 export function tileKey(col: number, row: number) {
   return `${col}:${row}`;
+}
+
+export function parseTileKey(key: string): { col: number; row: number } | null {
+  const [colRaw, rowRaw] = String(key ?? "").split(":");
+  const col = Number(colRaw);
+  const row = Number(rowRaw);
+  if (!Number.isFinite(col) || !Number.isFinite(row)) return null;
+  return { col: Math.trunc(col), row: Math.trunc(row) };
+}
+
+export function getTileDisplayNumber(cols: number, col: number, row: number) {
+  return Math.trunc(row) * Math.max(1, Math.trunc(cols)) + Math.trunc(col) + 1;
 }
 
 export function parseHexColor(value: unknown): string | null {
@@ -508,7 +708,8 @@ export function normalizeExecutionAction(raw: unknown): BuildingRuleAction {
   const normalizeActionTarget = () => {
     const target: "self" | "range" = (cast as any)?.target === "range" ? "range" : "self";
     const distance = Math.max(0, Math.trunc(Number((cast as any)?.distance ?? 1) || 0));
-    return target === "range" ? { target, distance } : { target };
+    const excludeSelf = !!(cast as any)?.excludeSelf;
+    return target === "range" ? { target, distance, excludeSelf } : { target, excludeSelf: false };
   };
   if (kind === "adjustResource") {
     const rawResourceId = (cast as any)?.resourceId;
@@ -700,6 +901,17 @@ export function normalizePlacementRules(raw: unknown): BuildingPlacementRule[] {
       out.push({ kind: "requireBuildingInRange", presetId, distance, minCount, negate, repeat });
       continue;
     }
+    if (kind === "requireTroopInRange") {
+      const presetId = String(cast?.presetId ?? "").trim();
+      if (!presetId) continue;
+      const parsedDistance = Math.trunc(Number(cast?.distance ?? 1));
+      const distance = Number.isFinite(parsedDistance) ? Math.max(0, parsedDistance) : 1;
+      const minCount = Math.max(1, Math.trunc(Number(cast?.minCount ?? 1) || 1));
+      const negate = !!cast?.negate;
+      const repeat = !!cast?.repeat;
+      out.push({ kind: "requireTroopInRange", presetId, distance, minCount, negate, repeat });
+      continue;
+    }
     // Legacy compatibility
     if (kind === "requireAdjacentTag") {
       const tagId = String((cast as any).tagId ?? "").trim();
@@ -734,11 +946,13 @@ export function normalizeBuildingPresets(raw: unknown): WorldMapBuildingPresetRo
     const id = String(cast?.id ?? "").trim() || makeLocalId();
     if (seen.has(id)) continue;
     seen.add(id);
+    const decoded = decodePresetDescriptionWithType(cast?.description, cast?.presetType);
     out.push({
       id,
       mapId: String(cast?.mapId ?? "").trim() || null,
       name,
       color: normalizeHexColor(cast?.color, "#eab308"),
+      presetType: normalizePresetType(decoded.presetType),
       tier: String(cast?.tier ?? "").trim() || undefined,
       effort: Number.isFinite(Number(cast?.effort))
         ? Math.max(0, Math.trunc(Number(cast?.effort)))
@@ -746,7 +960,7 @@ export function normalizeBuildingPresets(raw: unknown): WorldMapBuildingPresetRo
       space: Number.isFinite(Number(cast?.space))
         ? Math.max(0, Math.trunc(Number(cast?.space)))
         : undefined,
-      description: String(cast?.description ?? "").trim() || undefined,
+      description: decoded.description || undefined,
       placementRules: normalizePlacementRules(cast?.placementRules),
       buildCost:
         cast?.buildCost && typeof cast.buildCost === "object"
@@ -774,6 +988,7 @@ export function normalizeBuildingPresets(raw: unknown): WorldMapBuildingPresetRo
           ? {
               onBuild: normalizeExecutionRules(cast.effects.onBuild, false),
               daily: normalizeExecutionRules(cast.effects.daily, true),
+              sustain: normalizeExecutionRules(cast.effects.sustain, false),
               onRemove: normalizeExecutionRules(cast.effects.onRemove, false),
             }
           : undefined,
@@ -1090,6 +1305,26 @@ export function countBuildingsInRange(
   return count;
 }
 
+export function countTroopsInRange(
+  ctx: RuleEvalContext,
+  rule: { presetId: string; distance?: number }
+) {
+  const distance = Math.max(0, safeInt(rule.distance, 1));
+  let count = 0;
+  const deployed = ctx.cityGlobal?.troops?.deployed ?? {};
+  for (const [key, byPreset] of Object.entries(deployed)) {
+    const qty = Math.max(0, Math.trunc(Number((byPreset as Record<string, unknown>)?.[rule.presetId] ?? 0) || 0));
+    if (qty <= 0) continue;
+    const [colRaw, rowRaw] = String(key).split(":");
+    const col = safeInt(colRaw, Number.NaN);
+    const row = safeInt(rowRaw, Number.NaN);
+    if (!Number.isFinite(col) || !Number.isFinite(row)) continue;
+    const dist = hexDistanceByOrientation(ctx.map.orientation, ctx.col, ctx.row, col, row);
+    if (dist <= distance) count += qty;
+  }
+  return count;
+}
+
 export function getTileMetricValue(
   ctx: RuleEvalContext,
   metric: "adjacentTagCount" | "adjacentBuildingCount" | "tileStateValue",
@@ -1225,6 +1460,16 @@ export function evaluateRulePredicatePreview(
     return { matched, repeatCount };
   }
 
+  if (predicate.kind === "requireTroopInRange") {
+    const minCount = Math.max(1, safeInt(predicate.minCount, 1));
+    const count = countTroopsInRange(ctx, predicate);
+    const negate = !!predicate.negate;
+    const matched = negate ? count < minCount : count >= minCount;
+    const repeatCount =
+      matched && predicate.repeat && !negate ? Math.max(1, Math.floor(count / minCount)) : matched ? 1 : 0;
+    return { matched, repeatCount };
+  }
+
   return { matched: true, repeatCount: 1 };
 }
 
@@ -1248,6 +1493,93 @@ export function createDefaultRuleAction(): BuildingRuleAction {
   };
 }
 
+const PRESET_TYPE_MARKER_RE = /\[wm:preset=(building|troop|carriage)\]/i;
+const TROOP_BASE_THREAT_RULE_ID = "__wm_troop_base_threat__";
+
+export function normalizePresetType(
+  value: unknown
+): "building" | "troop" | "carriage" {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "troop") return "troop";
+  if (normalized === "carriage") return "carriage";
+  return "building";
+}
+
+export function decodePresetDescriptionWithType(
+  description: unknown,
+  explicitPresetType?: unknown
+): { description: string; presetType: "building" | "troop" | "carriage" } {
+  const raw = String(description ?? "");
+  const marker = raw.match(PRESET_TYPE_MARKER_RE);
+  const markerType =
+    marker?.[1] === "troop" ? "troop" : marker?.[1] === "carriage" ? "carriage" : "building";
+  const presetType = explicitPresetType
+    ? normalizePresetType(explicitPresetType)
+    : marker
+      ? markerType
+      : "building";
+  const cleaned = raw.replace(PRESET_TYPE_MARKER_RE, "").trim();
+  return { description: cleaned, presetType };
+}
+
+export function encodePresetDescriptionWithType(
+  description: unknown,
+  presetType: "building" | "troop" | "carriage"
+): string | undefined {
+  const base = String(description ?? "").replace(PRESET_TYPE_MARKER_RE, "").trim();
+  if (presetType === "troop") {
+    return base ? `${base}\n[wm:preset=troop]` : "[wm:preset=troop]";
+  }
+  if (presetType === "carriage") {
+    return base ? `${base}\n[wm:preset=carriage]` : "[wm:preset=carriage]";
+  }
+  return base || undefined;
+}
+
+function isAutoTroopThreatRule(rule: BuildingExecutionRule | undefined) {
+  if (!rule) return false;
+  if (String(rule.id ?? "").trim() !== TROOP_BASE_THREAT_RULE_ID) return false;
+  return true;
+}
+
+export function stripAutoTroopThreatRules(
+  rules: BuildingExecutionRule[] | undefined
+): BuildingExecutionRule[] {
+  return (Array.isArray(rules) ? rules : []).filter((rule) => !isAutoTroopThreatRule(rule));
+}
+
+export function readAutoTroopThreatReduction(
+  rules: BuildingExecutionRule[] | undefined
+): number {
+  const list = Array.isArray(rules) ? rules : [];
+  for (const rule of list) {
+    if (!isAutoTroopThreatRule(rule)) continue;
+    const action = rule.actions?.[0];
+    if (!action || action.kind !== "adjustTileRegion" || action.field !== "threat") continue;
+    const n = Number(action.delta?.kind === "const" ? action.delta.value : 0);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.trunc(Math.abs(n)));
+  }
+  return 0;
+}
+
+export function createAutoTroopThreatRule(threatReduction: number): BuildingExecutionRule {
+  const value = Math.max(0, Math.trunc(Number(threatReduction) || 0));
+  return {
+    id: TROOP_BASE_THREAT_RULE_ID,
+    intervalDays: 1,
+    actions: [
+      {
+        kind: "adjustTileRegion",
+        field: "threat",
+        target: "self",
+        distance: 0,
+        delta: { kind: "const", value: -value },
+      },
+    ],
+  };
+}
+
 export function createDefaultExecutionRule(withInterval = false): BuildingExecutionRule {
   return {
     id: makeLocalId(),
@@ -1259,11 +1591,13 @@ export function createDefaultExecutionRule(withInterval = false): BuildingExecut
 export function createDefaultBuildingDraftState(): BuildingDraftState {
   return {
     id: null,
+    presetType: "building",
     name: "",
     color: "#eab308",
     tier: "",
     effort: "",
     space: "",
+    troopThreatReduction: "",
     description: "",
     placementRules: [],
     buildCost: createEmptyResourceCostDraft(),
@@ -1271,6 +1605,7 @@ export function createDefaultBuildingDraftState(): BuildingDraftState {
     upkeepPopulation: createEmptyPopulationCostDraft(),
     onBuild: [],
     daily: [],
+    sustain: [],
     onRemove: [],
   };
 }
@@ -1348,20 +1683,27 @@ export function exprToEditableNumber(expr: BuildingRuleExpr | undefined): string
 }
 
 export function buildDraftFromPreset(row: WorldMapBuildingPresetRow): BuildingDraftState {
+  const decoded = decodePresetDescriptionWithType(row.description, row.presetType);
+  const presetType = normalizePresetType(decoded.presetType);
+  const threatReduction =
+    presetType === "troop" ? readAutoTroopThreatReduction(row.effects?.daily) : 0;
   return {
     id: row.id,
+    presetType,
     name: row.name,
     color: normalizeHexColor(row.color, "#eab308"),
     tier: row.tier ?? "",
     effort: row.effort == null ? "" : String(row.effort),
     space: row.space == null ? "" : String(row.space),
-    description: row.description ?? "",
+    troopThreatReduction: threatReduction > 0 ? String(threatReduction) : "",
+    description: decoded.description,
     placementRules: normalizePlacementRules(row.placementRules),
     buildCost: toResourceCostDraftFromNumbers(row.buildCost),
     upkeepResources: toResourceCostDraftFromNumbers(row.upkeep?.resources),
     upkeepPopulation: toStringRecordFromNumbers(UPKEEP_POPULATION_IDS, row.upkeep?.population),
     onBuild: normalizeExecutionRules(row.effects?.onBuild, false),
-    daily: normalizeExecutionRules(row.effects?.daily, true),
+    daily: stripAutoTroopThreatRules(normalizeExecutionRules(row.effects?.daily, true)),
+    sustain: normalizeExecutionRules(row.effects?.sustain, false),
     onRemove: normalizeExecutionRules(row.effects?.onRemove, false),
   };
 }

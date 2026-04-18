@@ -8,22 +8,26 @@ type TileContextMenuState = {
 };
 
 type Props = {
+  readOnly?: boolean;
   tileContextMenu: TileContextMenuState | null;
   tileContextMenuRef: MutableRefObject<HTMLDivElement | null>;
   onOpenTileEditor: (col: number, row: number) => void;
   onOpenTileMemoEditor: (col: number, row: number) => void;
   onOpenTileRegionEditor: (col: number, row: number) => void;
   onOpenTileBuildingEditor: (col: number, row: number) => void;
+  onOpenTileTroopEditor: (col: number, row: number) => void;
   onOpenTileYieldViewer: (col: number, row: number) => void;
 };
 
 export default function TileContextMenu({
+  readOnly = false,
   tileContextMenu,
   tileContextMenuRef,
   onOpenTileEditor,
   onOpenTileMemoEditor,
   onOpenTileRegionEditor,
   onOpenTileBuildingEditor,
+  onOpenTileTroopEditor,
   onOpenTileYieldViewer,
 }: Props) {
   if (!tileContextMenu) return null;
@@ -35,34 +39,53 @@ export default function TileContextMenu({
       style={{ left: tileContextMenu.x + 8, top: tileContextMenu.y + 8 }}
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <button
-        type="button"
-        className="w-full rounded-md px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800"
-        onClick={() => onOpenTileEditor(tileContextMenu.col, tileContextMenu.row)}
-      >
-        타일 속성
-      </button>
-      <button
-        type="button"
-        className="mt-1 w-full rounded-md px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800"
-        onClick={() => onOpenTileMemoEditor(tileContextMenu.col, tileContextMenu.row)}
-      >
-        타일 메모
-      </button>
-      <button
-        type="button"
-        className="mt-1 w-full rounded-md px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800"
-        onClick={() => onOpenTileRegionEditor(tileContextMenu.col, tileContextMenu.row)}
-      >
-        지역 상태
-      </button>
-      <button
-        type="button"
-        className="mt-1 w-full rounded-md px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800"
-        onClick={() => onOpenTileBuildingEditor(tileContextMenu.col, tileContextMenu.row)}
-      >
-        건물 배치
-      </button>
+      {!readOnly ? (
+        <>
+          <button
+            type="button"
+            className="w-full rounded-md px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800"
+            onClick={() => onOpenTileEditor(tileContextMenu.col, tileContextMenu.row)}
+          >
+            타일 속성
+          </button>
+          <button
+            type="button"
+            className="mt-1 w-full rounded-md px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800"
+            onClick={() => onOpenTileMemoEditor(tileContextMenu.col, tileContextMenu.row)}
+          >
+            타일 메모
+          </button>
+          <button
+            type="button"
+            className="mt-1 w-full rounded-md px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800"
+            onClick={() => onOpenTileRegionEditor(tileContextMenu.col, tileContextMenu.row)}
+          >
+            지역 상태
+          </button>
+          <button
+            type="button"
+            className="mt-1 w-full rounded-md px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800"
+            onClick={() => onOpenTileBuildingEditor(tileContextMenu.col, tileContextMenu.row)}
+          >
+            건물 배치
+          </button>
+          <button
+            type="button"
+            className="mt-1 w-full rounded-md px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800"
+            onClick={() => onOpenTileTroopEditor(tileContextMenu.col, tileContextMenu.row)}
+          >
+            병력 배치
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          className="w-full rounded-md px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800"
+          onClick={() => onOpenTileTroopEditor(tileContextMenu.col, tileContextMenu.row)}
+        >
+          병력 배치 현황
+        </button>
+      )}
       <button
         type="button"
         className="mt-1 w-full rounded-md px-2 py-1.5 text-left text-zinc-100 hover:bg-zinc-800"

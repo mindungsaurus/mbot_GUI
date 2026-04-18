@@ -12,6 +12,7 @@ import {
 } from "../utils";
 
 type Props = {
+  readOnly?: boolean;
   activeCityGlobal: CityGlobalState;
   dailyResourceDeltaById: Record<ResourceId, number>;
   resourceOverlayOpen: boolean;
@@ -32,9 +33,12 @@ type Props = {
   onApplyResourceAdjust: () => void;
   onOpenPlacementReport: () => void;
   onOpenResourceStatus: () => void;
+  onOpenTroopModal: () => void;
+  onOpenCarriageModal: () => void;
 };
 
 export default function ResourcePopulationOverlay({
+  readOnly = false,
   activeCityGlobal,
   dailyResourceDeltaById,
   resourceOverlayOpen,
@@ -55,6 +59,8 @@ export default function ResourcePopulationOverlay({
   onApplyResourceAdjust,
   onOpenPlacementReport,
   onOpenResourceStatus,
+  onOpenTroopModal,
+  onOpenCarriageModal,
 }: Props) {
   const uncappedCore: ResourceId[] = ["research", "gold"];
 
@@ -155,57 +161,61 @@ export default function ResourcePopulationOverlay({
               </div>
 
               <div className="mt-2 border-t border-zinc-700/70 pt-2">
-                <button
-                  type="button"
-                  className="w-full rounded-md border border-zinc-700 px-2 py-1 text-left text-[11px] text-zinc-200 hover:border-zinc-500"
-                  onClick={onToggleResourceAdjust}
-                  disabled={busy}
-                >
-                  {resourceAdjustOpen ? "자원 조정 접기" : "자원 조정 펼치기"}
-                </button>
-                {resourceAdjustOpen ? (
-                  <div className="mt-2 space-y-2">
-                    <div className="grid grid-cols-2 gap-2">
-                      <select
-                        value={resourceAdjustTarget}
-                        onChange={(e) => onResourceAdjustTargetChange(e.target.value as ResourceId)}
-                        className="h-8 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-[11px] text-zinc-100 outline-none focus:border-zinc-500"
-                      >
-                        {ALL_RESOURCE_IDS.map((id) => (
-                          <option key={id} value={id}>
-                            {RESOURCE_EMOJIS[id]} {RESOURCE_LABELS[id]}
-                          </option>
-                        ))}
-                      </select>
-                      <select
-                        value={resourceAdjustMode}
-                        onChange={(e) =>
-                          onResourceAdjustModeChange((e.target.value as "inc" | "dec") ?? "inc")
-                        }
-                        className="h-8 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-[11px] text-zinc-100 outline-none focus:border-zinc-500"
-                      >
-                        <option value="inc">증가</option>
-                        <option value="dec">감소</option>
-                      </select>
-                    </div>
-                    <input
-                      type="number"
-                      min={0}
-                      step={1}
-                      value={resourceAdjustAmount}
-                      onChange={(e) => onResourceAdjustAmountChange(e.target.value)}
-                      className="h-8 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 text-[11px] text-zinc-100 outline-none focus:border-zinc-500"
-                      placeholder="수치 입력"
-                    />
+                {!readOnly ? (
+                  <>
                     <button
                       type="button"
-                      className="w-full rounded-md bg-amber-700 px-2 py-1.5 text-[11px] font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
-                      onClick={onApplyResourceAdjust}
+                      className="w-full rounded-md border border-zinc-700 px-2 py-1 text-left text-[11px] text-zinc-200 hover:border-zinc-500"
+                      onClick={onToggleResourceAdjust}
                       disabled={busy}
                     >
-                      적용
+                      {resourceAdjustOpen ? "자원 조정 접기" : "자원 조정 펼치기"}
                     </button>
-                  </div>
+                    {resourceAdjustOpen ? (
+                      <div className="mt-2 space-y-2">
+                        <div className="grid grid-cols-2 gap-2">
+                          <select
+                            value={resourceAdjustTarget}
+                            onChange={(e) => onResourceAdjustTargetChange(e.target.value as ResourceId)}
+                            className="h-8 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-[11px] text-zinc-100 outline-none focus:border-zinc-500"
+                          >
+                            {ALL_RESOURCE_IDS.map((id) => (
+                              <option key={id} value={id}>
+                                {RESOURCE_EMOJIS[id]} {RESOURCE_LABELS[id]}
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            value={resourceAdjustMode}
+                            onChange={(e) =>
+                              onResourceAdjustModeChange((e.target.value as "inc" | "dec") ?? "inc")
+                            }
+                            className="h-8 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-[11px] text-zinc-100 outline-none focus:border-zinc-500"
+                          >
+                            <option value="inc">증가</option>
+                            <option value="dec">감소</option>
+                          </select>
+                        </div>
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={resourceAdjustAmount}
+                          onChange={(e) => onResourceAdjustAmountChange(e.target.value)}
+                          className="h-8 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 text-[11px] text-zinc-100 outline-none focus:border-zinc-500"
+                          placeholder="수치 입력"
+                        />
+                        <button
+                          type="button"
+                          className="w-full rounded-md bg-amber-700 px-2 py-1.5 text-[11px] font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
+                          onClick={onApplyResourceAdjust}
+                          disabled={busy}
+                        >
+                          적용
+                        </button>
+                      </div>
+                    ) : null}
+                  </>
                 ) : null}
                 <button
                   type="button"
@@ -282,8 +292,26 @@ export default function ResourcePopulationOverlay({
                   onClick={onOpenPlacementReport}
                   disabled={busy}
                 >
-                  배치 현황 확인
+                  인구 배치 현황
                 </button>
+                <button
+                  type="button"
+                  className="mt-2 w-full rounded-md border border-zinc-700 px-2 py-1 text-left text-[11px] text-zinc-200 hover:border-zinc-500"
+                  onClick={onOpenTroopModal}
+                  disabled={busy}
+                >
+                  병력
+                </button>
+                {!readOnly ? (
+                  <button
+                    type="button"
+                    className="mt-2 w-full rounded-md border border-zinc-700 px-2 py-1 text-left text-[11px] text-zinc-200 hover:border-zinc-500"
+                    onClick={onOpenCarriageModal}
+                    disabled={busy}
+                  >
+                    역마차
+                  </button>
+                ) : null}
               </div>
             </div>
           ) : null}

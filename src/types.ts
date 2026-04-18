@@ -197,6 +197,36 @@ export type PopulationEntry = {
 
 export type CityPopulationState = Record<PopulationId, PopulationEntry>;
 
+export type CityTroopTrainingOrder = {
+  id: string;
+  presetId: string;
+  quantity: number;
+  remainingDays: number;
+  committedPopulation: Record<PopulationId, number>;
+  committedCosts?: Record<string, number>;
+};
+
+export type CityTroopState = {
+  stock: Record<string, number>;
+  deployed: Record<string, Record<string, number>>;
+  training: CityTroopTrainingOrder[];
+  committedPopulation: Record<PopulationId, number>;
+};
+
+export type CityCarriageRecruitOrder = {
+  id: string;
+  presetId: string;
+  quantity: number;
+  remainingDays: number;
+  gainPopulation: Record<PopulationId, number>;
+  gainResources: Partial<Record<BuildingResourceId, number>>;
+  committedCosts?: Partial<Record<BuildingResourceId, number>>;
+};
+
+export type CityCarriageState = {
+  recruiting: CityCarriageRecruitOrder[];
+};
+
 export type CityGlobalState = {
   values: Record<ResourceId, number>;
   caps: Record<CappedResourceId, number>;
@@ -207,6 +237,8 @@ export type CityGlobalState = {
   satisfaction: number;
   populationCap: number;
   population: CityPopulationState;
+  troops?: CityTroopState;
+  carriage?: CityCarriageState;
 };
 
 export type MapTileStatePreset = {
@@ -239,6 +271,7 @@ export type BuildingPreset = {
   id: string;
   name: string;
   color: string;
+  presetType?: "building" | "troop" | "carriage";
   tier?: string;
   effort?: number;
   space?: number;
@@ -340,6 +373,7 @@ export type BuildingRuleAction =
       delta: BuildingRuleExpr;
       target?: BuildingRuleActionTargetScope;
       distance?: number;
+      excludeSelf?: boolean;
     }
   | {
       kind: "addTileState";
@@ -347,12 +381,14 @@ export type BuildingRuleAction =
       value?: string;
       target?: BuildingRuleActionTargetScope;
       distance?: number;
+      excludeSelf?: boolean;
     }
   | {
       kind: "removeTileState";
       tagPresetId: string;
       target?: BuildingRuleActionTargetScope;
       distance?: number;
+      excludeSelf?: boolean;
     };
 
 export type BuildingExecutionRule = {
@@ -388,6 +424,14 @@ export type BuildingPlacementRule =
       negate?: boolean;
       repeat?: boolean;
     }
+  | {
+      kind: "requireTroopInRange";
+      presetId: string;
+      distance?: number;
+      minCount?: number;
+      negate?: boolean;
+      repeat?: boolean;
+    }
   | { kind: "custom"; label: string };
 
 export type WorldMapBuildingPresetRow = {
@@ -395,6 +439,7 @@ export type WorldMapBuildingPresetRow = {
   mapId: string | null;
   name: string;
   color: string;
+  presetType?: "building" | "troop" | "carriage";
   tier?: string;
   effort?: number;
   space?: number;
@@ -409,6 +454,7 @@ export type WorldMapBuildingPresetRow = {
   effects?: {
     onBuild?: BuildingExecutionRule[];
     daily?: BuildingExecutionRule[];
+    sustain?: BuildingExecutionRule[];
     onRemove?: BuildingExecutionRule[];
   };
   createdAt: string;

@@ -33,11 +33,14 @@ import type {
   BuildingRuleAction,
   BuildingRulePredicate,
   BuildingResourceId,
+  CityCarriageState,
   CityGlobalState,
+  CityTroopState,
   ItemCatalogEntry,
   MapTileRegionState,
   MapTileStateAssignment,
   MapTileStatePreset,
+  PopulationId,
   PopulationTrackedId,
   UpkeepPopulationId,
   WorldMapBuildingInstanceRow,
@@ -158,6 +161,15 @@ import {
   createDefaultRuleAction,
   createDefaultExecutionRule,
   createDefaultBuildingDraftState,
+  createDefaultCarriageState,
+  createDefaultTroopState,
+  createAutoTroopThreatRule,
+  stripAutoTroopThreatRules,
+  readAutoTroopThreatReduction,
+  encodePresetDescriptionWithType,
+  normalizePresetType,
+  isBaseResourceId,
+  getItemNameFromBuildingResourceId,
   toNonNegativeInt,
   toNumberRecordFromDraft,
   toNumberRecordFromResourceDraft,
@@ -165,6 +177,8 @@ import {
   RESOURCE_LABELS,
   RESOURCE_EMOJIS,
   getBuildingResourceLabel,
+  getTileDisplayNumber,
+  hexDistanceByOrientation,
 } from "./world-map/utils";
 import MapListPanel from "./world-map/components/MapListPanel";
 import MapPresetsPanel from "./world-map/components/MapPresetsPanel";
@@ -176,10 +190,260 @@ const normalizePresetKeyPart = (value: unknown) =>
     .trim()
     .toLowerCase();
 
-const getBuildingPresetMergeKey = (preset: Pick<WorldMapBuildingPresetRow, "id" | "name" | "tier">) => {
+const ANY_NON_ELDERLY_FILL_ORDER: PopulationTrackedId[] = [
+  "settlers",
+  "engineers",
+  "laborers",
+  "scholars",
+];
+const TROOP_STATE_MEMO_KEY = "__sys_troops_state__";
+const CARRIAGE_STATE_MEMO_KEY = "__sys_carriage_state__";
+
+const readTroopStateFromTileMemos = (rawTileMemos: unknown): CityTroopState | null => {
+  if (!rawTileMemos || typeof rawTileMemos !== "object") return null;
+  const memoMap = rawTileMemos as Record<string, unknown>;
+  const encoded = String(memoMap[TROOP_STATE_MEMO_KEY] ?? "").trim();
+  if (!encoded) return null;
+  try {
+    const parsed = JSON.parse(encoded);
+    const normalized =
+      normalizeCityGlobalState({ troops: parsed }).troops ?? createDefaultTroopState();
+    return hasAnyTroopState(normalized) ? normalized : null;
+  } catch {
+    return null;
+  }
+};
+
+const writeTroopStateToTileMemos = (
+  baseMemos: Record<string, string>,
+  troops: CityTroopState | null | undefined
+) => {
+  const next = { ...(baseMemos ?? {}) };
+  if (!troops || !hasAnyTroopState(troops)) {
+    delete next[TROOP_STATE_MEMO_KEY];
+    return next;
+  }
+  try {
+    next[TROOP_STATE_MEMO_KEY] = JSON.stringify(troops);
+  } catch {
+    // ignore serialization failure and keep existing memo map unchanged
+  }
+  return next;
+};
+
+const hasAnyCarriageState = (carriage: CityCarriageState | null | undefined) => {
+  if (!carriage) return false;
+  return Array.isArray(carriage.recruiting) && carriage.recruiting.length > 0;
+};
+
+const readCarriageStateFromTileMemos = (
+  rawTileMemos: unknown
+): { found: boolean; state: CityCarriageState | null } => {
+  if (!rawTileMemos || typeof rawTileMemos !== "object") return { found: false, state: null };
+  const memoMap = rawTileMemos as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(memoMap, CARRIAGE_STATE_MEMO_KEY)) {
+    return { found: false, state: null };
+  }
+  const encoded = String(memoMap[CARRIAGE_STATE_MEMO_KEY] ?? "").trim();
+  if (!encoded) {
+    return { found: true, state: createDefaultCarriageState() };
+  }
+  try {
+    const parsed = JSON.parse(encoded);
+    const normalized =
+      normalizeCityGlobalState({ carriage: parsed }).carriage ?? createDefaultCarriageState();
+    return { found: true, state: normalized };
+  } catch {
+    return { found: true, state: createDefaultCarriageState() };
+  }
+};
+
+const writeCarriageStateToTileMemos = (
+  baseMemos: Record<string, string>,
+  carriage: CityCarriageState | null | undefined
+) => {
+  const next = { ...(baseMemos ?? {}) };
+  try {
+    const normalized =
+      normalizeCityGlobalState({ carriage: carriage ?? createDefaultCarriageState() }).carriage ??
+      createDefaultCarriageState();
+    next[CARRIAGE_STATE_MEMO_KEY] = JSON.stringify(normalized);
+  } catch {
+    // ignore serialization failure and keep existing memo map unchanged
+  }
+  return next;
+};
+
+const hasAnyTroopState = (troops: CityTroopState | null | undefined) => {
+  if (!troops) return false;
+  if (Array.isArray(troops.training) && troops.training.length > 0) return true;
+  if (troops.stock && Object.keys(troops.stock).length > 0) return true;
+  if (troops.deployed && Object.keys(troops.deployed).length > 0) return true;
+  const committed = troops.committedPopulation ?? {
+    settlers: 0,
+    engineers: 0,
+    scholars: 0,
+    laborers: 0,
+    elderly: 0,
+  };
+  return (
+    Math.max(0, Math.trunc(Number(committed.settlers ?? 0) || 0)) > 0 ||
+    Math.max(0, Math.trunc(Number(committed.engineers ?? 0) || 0)) > 0 ||
+    Math.max(0, Math.trunc(Number(committed.scholars ?? 0) || 0)) > 0 ||
+    Math.max(0, Math.trunc(Number(committed.laborers ?? 0) || 0)) > 0 ||
+    Math.max(0, Math.trunc(Number(committed.elderly ?? 0) || 0)) > 0
+  );
+};
+
+const applyTroopTrainingProgress = (
+  cityGlobal: CityGlobalState | null | undefined,
+  elapsedDays: number
+): {
+  nextState: CityGlobalState;
+  changed: boolean;
+  completed: Array<{ presetId: string; quantity: number }>;
+} => {
+  const nextState = normalizeCityGlobalState(cityGlobal);
+  const days = Math.max(0, Math.trunc(Number(elapsedDays) || 0));
+  if (days <= 0) {
+    return { nextState, changed: false, completed: [] };
+  }
+  const troops = nextState.troops ?? createDefaultTroopState();
+  const training = Array.isArray(troops.training) ? troops.training : [];
+  if (training.length === 0) {
+    nextState.troops = troops;
+    return { nextState, changed: false, completed: [] };
+  }
+
+  let changed = false;
+  const completed: Array<{ presetId: string; quantity: number }> = [];
+  const nextTraining = [] as typeof training;
+
+  for (const order of training) {
+    const qty = Math.max(0, Math.trunc(Number(order.quantity) || 0));
+    if (qty <= 0) {
+      changed = true;
+      continue;
+    }
+    const before = Math.max(0, Math.trunc(Number(order.remainingDays) || 0));
+    const after = Math.max(0, before - days);
+    if (after <= 0) {
+      completed.push({ presetId: String(order.presetId ?? ""), quantity: qty });
+      const pid = String(order.presetId ?? "").trim();
+      if (pid) {
+        troops.stock[pid] = Math.max(0, Math.trunc(Number(troops.stock[pid] ?? 0) || 0)) + qty;
+      }
+      changed = true;
+      continue;
+    }
+    if (after !== before) changed = true;
+    nextTraining.push({
+      ...order,
+      remainingDays: after,
+    });
+  }
+
+  if (changed) {
+    troops.training = nextTraining;
+  }
+  nextState.troops = troops;
+  return { nextState, changed, completed };
+};
+
+const applyCarriageRecruitProgress = (
+  cityGlobal: CityGlobalState | null | undefined,
+  elapsedDays: number
+): {
+  nextState: CityGlobalState;
+  changed: boolean;
+  completed: Array<{ presetId: string; quantity: number }>;
+} => {
+  const nextState = normalizeCityGlobalState(cityGlobal);
+  const days = Math.max(0, Math.trunc(Number(elapsedDays) || 0));
+  if (days <= 0) {
+    return { nextState, changed: false, completed: [] };
+  }
+  const carriage = nextState.carriage ?? createDefaultCarriageState();
+  const recruiting = Array.isArray(carriage.recruiting) ? carriage.recruiting : [];
+  if (recruiting.length === 0) {
+    nextState.carriage = carriage;
+    return { nextState, changed: false, completed: [] };
+  }
+
+  let changed = false;
+  const completed: Array<{ presetId: string; quantity: number }> = [];
+  const nextRecruiting = [] as typeof recruiting;
+
+  for (const order of recruiting) {
+    const qty = Math.max(0, Math.trunc(Number(order.quantity) || 0));
+    if (qty <= 0) {
+      changed = true;
+      continue;
+    }
+    const before = Math.max(0, Math.trunc(Number(order.remainingDays) || 0));
+    const after = Math.max(0, before - days);
+    if (after <= 0) {
+      completed.push({ presetId: String(order.presetId ?? ""), quantity: qty });
+      for (const popId of ALL_POPULATION_IDS) {
+        const gain = Math.max(
+          0,
+          Math.trunc(Number((order.gainPopulation as any)?.[popId] ?? 0) || 0)
+        );
+        if (gain <= 0) continue;
+        nextState.population[popId].total =
+          Math.max(0, Math.trunc(Number(nextState.population[popId].total ?? 0) || 0)) + gain;
+        nextState.population[popId].available =
+          Math.max(0, Math.trunc(Number(nextState.population[popId].available ?? 0) || 0)) + gain;
+      }
+      for (const [resourceIdRaw, amountRaw] of Object.entries(order.gainResources ?? {})) {
+        const resourceId = resourceIdRaw as BuildingResourceId;
+        const gain = Math.max(0, Math.trunc(Number(amountRaw) || 0));
+        if (gain <= 0) continue;
+        if (isBaseResourceId(resourceId)) {
+          nextState.values[resourceId] =
+            Math.max(0, Math.trunc(Number(nextState.values[resourceId] ?? 0) || 0)) + gain;
+        } else {
+          const itemName = getItemNameFromBuildingResourceId(resourceId);
+          if (!itemName) continue;
+          const nextWarehouse = { ...(nextState.warehouse ?? {}) };
+          nextWarehouse[itemName] =
+            Math.max(0, Math.trunc(Number(nextWarehouse[itemName] ?? 0) || 0)) + gain;
+          nextState.warehouse = nextWarehouse;
+        }
+      }
+      changed = true;
+      continue;
+    }
+    if (after !== before) changed = true;
+    nextRecruiting.push({
+      ...order,
+      remainingDays: after,
+    });
+  }
+
+  if (changed) {
+    carriage.recruiting = nextRecruiting;
+    const totalPopulation =
+      TRACKED_POPULATION_IDS.reduce(
+        (sum, popId) => sum + Math.max(0, Math.trunc(Number(nextState.population[popId].total ?? 0) || 0)),
+        0
+      ) + Math.max(0, Math.trunc(Number(nextState.population.elderly.total ?? 0) || 0));
+    nextState.populationCap = Math.max(
+      Math.max(0, Math.trunc(Number(nextState.populationCap ?? 0) || 0)),
+      totalPopulation
+    );
+  }
+  nextState.carriage = carriage;
+  return { nextState, changed, completed };
+};
+
+const getBuildingPresetMergeKey = (
+  preset: Pick<WorldMapBuildingPresetRow, "id" | "name" | "tier" | "presetType">
+) => {
   const nameKey = normalizePresetKeyPart(preset.name);
   const tierKey = normalizePresetKeyPart(preset.tier ?? "");
-  if (nameKey) return `${nameKey}::${tierKey}`;
+  const typeKey = normalizePresetType(preset.presetType);
+  if (nameKey) return `${typeKey}::${nameKey}::${tierKey}`;
   return `id:${String(preset.id ?? "").trim()}`;
 };
 
@@ -195,6 +459,7 @@ const mergeSharedAndLocalBuildingPresets = (
 
 export default function WorldMapManager({ authUser, mode = "map", onBack }: Props) {
   const isAdmin = !!authUser.isAdmin;
+  const isReadOnly = !isAdmin;
   const isPresetMode = mode === "presets";
   const [maps, setMaps] = useState<WorldMap[]>([]);
   const [selectedMapId, setSelectedMapId] = useState<string | null>(null);
@@ -208,6 +473,9 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   const [warehouseModalOpen, setWarehouseModalOpen] = useState(false);
   const [placementReportOpen, setPlacementReportOpen] = useState(false);
   const [resourceStatusModalOpen, setResourceStatusModalOpen] = useState(false);
+  const [troopModalOpen, setTroopModalOpen] = useState(false);
+  const [troopModalScope, setTroopModalScope] = useState<"full" | "tile">("full");
+  const [carriageModalOpen, setCarriageModalOpen] = useState(false);
   const [resourceAdjustTarget, setResourceAdjustTarget] = useState<ResourceId>("gold");
   const [resourceAdjustMode, setResourceAdjustMode] = useState<"inc" | "dec">("inc");
   const [resourceAdjustAmount, setResourceAdjustAmount] = useState("0");
@@ -322,6 +590,51 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   const tileBuildingWorkersDraftByIdRef = useRef<Record<string, WorkerAssignmentDraft>>({});
   const prevSelectedMapIdRef = useRef<string | null>(null);
 
+  useEffect(() => {
+    if (isReadOnly && settingsOpen) {
+      setSettingsOpen(false);
+    }
+  }, [isReadOnly, settingsOpen]);
+
+  const mergeMapWithRecoveredTroops = useCallback(
+    (incoming: WorldMap, previous?: WorldMap | null): WorldMap => {
+      const incomingAny = incoming as any;
+      const incomingCity = normalizeCityGlobalState(incomingAny?.cityGlobal);
+      const fromTroopMemo = readTroopStateFromTileMemos(incomingAny?.tileMemos);
+      const fromCarriageMemo = readCarriageStateFromTileMemos(incomingAny?.tileMemos);
+      let nextTroops = incomingCity.troops;
+      let nextCarriage = incomingCity.carriage ?? createDefaultCarriageState();
+      if (!hasAnyTroopState(nextTroops) && fromTroopMemo) {
+        nextTroops = fromTroopMemo;
+      }
+      if (fromCarriageMemo.found) {
+        nextCarriage = fromCarriageMemo.state ?? createDefaultCarriageState();
+      }
+      if (previous) {
+        const prevCity = normalizeCityGlobalState((previous as any)?.cityGlobal);
+        if (!hasAnyTroopState(nextTroops) && hasAnyTroopState(prevCity.troops)) {
+          nextTroops = prevCity.troops;
+        }
+        if (
+          !fromCarriageMemo.found &&
+          !hasAnyCarriageState(nextCarriage) &&
+          hasAnyCarriageState(prevCity.carriage)
+        ) {
+          nextCarriage = prevCity.carriage ?? createDefaultCarriageState();
+        }
+      }
+      return {
+        ...incoming,
+        cityGlobal: {
+          ...incomingCity,
+          troops: nextTroops,
+          carriage: nextCarriage,
+        },
+      } as WorldMap;
+    },
+    []
+  );
+
   const loadMaps = async (preferredId?: string | null) => {
     setBusy(true);
     setErr(null);
@@ -332,14 +645,15 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         listSharedWorldMapBuildingPresets().catch(() => []),
       ]);
       const items = Array.isArray(res) ? res : [];
+      const hydratedItems = items.map((entry) => mergeMapWithRecoveredTroops(entry, null));
       const normalizedSharedBuildingPresets = normalizeBuildingPresets(
         Array.isArray(sharedBuildingRows) ? sharedBuildingRows : []
       );
-      setMaps(items);
+      setMaps(hydratedItems);
       setSharedTilePresets(normalizeTilePresets(Array.isArray(sharedTileRows) ? sharedTileRows : []));
       setTilePresetsByMap(() => {
         const next: TilePresetsByMap = {};
-        for (const entry of items) {
+        for (const entry of hydratedItems) {
           if (!entry?.id) continue;
           next[entry.id] = normalizeTilePresets(entry.tileStatePresets ?? []);
         }
@@ -347,7 +661,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       });
       setTileStatesByMap(() => {
         const next: TileStatesByMap = {};
-        for (const entry of items) {
+        for (const entry of hydratedItems) {
           if (!entry?.id) continue;
           const remoteStates = normalizeTileStateAssignments(entry.tileStateAssignments ?? {});
           next[entry.id] = remoteStates;
@@ -356,7 +670,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       });
       setTileRegionStatesByMap(() => {
         const next: TileRegionStatesByMap = {};
-        for (const entry of items) {
+        for (const entry of hydratedItems) {
           if (!entry?.id) continue;
           next[entry.id] = normalizeTileRegionStates(entry.tileRegionStates ?? {});
         }
@@ -364,7 +678,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       });
       setTileMemosByMap((prev) => {
         const next: TileMemosByMap = {};
-        for (const entry of items) {
+        for (const entry of hydratedItems) {
           if (!entry?.id) continue;
           const entryAny = entry as any;
           if (Object.prototype.hasOwnProperty.call(entryAny, "tileMemos")) {
@@ -377,7 +691,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       });
       setBuildingPresetsByMap(() => {
         const next: BuildingPresetsByMap = {};
-        for (const entry of items) {
+        for (const entry of hydratedItems) {
           if (!entry?.id) continue;
           next[entry.id] = mergeSharedAndLocalBuildingPresets(
             normalizedSharedBuildingPresets,
@@ -388,16 +702,16 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       });
       setBuildingInstancesByMap(() => {
         const next: BuildingInstancesByMap = {};
-        for (const entry of items) {
+        for (const entry of hydratedItems) {
           if (!entry?.id) continue;
           next[entry.id] = normalizeBuildingInstances(entry.buildingInstances ?? []);
         }
         return next;
       });
       const nextId =
-        preferredId && items.some((entry) => entry.id === preferredId)
+        preferredId && hydratedItems.some((entry) => entry.id === preferredId)
           ? preferredId
-          : items[0]?.id ?? null;
+          : hydratedItems[0]?.id ?? null;
       setSelectedMapId(nextId);
     } catch (e: any) {
       setErr(String(e?.message ?? e));
@@ -484,8 +798,10 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       }
       setMaps((prev) => {
         const has = prev.some((entry) => entry.id === latest.id);
-        if (!has) return [...prev, latest];
-        return prev.map((entry) => (entry.id === latest.id ? latest : entry));
+        const prevEntry = prev.find((entry) => entry.id === latest.id) ?? null;
+        const merged = mergeMapWithRecoveredTroops(latest, prevEntry);
+        if (!has) return [...prev, merged];
+        return prev.map((entry) => (entry.id === merged.id ? merged : entry));
       });
       if (Object.prototype.hasOwnProperty.call(latestAny, "tileStatePresets")) {
         setTilePresetsByMap((prev) => ({
@@ -559,7 +875,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         // ignore
       }
     },
-    [loadBuildingInstancesForMap, loadBuildingPresetsForMap]
+    [loadBuildingInstancesForMap, loadBuildingPresetsForMap, mergeMapWithRecoveredTroops]
   );
 
   const releaseWorkersFromCompletedBuildings = useCallback(
@@ -628,7 +944,26 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setDailyRunLogs([]);
     setDailyRunDays("1");
     setOverflowNotice(null);
+    setTroopModalOpen(false);
+    setTroopModalScope("full");
+    setCarriageModalOpen(false);
   }, [selectedMapId]);
+
+  useEffect(() => {
+    if (presetMode === "building" || presetMode === "troop" || presetMode === "carriage") {
+      setBuildingDraft((prev) => ({
+        ...prev,
+        presetType: presetMode,
+        effort:
+          presetMode === "troop" || presetMode === "carriage"
+            ? prev.effort?.trim()
+              ? prev.effort
+              : "1"
+            : prev.effort,
+        space: presetMode === "troop" ? "0" : presetMode === "carriage" ? "" : prev.space,
+      }));
+    }
+  }, [presetMode]);
 
   const selectedMap = useMemo(
     () => maps.find((entry) => entry.id === selectedMapId) ?? null,
@@ -674,14 +1009,38 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     () => (selectedMapId ? buildingPresetsByMap[selectedMapId] ?? [] : []),
     [selectedMapId, buildingPresetsByMap]
   );
+  const activeStructurePresets = useMemo(
+    () => activeBuildingPresets.filter((entry) => normalizePresetType(entry.presetType) === "building"),
+    [activeBuildingPresets]
+  );
+  const activeTroopPresets = useMemo(
+    () => activeBuildingPresets.filter((entry) => normalizePresetType(entry.presetType) === "troop"),
+    [activeBuildingPresets]
+  );
+  const activeCarriagePresets = useMemo(
+    () => activeBuildingPresets.filter((entry) => normalizePresetType(entry.presetType) === "carriage"),
+    [activeBuildingPresets]
+  );
+  const troopThreatByPresetId = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const preset of activeTroopPresets) {
+      out[preset.id] = Math.max(
+        0,
+        Math.trunc(Number(readAutoTroopThreatReduction(preset.effects?.daily) ?? 0) || 0)
+      );
+    }
+    return out;
+  }, [activeTroopPresets]);
   const activeBuildingInstances = useMemo(
     () => (selectedMapId ? buildingInstancesByMap[selectedMapId] ?? [] : []),
     [selectedMapId, buildingInstancesByMap]
   );
   const getTilePresetNameKey = (preset: Pick<MapTileStatePreset, "name">) =>
     normalizePresetKeyPart(preset.name);
-  const getBuildingPresetSharedKey = (preset: Pick<WorldMapBuildingPresetRow, "name" | "tier">) =>
-    `${normalizePresetKeyPart(preset.name)}::${normalizePresetKeyPart(preset.tier ?? "")}`;
+  const getBuildingPresetSharedKey = (
+    preset: Pick<WorldMapBuildingPresetRow, "name" | "tier" | "presetType">
+  ) =>
+    `${normalizePresetType(preset.presetType)}::${normalizePresetKeyPart(preset.name)}::${normalizePresetKeyPart(preset.tier ?? "")}`;
   const selectedHexKeySet = useMemo(
     () => new Set(selectedHexes.map((hex) => tileKey(hex.col, hex.row))),
     [selectedHexes]
@@ -722,6 +1081,25 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     () => normalizeCityGlobalState(selectedMap?.cityGlobal),
     [selectedMap]
   );
+  const troopPowerByTile = useMemo(() => {
+    const deployed = activeCityGlobal.troops?.deployed ?? {};
+    const out: Record<string, number> = {};
+    for (const [key, byPreset] of Object.entries(deployed)) {
+      let sum = 0;
+      for (const [presetId, amountRaw] of Object.entries(byPreset ?? {})) {
+        const amount = Math.max(0, Math.trunc(Number(amountRaw) || 0));
+        if (amount <= 0) continue;
+        const threatPerUnit = Math.max(
+          0,
+          Math.trunc(Number(troopThreatByPresetId[presetId] ?? 0) || 0)
+        );
+        if (threatPerUnit <= 0) continue;
+        sum += amount * threatPerUnit;
+      }
+      if (sum > 0) out[key] = sum;
+    }
+    return out;
+  }, [activeCityGlobal.troops, troopThreatByPresetId]);
   const operationalAllocation = useMemo(() => {
     const out: Record<string, boolean> = {};
     const upkeepWorkersByTypeById: Record<string, Record<PopulationTrackedId, number>> = {};
@@ -733,6 +1111,13 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       "laborers",
       "scholars",
     ];
+    const troopCommitted = activeCityGlobal.troops?.committedPopulation ?? {
+      settlers: 0,
+      engineers: 0,
+      scholars: 0,
+      laborers: 0,
+      elderly: 0,
+    };
     const poolByType = createZeroWorkersByType();
     for (const id of TRACKED_POPULATION_IDS) {
       poolByType[id] = Math.max(
@@ -740,6 +1125,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         Math.trunc(
           Number(activeCityGlobal.population[id]?.total ?? 0) || 0
         )
+          - Math.max(0, Math.trunc(Number((troopCommitted as any)?.[id] ?? 0) || 0))
       );
     }
     let elderlyPool = Math.max(
@@ -747,6 +1133,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       Math.trunc(
         Number(activeCityGlobal.population.elderly?.total ?? 0) || 0
       )
+        - Math.max(0, Math.trunc(Number((troopCommitted as any)?.elderly ?? 0) || 0))
     );
 
     const sortedInstances = [...activeBuildingInstances].sort((a, b) => {
@@ -878,6 +1265,112 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     );
     return next;
   }, [activeCityGlobal, operationalAllocation]);
+  const effectiveTileRegionStates = useMemo(() => {
+    if (!selectedMap) return activeTileRegionStates;
+
+    const activeBuiltInstances = activeBuildingInstances.filter((entry) => {
+      if (entry.enabled === false) return false;
+      const preset = buildingPresetById.get(entry.presetId) ?? null;
+      return getInstanceBuildStatus(entry, preset) === "active";
+    });
+    const operationalInstances = activeBuiltInstances.filter(
+      (entry) => instanceOperationalById[entry.id]
+    );
+    if (operationalInstances.length <= 0) return activeTileRegionStates;
+
+    const next: Record<string, MapTileRegionState> = {};
+    for (const [k, v] of Object.entries(activeTileRegionStates)) {
+      next[k] = { ...v };
+    }
+
+    const addRegionDelta = (
+      targetKey: string,
+      field: "spaceUsed" | "spaceCap" | "threat" | "pollution",
+      delta: number
+    ) => {
+      const n = Number(delta);
+      if (!Number.isFinite(n) || n === 0) return;
+      const base = next[targetKey] ?? {};
+      const prev = Math.trunc(Number(base[field] ?? 0) || 0);
+      const after = prev + n;
+      next[targetKey] = { ...base, [field]: Math.trunc(after) };
+    };
+
+    const collectTargetKeys = (
+      originCol: number,
+      originRow: number,
+      action: Extract<BuildingRuleAction, { kind: "adjustTileRegion" }>
+    ) => {
+      if (action.target === "range") {
+        const distance = Math.max(0, safeInt(action.distance, 1));
+        const out: string[] = [];
+        for (let row = 0; row < selectedMap.rows; row += 1) {
+          for (let col = 0; col < selectedMap.cols; col += 1) {
+            const dist = hexDistanceByOrientation(
+              selectedMap.orientation,
+              originCol,
+              originRow,
+              col,
+              row
+            );
+            if (dist > distance) continue;
+            if (action.excludeSelf && dist === 0) continue;
+            out.push(tileKey(col, row));
+          }
+        }
+        return out;
+      }
+      if (action.excludeSelf) return [] as string[];
+      return [tileKey(originCol, originRow)];
+    };
+
+    for (const instance of operationalInstances) {
+      const preset = buildingPresetById.get(instance.presetId) ?? null;
+      if (!preset) continue;
+      const sustainRules = preset.effects?.sustain ?? [];
+      if (!Array.isArray(sustainRules) || sustainRules.length <= 0) continue;
+
+      const baseContext = {
+        col: instance.col,
+        row: instance.row,
+        map: selectedMap,
+        cityGlobal: effectiveCityGlobal,
+        tileStates: activeTileStates,
+        buildingInstances: activeBuiltInstances,
+      } as const;
+
+      for (const rule of sustainRules) {
+        const ruleContext: RuleEvalContext = {
+          ...baseContext,
+          tileRegions: next,
+        };
+        const evalResult = evaluateRulePredicatePreview(ruleContext, rule.when);
+        if (!evalResult.matched || evalResult.repeatCount <= 0) continue;
+        const repeatMultiplier = Math.max(1, evalResult.repeatCount);
+
+        for (const action of rule.actions ?? []) {
+          if (action.kind !== "adjustTileRegion") continue;
+          const value = evalRuleExpr(ruleContext, action.delta);
+          if (!Number.isFinite(value) || value === 0) continue;
+          const delta = value * repeatMultiplier;
+          const targets = collectTargetKeys(instance.col, instance.row, action);
+          for (const targetKey of targets) {
+            addRegionDelta(targetKey, action.field, delta);
+          }
+        }
+      }
+    }
+
+    return next;
+  }, [
+    selectedMap,
+    activeTileRegionStates,
+    activeBuildingInstances,
+    buildingPresetById,
+    instanceOperationalById,
+    effectiveCityGlobal,
+    activeTileStates,
+  ]);
   const placementPopulationSummary = useMemo(
     () =>
       ALL_POPULATION_IDS.map((id) => {
@@ -898,6 +1391,101 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       }),
     [effectiveCityGlobal.population]
   );
+  const troopCommittedByPreset = useMemo(() => {
+    const troops = effectiveCityGlobal.troops ?? createDefaultTroopState();
+    const countByPreset = new Map<string, number>();
+    const addCount = (presetIdRaw: unknown, amountRaw: unknown) => {
+      const presetId = String(presetIdRaw ?? "").trim();
+      if (!presetId) return;
+      const amount = Math.max(0, Math.trunc(Number(amountRaw) || 0));
+      if (amount <= 0) return;
+      countByPreset.set(
+        presetId,
+        Math.max(0, Math.trunc(Number(countByPreset.get(presetId) ?? 0) || 0)) + amount
+      );
+    };
+
+    for (const [presetId, amount] of Object.entries(troops.stock ?? {})) {
+      addCount(presetId, amount);
+    }
+    for (const byPreset of Object.values(troops.deployed ?? {})) {
+      for (const [presetId, amount] of Object.entries(byPreset ?? {})) {
+        addCount(presetId, amount);
+      }
+    }
+    for (const order of Array.isArray(troops.training) ? troops.training : []) {
+      addCount((order as any)?.presetId, (order as any)?.quantity);
+    }
+
+    const troopPresetById = new Map<string, WorldMapBuildingPresetRow>();
+    for (const preset of activeTroopPresets) {
+      troopPresetById.set(String(preset.id ?? "").trim(), preset);
+    }
+    for (const preset of activeBuildingPresets) {
+      if (normalizePresetType(preset.presetType) !== "troop") continue;
+      const id = String(preset.id ?? "").trim();
+      if (!id || troopPresetById.has(id)) continue;
+      troopPresetById.set(id, preset);
+    }
+
+    const rows = [...countByPreset.entries()]
+      .map(([presetId, units]) => {
+        const preset = troopPresetById.get(presetId) ?? null;
+        const upkeepPopulation = preset?.upkeep?.population ?? {};
+        const settlersPerUnit = Math.max(
+          0,
+          Math.trunc(Number((upkeepPopulation as any).settlers ?? 0) || 0)
+        );
+        const engineersPerUnit = Math.max(
+          0,
+          Math.trunc(Number((upkeepPopulation as any).engineers ?? 0) || 0)
+        );
+        const scholarsPerUnit = Math.max(
+          0,
+          Math.trunc(Number((upkeepPopulation as any).scholars ?? 0) || 0)
+        );
+        const laborersPerUnit = Math.max(
+          0,
+          Math.trunc(Number((upkeepPopulation as any).laborers ?? 0) || 0)
+        );
+        const elderlyPerUnit = Math.max(
+          0,
+          Math.trunc(Number((upkeepPopulation as any).elderly ?? 0) || 0)
+        );
+        const anyNonElderlyPerUnit = Math.max(
+          0,
+          Math.trunc(Number((upkeepPopulation as any).anyNonElderly ?? 0) || 0)
+        );
+        return {
+          presetId,
+          presetName: String(preset?.name ?? "이름 없는 병력"),
+          units,
+          population: {
+            settlers: settlersPerUnit * units,
+            engineers: engineersPerUnit * units,
+            scholars: scholarsPerUnit * units,
+            laborers: laborersPerUnit * units,
+            elderly: elderlyPerUnit * units,
+            anyNonElderly: anyNonElderlyPerUnit * units,
+          },
+        };
+      })
+      .filter((row) => {
+        const pop = row.population;
+        return (
+          row.units > 0 &&
+          (pop.settlers > 0 ||
+            pop.engineers > 0 ||
+            pop.scholars > 0 ||
+            pop.laborers > 0 ||
+            pop.elderly > 0 ||
+            pop.anyNonElderly > 0)
+        );
+      })
+      .sort((a, b) => a.presetName.localeCompare(b.presetName, "ko"));
+
+    return rows;
+  }, [activeBuildingPresets, activeTroopPresets, effectiveCityGlobal.troops]);
   const placementReportRows = useMemo(() => {
     if (!selectedMap) return [] as Array<{
       instanceId: string;
@@ -936,7 +1524,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       const isActive = buildStatus === "active";
       const isOperational = !!instanceOperationalById[instance.id];
       const isManuallyDisabled = instance.enabled === false;
-      const tileNumber = instance.row * selectedMap.cols + instance.col + 1;
+      const tileNumber = getTileDisplayNumber(selectedMap.cols, instance.col, instance.row);
 
       const upkeepPopulation = preset?.upkeep?.population ?? {};
       const required = {
@@ -1069,7 +1657,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         map: selectedMap,
         cityGlobal: effectiveCityGlobal,
         tileStates: activeTileStates,
-        tileRegions: activeTileRegionStates,
+        tileRegions: effectiveTileRegionStates,
         buildingInstances: activeBuiltInstances,
       };
 
@@ -1134,7 +1722,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     activeBuildingPresets,
     effectiveCityGlobal,
     instanceOperationalById,
-    activeTileRegionStates,
+    effectiveTileRegionStates,
     activeTileStates,
     buildingPresetById,
     selectedMap,
@@ -1187,7 +1775,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         map: selectedMap,
         cityGlobal: effectiveCityGlobal,
         tileStates: activeTileStates,
-        tileRegions: activeTileRegionStates,
+        tileRegions: effectiveTileRegionStates,
         buildingInstances: activeBuiltInstances,
       };
       for (const rule of preset.effects?.daily ?? []) {
@@ -1218,7 +1806,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       if (deltas.length === 0) continue;
 
       const tileK = tileKey(instance.col, instance.row);
-      const tileNumber = instance.row * selectedMap.cols + instance.col + 1;
+      const tileNumber = getTileDisplayNumber(selectedMap.cols, instance.col, instance.row);
       for (const delta of deltas) {
         const group =
           resourceMap.get(delta.resourceId) ??
@@ -1269,7 +1857,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     instanceOperationalById,
     effectiveCityGlobal,
     activeTileStates,
-    activeTileRegionStates,
+    effectiveTileRegionStates,
   ]);
 
   const tileYieldPreview = useMemo(() => {
@@ -1325,7 +1913,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         map: selectedMap,
         cityGlobal: effectiveCityGlobal,
         tileStates: activeTileStates,
-        tileRegions: activeTileRegionStates,
+        tileRegions: effectiveTileRegionStates,
         buildingInstances: activeBuiltInstances,
       };
       for (const rule of preset.effects?.daily ?? []) {
@@ -1387,7 +1975,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     instanceOperationalById,
     effectiveCityGlobal,
     activeTileStates,
-    activeTileRegionStates,
+    effectiveTileRegionStates,
   ]);
 
   useEffect(() => {
@@ -1574,7 +2162,11 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         rows: Number(draft.rows),
         orientation: draft.orientation,
       });
-      setMaps((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
+      setMaps((prev) =>
+        prev.map((entry) =>
+          entry.id === updated.id ? mergeMapWithRecoveredTroops(updated, entry) : entry
+        )
+      );
       setDraft(buildDraft(updated));
       setSaveNotice("저장되었습니다.");
     } catch (e: any) {
@@ -1606,7 +2198,11 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setErr(null);
     try {
       const updated = await uploadWorldMapImage(selectedMap.id, file);
-      setMaps((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
+      setMaps((prev) =>
+        prev.map((entry) =>
+          entry.id === updated.id ? mergeMapWithRecoveredTroops(updated, entry) : entry
+        )
+      );
       setLoadedSize(null);
       syncingImageMetaRef.current = null;
     } catch (e: any) {
@@ -1632,7 +2228,11 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         imageWidth: width,
         imageHeight: height,
       });
-      setMaps((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
+      setMaps((prev) =>
+        prev.map((entry) =>
+          entry.id === updated.id ? mergeMapWithRecoveredTroops(updated, entry) : entry
+        )
+      );
     } catch {
       // dimension sync failure should not block viewer usage
     }
@@ -1818,11 +2418,13 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       setMaps((prev) =>
         prev.map((entry) =>
           entry.id === updated.id
-            ? {
-                ...entry,
-                ...updated,
-                cityGlobal: converted.nextState,
-              }
+            ? mergeMapWithRecoveredTroops(
+                {
+                  ...(updated as WorldMap),
+                  cityGlobal: converted.nextState,
+                } as WorldMap,
+                entry
+              )
             : entry
         )
       );
@@ -1902,11 +2504,13 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       setMaps((prev) =>
         prev.map((entry) =>
           entry.id === updated.id
-            ? {
-                ...entry,
-                ...updated,
-                cityGlobal: converted.nextState,
-              }
+            ? mergeMapWithRecoveredTroops(
+                {
+                  ...(updated as WorldMap),
+                  cityGlobal: converted.nextState,
+                } as WorldMap,
+                entry
+              )
             : entry
         )
       );
@@ -1932,6 +2536,9 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     if (!selectedMap) return;
     const parsed = Math.trunc(Number(dailyRunDays));
     const days = Number.isFinite(parsed) ? Math.max(1, parsed) : 1;
+    const troopStateBeforeRun = normalizeCityGlobalState(activeCityGlobal).troops ?? createDefaultTroopState();
+    const carriageStateBeforeRun =
+      normalizeCityGlobalState(activeCityGlobal).carriage ?? createDefaultCarriageState();
     const startDay = Math.max(0, Math.trunc(Number(activeCityGlobal.day ?? 0) || 0));
     const startGold = Math.max(0, Math.trunc(Number(activeCityGlobal.values.gold ?? 0) || 0));
     setBusy(true);
@@ -1996,7 +2603,6 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         .slice(-200);
       setDailyRunLogs(failedLines);
 
-      await refreshCurrentMapOnly(selectedMap.id);
       const hasFailure =
         (failedRules != null ? failedRules > 0 : false) ||
         rawLogs.some((entry: any) => String(entry?.status ?? "") === "failed");
@@ -2010,7 +2616,19 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
             const rolled = await updateWorldMap(selectedMap.id, {
               cityGlobal: { ...latestCity, day: startDay },
             });
-            setMaps((prev) => prev.map((entry) => (entry.id === rolled.id ? rolled : entry)));
+            setMaps((prev) =>
+              prev.map((entry) =>
+                entry.id === rolled.id
+                  ? mergeMapWithRecoveredTroops(
+                      {
+                        ...(rolled as WorldMap),
+                        cityGlobal: { ...latestCity, day: startDay },
+                      } as WorldMap,
+                      entry
+                    )
+                  : entry
+              )
+            );
           }
         }
         await refreshCurrentMapOnly(selectedMap.id);
@@ -2019,6 +2637,96 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         if (day != null) segments.push(`Day ${String(day).padStart(3, "0")}`);
         if (appliedRules != null) segments.push(`규칙 ${formatWithCommas(appliedRules)}개`);
         if (appliedActions != null) segments.push(`액션 ${formatWithCommas(appliedActions)}개`);
+
+        try {
+          const latest = await getWorldMap(selectedMap.id);
+          const latestTileMemos =
+            latest && (latest as any)?.tileMemos && typeof (latest as any).tileMemos === "object"
+              ? normalizeTileMemos((latest as any).tileMemos ?? {})
+              : activeTileMemos;
+          const baseCityGlobal = normalizeCityGlobalState(
+            latest?.cityGlobal ??
+              result?.cityGlobal ??
+              result?.map?.cityGlobal ??
+              activeCityGlobal
+          );
+          if (!hasAnyTroopState(baseCityGlobal.troops) && hasAnyTroopState(troopStateBeforeRun)) {
+            baseCityGlobal.troops = troopStateBeforeRun;
+          }
+          if (!hasAnyCarriageState(baseCityGlobal.carriage)) {
+            const fromMemo = readCarriageStateFromTileMemos(latestTileMemos);
+            if (fromMemo.found && hasAnyCarriageState(fromMemo.state)) {
+              baseCityGlobal.carriage = fromMemo.state ?? createDefaultCarriageState();
+            } else if (hasAnyCarriageState(carriageStateBeforeRun)) {
+              baseCityGlobal.carriage = carriageStateBeforeRun;
+            }
+          }
+          const trainingProgress = applyTroopTrainingProgress(baseCityGlobal, days);
+          const carriageProgress = applyCarriageRecruitProgress(trainingProgress.nextState, days);
+          let progressedState = carriageProgress.nextState;
+          const progressedChanged = trainingProgress.changed || carriageProgress.changed;
+          let nextMemos = writeTroopStateToTileMemos(latestTileMemos, progressedState.troops);
+          nextMemos = writeCarriageStateToTileMemos(nextMemos, progressedState.carriage);
+          if (progressedChanged) {
+            const beforeProgressGold = Math.max(
+              0,
+              Math.trunc(Number(progressedState.values.gold ?? 0) || 0)
+            );
+            const convertedProgress = applyOverflowToGold(progressedState);
+            progressedState = convertedProgress.nextState;
+            const updatedForTraining = await updateWorldMap(selectedMap.id, {
+              cityGlobal: progressedState,
+              tileMemos: nextMemos,
+            });
+            setMaps((prev) =>
+              prev.map((entry) =>
+                entry.id === updatedForTraining.id
+                  ? mergeMapWithRecoveredTroops(
+                      {
+                        ...(updatedForTraining as WorldMap),
+                        cityGlobal: progressedState,
+                        tileMemos: nextMemos,
+                      } as WorldMap,
+                      entry
+                    )
+                  : entry
+              )
+            );
+            setTileMemosByMap((prev) => ({ ...prev, [selectedMap.id]: nextMemos }));
+            if (convertedProgress.convertedGold > 0 && convertedProgress.details.length > 0) {
+              setOverflowNotice({
+                beforeGold: beforeProgressGold,
+                afterGold: Math.max(0, Math.trunc(Number(progressedState.values.gold ?? 0) || 0)),
+                totalGoldGain: convertedProgress.convertedGold,
+                details: convertedProgress.details,
+              });
+            }
+          }
+          if (trainingProgress.completed.length > 0) {
+            const completedKinds = trainingProgress.completed.length;
+            const completedTotal = trainingProgress.completed.reduce(
+              (sum, row) => sum + Math.max(0, Math.trunc(Number(row.quantity) || 0)),
+              0
+            );
+            segments.push(
+              `훈련 완료 ${formatWithCommas(completedKinds)}건 / ${formatWithCommas(completedTotal)}기`
+            );
+          }
+          if (carriageProgress.completed.length > 0) {
+            const completedKinds = carriageProgress.completed.length;
+            const completedTotal = carriageProgress.completed.reduce(
+              (sum, row) => sum + Math.max(0, Math.trunc(Number(row.quantity) || 0)),
+              0
+            );
+            segments.push(
+              `영입 완료 ${formatWithCommas(completedKinds)}건 / ${formatWithCommas(completedTotal)}기`
+            );
+          }
+          await refreshCurrentMapOnly(selectedMap.id);
+        } catch {
+          // 훈련 진행 반영 실패 시에도 일일 규칙 자체 결과 표시는 유지한다.
+        }
+
         setDailyRunResult(segments.join(" · "));
       }
 
@@ -2073,6 +2781,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       }
 
       await releaseWorkersFromCompletedBuildings(selectedMap.id);
+      await refreshCurrentMapOnly(selectedMap.id);
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     } finally {
@@ -2087,7 +2796,11 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     nextRegionStates: Record<string, MapTileRegionState>,
     nextMemos: Record<string, string>
   ) => {
-    setMaps((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
+    setMaps((prev) =>
+      prev.map((entry) =>
+        entry.id === updated.id ? mergeMapWithRecoveredTroops(updated, entry) : entry
+      )
+    );
     setTilePresetsByMap((prev) => ({ ...prev, [updated.id]: nextPresets }));
     setTileStatesByMap((prev) => ({ ...prev, [updated.id]: nextStates }));
     setTileRegionStatesByMap((prev) => ({ ...prev, [updated.id]: nextRegionStates }));
@@ -2234,13 +2947,32 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   };
 
   const resetBuildingDraft = () => {
-    setBuildingDraft(createDefaultBuildingDraftState());
+    const troopMode = presetMode === "troop";
+    const carriageMode = presetMode === "carriage";
+    setBuildingDraft({
+      ...createDefaultBuildingDraftState(),
+      presetType: troopMode ? "troop" : carriageMode ? "carriage" : "building",
+      effort: troopMode || carriageMode ? "1" : "",
+      space: troopMode ? "0" : "",
+    });
   };
 
   const handleSelectBuildingPreset = (presetId: string) => {
     const target = activeBuildingPresets.find((entry) => entry.id === presetId);
     if (!target) return;
-    setBuildingDraft(buildDraftFromPreset(target));
+    const nextType = normalizePresetType(target.presetType);
+    setPresetMode(nextType);
+    const nextDraft = buildDraftFromPreset(target);
+    setBuildingDraft({
+      ...nextDraft,
+      effort:
+        nextType === "troop" || nextType === "carriage"
+          ? nextDraft.effort?.trim()
+            ? nextDraft.effort
+            : "1"
+          : nextDraft.effort,
+      space: nextType === "troop" ? "0" : nextType === "carriage" ? "" : nextDraft.space,
+    });
   };
 
   const createDefaultComparePredicate = (): BuildingRulePredicate => ({
@@ -2279,6 +3011,15 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
               negate: false,
               repeat: false,
             }
+          : kind === "requireTroopInRange"
+            ? {
+                kind: "requireTroopInRange",
+                presetId: "",
+                distance: 1,
+                minCount: 1,
+                negate: false,
+                repeat: false,
+              }
           : { kind: "custom", label: "" };
 
   type RuleWhenKind = "compare" | "tileRegionCompare" | BuildingPlacementRule["kind"];
@@ -2287,6 +3028,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     kind === "tileRegionCompare" ||
     kind === "requireTagInRange" ||
     kind === "requireBuildingInRange" ||
+    kind === "requireTroopInRange" ||
     kind === "custom";
   const getWhenKind = (when?: BuildingRulePredicate): RuleWhenKind | null => {
     if (!when) return null;
@@ -2331,7 +3073,13 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       };
     }
     if (kind === "adjustTileRegion") {
-      return { kind, field: "threat", delta: { kind: "const", value: 0 }, target: "self" };
+      return {
+        kind,
+        field: "threat",
+        delta: { kind: "const", value: 0 },
+        target: "self",
+        excludeSelf: false,
+      };
     }
     if (kind === "addTileState") {
       return {
@@ -2339,9 +3087,15 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         tagPresetId: activeTilePresets[0]?.id ?? "",
         value: "",
         target: "self",
+        excludeSelf: false,
       };
     }
-    return { kind, tagPresetId: activeTilePresets[0]?.id ?? "", target: "self" };
+    return {
+      kind,
+      tagPresetId: activeTilePresets[0]?.id ?? "",
+      target: "self",
+      excludeSelf: false,
+    };
   };
 
   const setDraftResourceValue = (
@@ -2366,7 +3120,11 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       setErr(null);
       try {
         const updated = await updateWorldMap(selectedMap.id, { cityGlobal: nextState });
-        setMaps((prev) => prev.map((entry) => (entry.id === updated.id ? updated : entry)));
+        setMaps((prev) =>
+          prev.map((entry) =>
+            entry.id === updated.id ? mergeMapWithRecoveredTroops(updated, entry) : entry
+          )
+        );
       } catch (e: any) {
         setErr(String(e?.message ?? e));
         throw e;
@@ -2374,7 +3132,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         setBusy(false);
       }
     },
-    [selectedMap, activeCityGlobal]
+    [selectedMap, activeCityGlobal, mergeMapWithRecoveredTroops]
   );
 
   const handleAddWarehouseItem = useCallback(
@@ -2494,7 +3252,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   };
 
   const setDraftEffectRules = (
-    field: "onBuild" | "daily" | "onRemove",
+    field: "onBuild" | "daily" | "sustain" | "onRemove",
     updater: (prev: BuildingExecutionRule[]) => BuildingExecutionRule[]
   ) => {
     setBuildingDraft((prev) => ({ ...prev, [field]: updater(prev[field]) }));
@@ -2510,7 +3268,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setDraftPlacementRules((prev) => [...prev, { kind: "uniquePerTile" }]);
   };
 
-  const handleAddExecutionRule = (field: "onBuild" | "daily" | "onRemove") => {
+  const handleAddExecutionRule = (field: "onBuild" | "daily" | "sustain" | "onRemove") => {
     setDraftEffectRules(field, (prev) => [...prev, createDefaultExecutionRule(field === "daily")]);
   };
 
@@ -2524,18 +3282,18 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   };
 
   const setEffectRuleAt = (
-    field: "onBuild" | "daily" | "onRemove",
+    field: "onBuild" | "daily" | "sustain" | "onRemove",
     index: number,
     nextRule: BuildingExecutionRule
   ) => {
     setDraftEffectRules(field, (prev) => prev.map((rule, i) => (i === index ? nextRule : rule)));
   };
 
-  const removeEffectRule = (field: "onBuild" | "daily" | "onRemove", index: number) => {
+  const removeEffectRule = (field: "onBuild" | "daily" | "sustain" | "onRemove", index: number) => {
     setDraftEffectRules(field, (prev) => prev.filter((_, i) => i !== index));
   };
 
-  const addEffectAction = (field: "onBuild" | "daily" | "onRemove", index: number) => {
+  const addEffectAction = (field: "onBuild" | "daily" | "sustain" | "onRemove", index: number) => {
     setDraftEffectRules(field, (prev) =>
       prev.map((rule, i) =>
         i === index ? { ...rule, actions: [...rule.actions, createDefaultRuleAction()] } : rule
@@ -2544,7 +3302,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   };
 
   const removeEffectAction = (
-    field: "onBuild" | "daily" | "onRemove",
+    field: "onBuild" | "daily" | "sustain" | "onRemove",
     ruleIndex: number,
     actionIndex: number
   ) => {
@@ -2558,7 +3316,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   };
 
   const setEffectActionAt = (
-    field: "onBuild" | "daily" | "onRemove",
+    field: "onBuild" | "daily" | "sustain" | "onRemove",
     ruleIndex: number,
     actionIndex: number,
     next: BuildingRuleAction
@@ -2577,7 +3335,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
 
   const handleSaveBuildingPreset = async () => {
     if (!isAdmin) {
-      setErr("관리자만 건물 프리셋을 등록/수정할 수 있습니다.");
+      setErr("관리자만 건물/병력 프리셋을 등록/수정할 수 있습니다.");
       return;
     }
     if (!selectedMap) {
@@ -2590,7 +3348,18 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       return;
     }
     const effort = toNonNegativeInt(buildingDraft.effort.trim());
-    const space = toNonNegativeInt(buildingDraft.space.trim());
+    const rawSpace = toNonNegativeInt(buildingDraft.space.trim());
+    const presetType = normalizePresetType(buildingDraft.presetType ?? presetMode);
+    const space = presetType === "troop" || presetType === "carriage" ? 0 : rawSpace;
+    const troopThreatReduction = Math.max(
+      0,
+      Math.trunc(Number(buildingDraft.troopThreatReduction?.trim?.() ?? 0) || 0)
+    );
+    const dailyRulesWithoutAuto = stripAutoTroopThreatRules(buildingDraft.daily);
+    const dailyRules =
+      presetType === "troop" && troopThreatReduction > 0
+        ? [...dailyRulesWithoutAuto, createAutoTroopThreatRule(troopThreatReduction)]
+        : dailyRulesWithoutAuto;
     const buildCost = Object.fromEntries(
       Object.entries(toNumberRecordFromResourceDraft(buildingDraft.buildCost)).filter(([, v]) =>
         Number.isFinite(Number(v))
@@ -2615,10 +3384,13 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       tier: buildingDraft.tier.trim() || undefined,
       effort,
       space,
-      description: buildingDraft.description.trim() || undefined,
-      placementRules: buildingDraft.id
-        ? convertUniquePerTileRulesForPersist(buildingDraft.placementRules, buildingDraft.id)
-        : buildingDraft.placementRules,
+      description: encodePresetDescriptionWithType(buildingDraft.description, presetType),
+      placementRules:
+        presetType === "troop" || presetType === "carriage"
+          ? []
+          : buildingDraft.id
+            ? convertUniquePerTileRulesForPersist(buildingDraft.placementRules, buildingDraft.id)
+            : buildingDraft.placementRules,
       buildCost,
       upkeep:
         Object.keys(upkeepResources).length > 0 || Object.keys(upkeepPopulation).length > 0
@@ -2627,11 +3399,27 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
               population: upkeepPopulation,
             }
           : undefined,
-      effects: {
-        onBuild: buildingDraft.onBuild,
-        daily: buildingDraft.daily,
-        onRemove: buildingDraft.onRemove,
-      },
+      effects:
+        presetType === "troop"
+          ? {
+              onBuild: [],
+              daily: dailyRules,
+              sustain: [],
+              onRemove: [],
+            }
+          : presetType === "carriage"
+            ? {
+                onBuild: [],
+                daily: [],
+                sustain: [],
+                onRemove: [],
+              }
+          : {
+              onBuild: buildingDraft.onBuild,
+              daily: dailyRules,
+              sustain: buildingDraft.sustain,
+              onRemove: buildingDraft.onRemove,
+            },
     };
 
     const sourcePreset =
@@ -2676,11 +3464,15 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       );
       const latestSaved =
         latestSelectedRows.find((entry) => String(entry.id ?? "") === savedId) ??
-        latestSelectedRows.find(
-          (entry) =>
-            getBuildingPresetSharedKey(entry) ===
-            getBuildingPresetSharedKey({ name, tier: buildingDraft.tier })
-        ) ??
+          latestSelectedRows.find(
+            (entry) =>
+              getBuildingPresetSharedKey(entry) ===
+              getBuildingPresetSharedKey({
+                name,
+                tier: buildingDraft.tier,
+                presetType,
+              } as Pick<WorldMapBuildingPresetRow, "name" | "tier" | "presetType">)
+          ) ??
         null;
       if (latestSaved) setBuildingDraft(buildDraftFromPreset(latestSaved));
       else resetBuildingDraft();
@@ -2694,7 +3486,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
 
   const handleDeleteBuildingPreset = async (presetId: string) => {
     if (!isAdmin) {
-      setErr("관리자만 건물 프리셋을 삭제할 수 있습니다.");
+      setErr("관리자만 건물/병력 프리셋을 삭제할 수 있습니다.");
       return;
     }
     if (!selectedMap) {
@@ -2703,7 +3495,8 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     }
     const target = activeBuildingPresets.find((entry) => entry.id === presetId);
     if (!target) return;
-    const ok = window.confirm(`건물 프리셋을 삭제합니다: ${target.name}`);
+    const kindLabel = normalizePresetType(target.presetType) === "troop" ? "병력" : "건물";
+    const ok = window.confirm(`${kindLabel} 프리셋을 삭제합니다: ${target.name}`);
     if (!ok) return;
     setBusy(true);
     setErr(null);
@@ -2938,22 +3731,33 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     }
   };
 
-  const handleOpenTileBuildingEditor = (col: number, row: number) => {
+  const openTilePlacementEditor = (col: number, row: number) => {
     if (selectedMap?.id) {
       void releaseWorkersFromCompletedBuildings(selectedMap.id);
     }
+    const candidates = activeStructurePresets;
     tileBuildingCreateWorkersDraftRef.current = { ...EMPTY_WORKER_ASSIGNMENT_DRAFT };
     tileBuildingWorkersDraftByIdRef.current = {};
     setTileBuildingEditor({
       col,
       row,
-      presetId: activeBuildingPresets[0]?.id ?? "",
+      presetId: candidates[0]?.id ?? "",
     });
     setTileBuildingSearchQuery("");
     if (tileBuildingSearchInputRef.current) {
       tileBuildingSearchInputRef.current.value = "";
     }
     setTileContextMenu(null);
+  };
+
+  const handleOpenTileBuildingEditor = (col: number, row: number) =>
+    openTilePlacementEditor(col, row);
+
+  const handleOpenTileTroopEditor = (col: number, row: number) => {
+    setSelectedHexIfChanged(col, row, false);
+    setTileContextMenu(null);
+    setTroopModalScope("tile");
+    setTroopModalOpen(true);
   };
 
   const handleOpenTileYieldViewer = (col: number, row: number) => {
@@ -2969,6 +3773,15 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     }
     let selectedPreset =
       activeBuildingPresets.find((entry) => entry.id === tileBuildingEditor.presetId) ?? null;
+    const selectedPresetType = normalizePresetType(selectedPreset?.presetType);
+    if (selectedPreset && (selectedPresetType === "troop" || selectedPresetType === "carriage")) {
+      setErr(
+        selectedPresetType === "troop"
+          ? "병력은 타일에서 직접 배치할 수 없습니다. '병력 배치'에서 보유 병력을 배치해 주세요."
+          : "역마차는 타일에서 직접 배치할 수 없습니다. '역마차' 메뉴에서 영입을 실행해 주세요."
+      );
+      return;
+    }
     const createDraft = tileBuildingCreateWorkersDraftRef.current ?? EMPTY_WORKER_ASSIGNMENT_DRAFT;
     const effort = Math.max(0, Math.trunc(Number(selectedPreset?.effort ?? 0)));
     const requestedWorkersByType: Record<PopulationTrackedId, number> = {
@@ -3007,6 +3820,30 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
                 : [...base, normalizedMigrated];
             return { ...prev, [selectedMap.id]: next };
           });
+        }
+      }
+      if (selectedPreset && normalizePresetType(selectedPreset.presetType) === "troop") {
+        const troopSpace = Math.max(0, Math.trunc(Number(selectedPreset.space ?? 0) || 0));
+        if (troopSpace !== 0) {
+          const patched =
+            selectedPreset.mapId == null
+              ? await updateSharedWorldMapBuildingPreset(selectedPreset.id, { space: 0 })
+              : await updateWorldMapBuildingPreset(selectedPreset.mapId, selectedPreset.id, {
+                  space: 0,
+                });
+          const normalizedPatched = normalizeBuildingPresets([patched])[0] ?? null;
+          if (normalizedPatched) {
+            selectedPreset = normalizedPatched;
+            setBuildingPresetsByMap((prev) => {
+              const base = prev[selectedMap.id] ?? [];
+              const idx = base.findIndex((entry) => entry.id === normalizedPatched.id);
+              const next =
+                idx >= 0
+                  ? base.map((entry, i) => (i === idx ? normalizedPatched : entry))
+                  : [...base, normalizedPatched];
+              return { ...prev, [selectedMap.id]: next };
+            });
+          }
         }
       }
       const created = await createWorldMapBuildingInstance(selectedMap.id, {
@@ -3173,7 +4010,11 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       // 인원 배치 저장 후에도 도시 전역 가용 인구가 즉시 반영되도록 맵 데이터를 다시 동기화합니다.
       const latest = await getWorldMap(selectedMap.id);
       if (latest?.id) {
-        setMaps((prev) => prev.map((entry) => (entry.id === latest.id ? latest : entry)));
+        setMaps((prev) =>
+          prev.map((entry) =>
+            entry.id === latest.id ? mergeMapWithRecoveredTroops(latest, entry) : entry
+          )
+        );
         if (Array.isArray(latest.tileStatePresets)) {
           setTilePresetsByMap((prev) => ({
             ...prev,
@@ -3208,6 +4049,885 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       setBusy(false);
     }
   };
+
+  const persistTroopState = useCallback(
+    async (nextTroops: CityTroopState) => {
+      if (!selectedMap) return;
+      const payload = normalizeCityGlobalState({
+        ...activeCityGlobal,
+        troops: nextTroops,
+      });
+      const nextMemos = writeTroopStateToTileMemos(activeTileMemos, payload.troops);
+      const updated = await updateWorldMap(selectedMap.id, {
+        // IMPORTANT:
+        // backend patch path can replace cityGlobal as a whole.
+        // sending only { troops } caused values/population/caps reset.
+        cityGlobal: payload as any,
+        tileMemos: nextMemos,
+      });
+      setMaps((prev) =>
+        prev.map((entry) =>
+          entry.id === updated.id
+            ? mergeMapWithRecoveredTroops(
+                {
+                  ...(updated as WorldMap),
+                  cityGlobal: payload,
+                  tileMemos: nextMemos,
+                } as WorldMap,
+                entry
+              )
+            : entry
+        )
+      );
+      setTileMemosByMap((prev) => ({ ...prev, [selectedMap.id]: nextMemos }));
+    },
+    [activeCityGlobal, activeTileMemos, mergeMapWithRecoveredTroops, selectedMap]
+  );
+
+  const handleStartTroopTraining = useCallback(
+    async (presetId: string, quantity: number) => {
+      if (!selectedMap) return;
+      const id = String(presetId ?? "").trim();
+      if (!id) {
+        setErr("병력 프리셋을 선택해 주세요.");
+        return;
+      }
+      const qty = Math.max(1, Math.trunc(Number(quantity) || 1));
+      const preset =
+        activeTroopPresets.find((entry) => entry.id === id) ??
+        activeBuildingPresets.find((entry) => entry.id === id) ??
+        null;
+      if (!preset || normalizePresetType(preset.presetType) !== "troop") {
+        setErr("유효한 병력 프리셋을 찾을 수 없습니다.");
+        return;
+      }
+
+      const next = normalizeCityGlobalState(activeCityGlobal);
+      const troops = next.troops ?? createDefaultTroopState();
+      next.troops = troops;
+
+      const buildCosts = preset.buildCost ?? {};
+      const committedCosts: Record<string, number> = {};
+      for (const [resourceIdRaw, rawCost] of Object.entries(buildCosts)) {
+        const resourceId = resourceIdRaw as BuildingResourceId;
+        const unitCost = Math.max(0, Math.trunc(Number(rawCost) || 0));
+        if (unitCost <= 0) continue;
+        const totalCost = unitCost * qty;
+        committedCosts[resourceId] = totalCost;
+        if (isBaseResourceId(resourceId)) {
+          const current = Math.max(0, Math.trunc(Number(next.values[resourceId] ?? 0) || 0));
+          if (current < totalCost) {
+            setErr(`${RESOURCE_LABELS[resourceId]}이(가) 부족합니다. (${formatWithCommas(current)} / ${formatWithCommas(totalCost)})`);
+            return;
+          }
+          continue;
+        }
+        const itemName = getItemNameFromBuildingResourceId(resourceId);
+        if (!itemName) continue;
+        const currentItem = Math.max(0, Math.trunc(Number(next.warehouse?.[itemName] ?? 0) || 0));
+        if (currentItem < totalCost) {
+          setErr(`${itemName}이(가) 부족합니다. (${formatWithCommas(currentItem)} / ${formatWithCommas(totalCost)})`);
+          return;
+        }
+      }
+
+      const upkeepPopulation = preset.upkeep?.population ?? {};
+      const requiredByType: Record<PopulationTrackedId, number> = {
+        settlers: Math.max(0, Math.trunc(Number((upkeepPopulation as any).settlers ?? 0) || 0) * qty),
+        engineers: Math.max(0, Math.trunc(Number((upkeepPopulation as any).engineers ?? 0) || 0) * qty),
+        scholars: Math.max(0, Math.trunc(Number((upkeepPopulation as any).scholars ?? 0) || 0) * qty),
+        laborers: Math.max(0, Math.trunc(Number((upkeepPopulation as any).laborers ?? 0) || 0) * qty),
+      };
+      const requiredElderly = Math.max(
+        0,
+        Math.trunc(Number((upkeepPopulation as any).elderly ?? 0) || 0) * qty
+      );
+      let requiredAnyNonElderly = Math.max(
+        0,
+        Math.trunc(Number((upkeepPopulation as any).anyNonElderly ?? 0) || 0) * qty
+      );
+      const anyNonElderlyFillOrder = ANY_NON_ELDERLY_FILL_ORDER;
+      const availablePoolByType: Record<PopulationTrackedId, number> = {
+        settlers: Math.max(
+          0,
+          Math.trunc(Number(effectiveCityGlobal.population.settlers?.available ?? 0) || 0)
+        ),
+        engineers: Math.max(
+          0,
+          Math.trunc(Number(effectiveCityGlobal.population.engineers?.available ?? 0) || 0)
+        ),
+        scholars: Math.max(
+          0,
+          Math.trunc(Number(effectiveCityGlobal.population.scholars?.available ?? 0) || 0)
+        ),
+        laborers: Math.max(
+          0,
+          Math.trunc(Number(effectiveCityGlobal.population.laborers?.available ?? 0) || 0)
+        ),
+      };
+      let availableElderly = Math.max(
+        0,
+        Math.trunc(Number(effectiveCityGlobal.population.elderly?.available ?? 0) || 0)
+      );
+      const committedPopulation = {
+        settlers: requiredByType.settlers,
+        engineers: requiredByType.engineers,
+        scholars: requiredByType.scholars,
+        laborers: requiredByType.laborers,
+        elderly: requiredElderly,
+      };
+
+      for (const popId of TRACKED_POPULATION_IDS) {
+        if (availablePoolByType[popId] < requiredByType[popId]) {
+          setErr(
+            `${popId === "settlers" ? "정착민" : popId === "engineers" ? "기술자" : popId === "scholars" ? "학자" : "역꾼"} 인구가 부족합니다.`
+          );
+          return;
+        }
+        availablePoolByType[popId] = Math.max(0, availablePoolByType[popId] - requiredByType[popId]);
+      }
+      if (availableElderly < requiredElderly) {
+        setErr("노약자 인구가 부족합니다.");
+        return;
+      }
+      availableElderly = Math.max(0, availableElderly - requiredElderly);
+
+      if (requiredAnyNonElderly > 0) {
+        for (const popId of anyNonElderlyFillOrder) {
+          if (requiredAnyNonElderly <= 0) break;
+          const used = Math.min(availablePoolByType[popId], requiredAnyNonElderly);
+          if (used <= 0) continue;
+          availablePoolByType[popId] = Math.max(0, availablePoolByType[popId] - used);
+          requiredAnyNonElderly -= used;
+          (committedPopulation as any)[popId] =
+            Math.max(0, Math.trunc(Number((committedPopulation as any)[popId] ?? 0) || 0)) + used;
+        }
+      }
+      if (requiredAnyNonElderly > 0) {
+        setErr("노약자를 제외한 가용 인구가 부족합니다.");
+        return;
+      }
+
+      for (const [resourceIdRaw, rawCost] of Object.entries(buildCosts)) {
+        const resourceId = resourceIdRaw as BuildingResourceId;
+        const unitCost = Math.max(0, Math.trunc(Number(rawCost) || 0));
+        if (unitCost <= 0) continue;
+        const totalCost = unitCost * qty;
+        if (isBaseResourceId(resourceId)) {
+          next.values[resourceId] = Math.max(
+            0,
+            Math.trunc(Number(next.values[resourceId] ?? 0) || 0) - totalCost
+          );
+        } else {
+          const itemName = getItemNameFromBuildingResourceId(resourceId);
+          if (!itemName) continue;
+          const nextWarehouse = { ...(next.warehouse ?? {}) };
+          const remain = Math.max(0, Math.trunc(Number(nextWarehouse[itemName] ?? 0) || 0) - totalCost);
+          if (remain <= 0) delete nextWarehouse[itemName];
+          else nextWarehouse[itemName] = remain;
+          next.warehouse = nextWarehouse;
+        }
+      }
+
+      next.population.settlers.available = availablePoolByType.settlers;
+      next.population.engineers.available = availablePoolByType.engineers;
+      next.population.scholars.available = availablePoolByType.scholars;
+      next.population.laborers.available = availablePoolByType.laborers;
+      next.population.elderly.available = availableElderly;
+
+      const currentCommitted = troops.committedPopulation ?? {
+        settlers: 0,
+        engineers: 0,
+        scholars: 0,
+        laborers: 0,
+        elderly: 0,
+      };
+      troops.committedPopulation = {
+        settlers:
+          Math.max(0, Math.trunc(Number(currentCommitted.settlers ?? 0) || 0)) +
+          Math.max(0, Math.trunc(Number(committedPopulation.settlers ?? 0) || 0)),
+        engineers:
+          Math.max(0, Math.trunc(Number(currentCommitted.engineers ?? 0) || 0)) +
+          Math.max(0, Math.trunc(Number(committedPopulation.engineers ?? 0) || 0)),
+        scholars:
+          Math.max(0, Math.trunc(Number(currentCommitted.scholars ?? 0) || 0)) +
+          Math.max(0, Math.trunc(Number(committedPopulation.scholars ?? 0) || 0)),
+        laborers:
+          Math.max(0, Math.trunc(Number(currentCommitted.laborers ?? 0) || 0)) +
+          Math.max(0, Math.trunc(Number(committedPopulation.laborers ?? 0) || 0)),
+        elderly:
+          Math.max(0, Math.trunc(Number(currentCommitted.elderly ?? 0) || 0)) +
+          Math.max(0, Math.trunc(Number(committedPopulation.elderly ?? 0) || 0)),
+      };
+
+      const effortDays = Math.max(1, Math.trunc(Number(preset.effort ?? 1) || 1));
+      troops.training = [
+        ...(Array.isArray(troops.training) ? troops.training : []),
+        {
+          id: `troop-${Date.now()}-${Math.floor(Math.random() * 1000000)}`,
+          presetId: id,
+          quantity: qty,
+          remainingDays: effortDays,
+          committedPopulation,
+          committedCosts,
+        },
+      ];
+
+      setBusy(true);
+      setErr(null);
+      try {
+        const updated = await updateWorldMap(selectedMap.id, { cityGlobal: next });
+        setMaps((prev) =>
+          prev.map((entry) =>
+            entry.id === updated.id
+              ? mergeMapWithRecoveredTroops(
+                  {
+                    ...(updated as WorldMap),
+                    cityGlobal: next,
+                  } as WorldMap,
+                  entry
+                )
+              : entry
+          )
+        );
+      } catch (e: any) {
+        setErr(String(e?.message ?? e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [
+      activeBuildingPresets,
+      activeCityGlobal,
+      activeTroopPresets,
+      effectiveCityGlobal,
+      mergeMapWithRecoveredTroops,
+      selectedMap,
+    ]
+  );
+
+  const handleCancelTroopTraining = useCallback(
+    async (orderId: string) => {
+      if (!selectedMap) return;
+      const targetId = String(orderId ?? "").trim();
+      if (!targetId) return;
+
+      const next = normalizeCityGlobalState(activeCityGlobal);
+      const troops = next.troops ?? createDefaultTroopState();
+      next.troops = troops;
+      const training = Array.isArray(troops.training) ? troops.training : [];
+      const target = training.find((order) => String(order.id ?? "").trim() === targetId);
+      if (!target) {
+        setErr("취소할 훈련 대기열 항목을 찾을 수 없습니다.");
+        return;
+      }
+
+      troops.training = training.filter((order) => String(order.id ?? "").trim() !== targetId);
+
+      const committed = target.committedPopulation ?? {
+        settlers: 0,
+        engineers: 0,
+        scholars: 0,
+        laborers: 0,
+        elderly: 0,
+      };
+      const committedPool = troops.committedPopulation ?? {
+        settlers: 0,
+        engineers: 0,
+        scholars: 0,
+        laborers: 0,
+        elderly: 0,
+      };
+      for (const id of ["settlers", "engineers", "scholars", "laborers", "elderly"] as const) {
+        const refund = Math.max(0, Math.trunc(Number(committed[id] ?? 0) || 0));
+        if (refund <= 0) continue;
+        const total = Math.max(0, Math.trunc(Number(next.population[id]?.total ?? 0) || 0));
+        const available = Math.max(0, Math.trunc(Number(next.population[id]?.available ?? 0) || 0));
+        next.population[id].available = Math.min(total, available + refund);
+        committedPool[id] = Math.max(
+          0,
+          Math.trunc(Number(committedPool[id] ?? 0) || 0) - refund
+        );
+      }
+      troops.committedPopulation = committedPool;
+
+      const refundCosts: Record<string, number> = {};
+      if (target.committedCosts && Object.keys(target.committedCosts).length > 0) {
+        for (const [ridRaw, amountRaw] of Object.entries(target.committedCosts)) {
+          const rid = String(ridRaw ?? "").trim();
+          const amount = Math.max(0, Math.trunc(Number(amountRaw) || 0));
+          if (!rid || amount <= 0) continue;
+          refundCosts[rid] = amount;
+        }
+      } else {
+        const presetId = String(target.presetId ?? "").trim();
+        const preset =
+          activeTroopPresets.find((entry) => entry.id === presetId) ??
+          activeBuildingPresets.find((entry) => entry.id === presetId) ??
+          null;
+        const qty = Math.max(0, Math.trunc(Number(target.quantity) || 0));
+        const buildCost = preset?.buildCost ?? {};
+        for (const [ridRaw, perUnitRaw] of Object.entries(buildCost)) {
+          const rid = String(ridRaw ?? "").trim();
+          const perUnit = Math.max(0, Math.trunc(Number(perUnitRaw) || 0));
+          const amount = perUnit * qty;
+          if (!rid || amount <= 0) continue;
+          refundCosts[rid] = amount;
+        }
+      }
+
+      for (const [resourceIdRaw, amountRaw] of Object.entries(refundCosts)) {
+        const resourceId = resourceIdRaw as BuildingResourceId;
+        const amount = Math.max(0, Math.trunc(Number(amountRaw) || 0));
+        if (amount <= 0) continue;
+        if (isBaseResourceId(resourceId)) {
+          next.values[resourceId] = Math.max(
+            0,
+            Math.trunc(Number(next.values[resourceId] ?? 0) || 0) + amount
+          );
+        } else {
+          const itemName = getItemNameFromBuildingResourceId(resourceId);
+          if (!itemName) continue;
+          const nextWarehouse = { ...(next.warehouse ?? {}) };
+          nextWarehouse[itemName] =
+            Math.max(0, Math.trunc(Number(nextWarehouse[itemName] ?? 0) || 0)) + amount;
+          next.warehouse = nextWarehouse;
+        }
+      }
+
+      setBusy(true);
+      setErr(null);
+      try {
+        const updated = await updateWorldMap(selectedMap.id, { cityGlobal: next });
+        setMaps((prev) =>
+          prev.map((entry) =>
+            entry.id === updated.id
+              ? mergeMapWithRecoveredTroops(
+                  {
+                    ...(updated as WorldMap),
+                    cityGlobal: next,
+                  } as WorldMap,
+                  entry
+                )
+              : entry
+          )
+        );
+      } catch (e: any) {
+        setErr(String(e?.message ?? e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [
+      activeBuildingPresets,
+      activeCityGlobal,
+      activeTroopPresets,
+      mergeMapWithRecoveredTroops,
+      selectedMap,
+    ]
+  );
+
+  const handleDeployTroopToSelectedTile = useCallback(
+    async (presetId: string, quantity: number) => {
+      if (!selectedMap || !selectedHex) return;
+      const qty = Math.max(1, Math.trunc(Number(quantity) || 1));
+      const id = String(presetId ?? "").trim();
+      if (!id) return;
+      const next = normalizeCityGlobalState(activeCityGlobal);
+      const troops = next.troops ?? createDefaultTroopState();
+      next.troops = troops;
+      const currentStock = Math.max(0, Math.trunc(Number(troops.stock[id] ?? 0) || 0));
+      if (currentStock < qty) {
+        setErr("보유 병력이 부족합니다.");
+        return;
+      }
+      const key = tileKey(selectedHex.col, selectedHex.row);
+      const byPreset = { ...(troops.deployed[key] ?? {}) };
+      byPreset[id] = Math.max(0, Math.trunc(Number(byPreset[id] ?? 0) || 0)) + qty;
+      troops.deployed = { ...troops.deployed, [key]: byPreset };
+      const remain = currentStock - qty;
+      if (remain <= 0) delete troops.stock[id];
+      else troops.stock[id] = remain;
+
+      setBusy(true);
+      setErr(null);
+      try {
+        await persistTroopState(troops);
+      } catch (e: any) {
+        setErr(String(e?.message ?? e));
+        await refreshCurrentMapOnly(selectedMap.id);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [activeCityGlobal, persistTroopState, refreshCurrentMapOnly, selectedHex, selectedMap]
+  );
+
+  const handleWithdrawTroopFromSelectedTile = useCallback(
+    async (presetId: string, quantity: number) => {
+      if (!selectedMap || !selectedHex) return;
+      const qty = Math.max(1, Math.trunc(Number(quantity) || 1));
+      const id = String(presetId ?? "").trim();
+      if (!id) return;
+      const key = tileKey(selectedHex.col, selectedHex.row);
+      const next = normalizeCityGlobalState(activeCityGlobal);
+      const troops = next.troops ?? createDefaultTroopState();
+      next.troops = troops;
+      const byPreset = { ...(troops.deployed[key] ?? {}) };
+      const currentDeployed = Math.max(0, Math.trunc(Number(byPreset[id] ?? 0) || 0));
+      if (currentDeployed < qty) {
+        setErr("선택 타일 배치 병력이 부족합니다.");
+        return;
+      }
+      const remainOnTile = currentDeployed - qty;
+      if (remainOnTile <= 0) delete byPreset[id];
+      else byPreset[id] = remainOnTile;
+      if (Object.keys(byPreset).length === 0) {
+        const nextDeployed = { ...troops.deployed };
+        delete nextDeployed[key];
+        troops.deployed = nextDeployed;
+      } else {
+        troops.deployed = { ...troops.deployed, [key]: byPreset };
+      }
+      troops.stock[id] = Math.max(0, Math.trunc(Number(troops.stock[id] ?? 0) || 0)) + qty;
+
+      setBusy(true);
+      setErr(null);
+      try {
+        await persistTroopState(troops);
+      } catch (e: any) {
+        setErr(String(e?.message ?? e));
+        await refreshCurrentMapOnly(selectedMap.id);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [activeCityGlobal, persistTroopState, refreshCurrentMapOnly, selectedHex, selectedMap]
+  );
+
+  const handleDisbandTroop = useCallback(
+    async (presetId: string, quantity: number) => {
+      if (!selectedMap) return;
+      const id = String(presetId ?? "").trim();
+      if (!id) return;
+      const qty = Math.max(1, Math.trunc(Number(quantity) || 1));
+
+      const preset =
+        activeTroopPresets.find((entry) => entry.id === id) ??
+        activeBuildingPresets.find((entry) => entry.id === id) ??
+        null;
+      if (!preset || normalizePresetType(preset.presetType) !== "troop") {
+        setErr("유효한 병력 프리셋을 찾을 수 없습니다.");
+        return;
+      }
+
+      const next = normalizeCityGlobalState(activeCityGlobal);
+      const troops = next.troops ?? createDefaultTroopState();
+      next.troops = troops;
+
+      const stockCount = Math.max(0, Math.trunc(Number(troops.stock[id] ?? 0) || 0));
+      let deployedCount = 0;
+      for (const byPreset of Object.values(troops.deployed ?? {})) {
+        deployedCount += Math.max(0, Math.trunc(Number((byPreset ?? {})[id] ?? 0) || 0));
+      }
+      const totalCount = stockCount + deployedCount;
+      if (totalCount < qty) {
+        setErr(`해산할 병력이 부족합니다. (${formatWithCommas(totalCount)} / ${formatWithCommas(qty)})`);
+        return;
+      }
+
+      let remaining = qty;
+      if (stockCount > 0) {
+        const useStock = Math.min(stockCount, remaining);
+        const nextStock = stockCount - useStock;
+        if (nextStock <= 0) delete troops.stock[id];
+        else troops.stock[id] = nextStock;
+        remaining -= useStock;
+      }
+
+      if (remaining > 0) {
+        const nextDeployed = { ...(troops.deployed ?? {}) };
+        const tileKeys = Object.keys(nextDeployed).sort((a, b) => a.localeCompare(b));
+        for (const key of tileKeys) {
+          if (remaining <= 0) break;
+          const byPreset = { ...(nextDeployed[key] ?? {}) };
+          const current = Math.max(0, Math.trunc(Number(byPreset[id] ?? 0) || 0));
+          if (current <= 0) continue;
+          const use = Math.min(current, remaining);
+          const rest = current - use;
+          if (rest <= 0) delete byPreset[id];
+          else byPreset[id] = rest;
+          if (Object.keys(byPreset).length <= 0) delete nextDeployed[key];
+          else nextDeployed[key] = byPreset;
+          remaining -= use;
+        }
+        troops.deployed = nextDeployed;
+      }
+
+      const upkeepPopulation = preset.upkeep?.population ?? {};
+      const refundFixedByType: Record<PopulationTrackedId, number> = {
+        settlers:
+          Math.max(0, Math.trunc(Number((upkeepPopulation as any).settlers ?? 0) || 0)) * qty,
+        engineers:
+          Math.max(0, Math.trunc(Number((upkeepPopulation as any).engineers ?? 0) || 0)) * qty,
+        scholars:
+          Math.max(0, Math.trunc(Number((upkeepPopulation as any).scholars ?? 0) || 0)) * qty,
+        laborers:
+          Math.max(0, Math.trunc(Number((upkeepPopulation as any).laborers ?? 0) || 0)) * qty,
+      };
+      let refundAnyNonElderly =
+        Math.max(0, Math.trunc(Number((upkeepPopulation as any).anyNonElderly ?? 0) || 0)) * qty;
+      const refundElderly =
+        Math.max(0, Math.trunc(Number((upkeepPopulation as any).elderly ?? 0) || 0)) * qty;
+
+      const committed = troops.committedPopulation ?? {
+        settlers: 0,
+        engineers: 0,
+        scholars: 0,
+        laborers: 0,
+        elderly: 0,
+      };
+      const refundAppliedByType: Record<PopulationId, number> = {
+        settlers: 0,
+        engineers: 0,
+        scholars: 0,
+        laborers: 0,
+        elderly: 0,
+      };
+
+      for (const popId of TRACKED_POPULATION_IDS) {
+        const need = Math.max(0, Math.trunc(Number(refundFixedByType[popId] ?? 0) || 0));
+        if (need <= 0) continue;
+        const can = Math.max(0, Math.trunc(Number((committed as any)[popId] ?? 0) || 0));
+        const take = Math.min(need, can);
+        if (take <= 0) continue;
+        (committed as any)[popId] = can - take;
+        refundAppliedByType[popId] += take;
+      }
+
+      if (refundAnyNonElderly > 0) {
+        for (const popId of ANY_NON_ELDERLY_FILL_ORDER) {
+          if (refundAnyNonElderly <= 0) break;
+          const can = Math.max(0, Math.trunc(Number((committed as any)[popId] ?? 0) || 0));
+          const take = Math.min(refundAnyNonElderly, can);
+          if (take <= 0) continue;
+          (committed as any)[popId] = can - take;
+          refundAppliedByType[popId] += take;
+          refundAnyNonElderly -= take;
+        }
+      }
+
+      if (refundElderly > 0) {
+        const can = Math.max(0, Math.trunc(Number(committed.elderly ?? 0) || 0));
+        const take = Math.min(refundElderly, can);
+        if (take > 0) {
+          committed.elderly = can - take;
+          refundAppliedByType.elderly += take;
+        }
+      }
+      troops.committedPopulation = committed;
+
+      for (const popId of ALL_POPULATION_IDS) {
+        const gain = Math.max(0, Math.trunc(Number(refundAppliedByType[popId] ?? 0) || 0));
+        if (gain <= 0) continue;
+        const total = Math.max(0, Math.trunc(Number(next.population[popId]?.total ?? 0) || 0));
+        const available = Math.max(
+          0,
+          Math.trunc(Number(next.population[popId]?.available ?? 0) || 0)
+        );
+        next.population[popId].available = Math.min(total, available + gain);
+      }
+
+      setBusy(true);
+      setErr(null);
+      try {
+        const updated = await updateWorldMap(selectedMap.id, { cityGlobal: next });
+        setMaps((prev) =>
+          prev.map((entry) =>
+            entry.id === updated.id
+              ? mergeMapWithRecoveredTroops(
+                  {
+                    ...(updated as WorldMap),
+                    cityGlobal: next,
+                  } as WorldMap,
+                  entry
+                )
+              : entry
+          )
+        );
+      } catch (e: any) {
+        setErr(String(e?.message ?? e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [
+      activeBuildingPresets,
+      activeCityGlobal,
+      activeTroopPresets,
+      mergeMapWithRecoveredTroops,
+      selectedMap,
+    ]
+  );
+
+  const handleRecruitCarriage = useCallback(
+    async (presetId: string, quantity: number) => {
+      if (!selectedMap) return;
+      const id = String(presetId ?? "").trim();
+      if (!id) {
+        setErr("역마차 프리셋을 선택해 주세요.");
+        return;
+      }
+      const qty = Math.max(1, Math.trunc(Number(quantity) || 1));
+      const preset =
+        activeCarriagePresets.find((entry) => entry.id === id) ??
+        activeBuildingPresets.find(
+          (entry) => entry.id === id && normalizePresetType(entry.presetType) === "carriage"
+        ) ??
+        null;
+      if (!preset || normalizePresetType(preset.presetType) !== "carriage") {
+        setErr("유효한 역마차 프리셋을 찾을 수 없습니다.");
+        return;
+      }
+
+      const next = normalizeCityGlobalState(activeCityGlobal);
+      const buildCosts = preset.buildCost ?? {};
+      const committedCosts: Record<string, number> = {};
+      for (const [resourceIdRaw, rawCost] of Object.entries(buildCosts)) {
+        const resourceId = resourceIdRaw as BuildingResourceId;
+        const unitCost = Math.max(0, Math.trunc(Number(rawCost) || 0));
+        if (unitCost <= 0) continue;
+        const totalCost = unitCost * qty;
+        committedCosts[resourceId] = totalCost;
+        if (isBaseResourceId(resourceId)) {
+          const current = Math.max(0, Math.trunc(Number(next.values[resourceId] ?? 0) || 0));
+          if (current < totalCost) {
+            setErr(
+              `${RESOURCE_LABELS[resourceId]}이(가) 부족합니다. (${formatWithCommas(current)} / ${formatWithCommas(totalCost)})`
+            );
+            return;
+          }
+        } else {
+          const itemName = getItemNameFromBuildingResourceId(resourceId);
+          if (!itemName) continue;
+          const currentItem = Math.max(0, Math.trunc(Number(next.warehouse?.[itemName] ?? 0) || 0));
+          if (currentItem < totalCost) {
+            setErr(
+              `${itemName}이(가) 부족합니다. (${formatWithCommas(currentItem)} / ${formatWithCommas(totalCost)})`
+            );
+            return;
+          }
+        }
+      }
+
+      for (const [resourceIdRaw, rawCost] of Object.entries(buildCosts)) {
+        const resourceId = resourceIdRaw as BuildingResourceId;
+        const unitCost = Math.max(0, Math.trunc(Number(rawCost) || 0));
+        if (unitCost <= 0) continue;
+        const totalCost = unitCost * qty;
+        if (isBaseResourceId(resourceId)) {
+          next.values[resourceId] = Math.max(
+            0,
+            Math.trunc(Number(next.values[resourceId] ?? 0) || 0) - totalCost
+          );
+        } else {
+          const itemName = getItemNameFromBuildingResourceId(resourceId);
+          if (!itemName) continue;
+          const nextWarehouse = { ...(next.warehouse ?? {}) };
+          const remain = Math.max(0, Math.trunc(Number(nextWarehouse[itemName] ?? 0) || 0) - totalCost);
+          if (remain <= 0) delete nextWarehouse[itemName];
+          else nextWarehouse[itemName] = remain;
+          next.warehouse = nextWarehouse;
+        }
+      }
+
+      const gainPopulation: Record<PopulationId, number> = {
+        settlers: 0,
+        engineers: 0,
+        scholars: 0,
+        laborers: 0,
+        elderly: 0,
+      };
+      for (const popId of ALL_POPULATION_IDS) {
+        const gain = Math.max(
+          0,
+          Math.trunc(Number((preset.upkeep?.population as any)?.[popId] ?? 0) || 0) * qty
+        );
+        if (gain <= 0) continue;
+        gainPopulation[popId] = gain;
+      }
+      const gainResources: Partial<Record<BuildingResourceId, number>> = {};
+      for (const [resourceIdRaw, amountRaw] of Object.entries(preset.upkeep?.resources ?? {})) {
+        const resourceId = resourceIdRaw as BuildingResourceId;
+        const gain = Math.max(0, Math.trunc(Number(amountRaw) || 0) * qty);
+        if (gain <= 0) continue;
+        gainResources[resourceId] = gain;
+      }
+      const remainingDays = Math.max(1, Math.trunc(Number(preset.effort ?? 1) || 1));
+      const orderId = `carriage-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const carriage = next.carriage ?? createDefaultCarriageState();
+      carriage.recruiting = [
+        ...(Array.isArray(carriage.recruiting) ? carriage.recruiting : []),
+        {
+          id: orderId,
+          presetId: id,
+          quantity: qty,
+          remainingDays,
+          gainPopulation,
+          gainResources,
+          committedCosts,
+        },
+      ];
+      next.carriage = carriage;
+
+      let nextMemos = writeTroopStateToTileMemos(activeTileMemos, next.troops);
+      nextMemos = writeCarriageStateToTileMemos(nextMemos, next.carriage);
+
+      setBusy(true);
+      setErr(null);
+      setSaveNotice(null);
+      try {
+        const updated = await updateWorldMap(selectedMap.id, {
+          cityGlobal: next,
+          tileMemos: nextMemos,
+        });
+        setMaps((prev) =>
+          prev.map((entry) =>
+            entry.id === updated.id
+              ? mergeMapWithRecoveredTroops(
+                  {
+                    ...(updated as WorldMap),
+                    cityGlobal: next,
+                    tileMemos: nextMemos,
+                  } as WorldMap,
+                  entry
+                )
+              : entry
+          )
+        );
+        setTileMemosByMap((prev) => ({ ...prev, [selectedMap.id]: nextMemos }));
+        setSaveNotice(`영입 대기열에 등록되었습니다. (${formatWithCommas(remainingDays)}일)`);
+      } catch (e: any) {
+        setErr(String(e?.message ?? e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [
+      activeBuildingPresets,
+      activeCarriagePresets,
+      activeCityGlobal,
+      activeTileMemos,
+      mergeMapWithRecoveredTroops,
+      selectedMap,
+    ]
+  );
+
+  const handleCancelCarriageRecruit = useCallback(
+    async (orderId: string) => {
+      if (!selectedMap) return;
+      const targetId = String(orderId ?? "").trim();
+      if (!targetId) return;
+
+      const next = normalizeCityGlobalState(activeCityGlobal);
+      const carriage = next.carriage ?? createDefaultCarriageState();
+      next.carriage = carriage;
+      const recruiting = Array.isArray(carriage.recruiting) ? carriage.recruiting : [];
+      const target = recruiting.find((order) => String(order.id ?? "").trim() === targetId);
+      if (!target) {
+        setErr("취소할 영입 대기열 항목을 찾을 수 없습니다.");
+        return;
+      }
+
+      carriage.recruiting = recruiting.filter((order) => String(order.id ?? "").trim() !== targetId);
+
+      const refundCosts: Record<string, number> = {};
+      if (target.committedCosts && Object.keys(target.committedCosts).length > 0) {
+        for (const [ridRaw, amountRaw] of Object.entries(target.committedCosts)) {
+          const rid = String(ridRaw ?? "").trim();
+          const amount = Math.max(0, Math.trunc(Number(amountRaw) || 0));
+          if (!rid || amount <= 0) continue;
+          refundCosts[rid] = amount;
+        }
+      } else {
+        const presetId = String(target.presetId ?? "").trim();
+        const preset =
+          activeCarriagePresets.find((entry) => entry.id === presetId) ??
+          activeBuildingPresets.find(
+            (entry) => entry.id === presetId && normalizePresetType(entry.presetType) === "carriage"
+          ) ??
+          null;
+        const qty = Math.max(0, Math.trunc(Number(target.quantity) || 0));
+        const buildCost = preset?.buildCost ?? {};
+        for (const [ridRaw, perUnitRaw] of Object.entries(buildCost)) {
+          const rid = String(ridRaw ?? "").trim();
+          const perUnit = Math.max(0, Math.trunc(Number(perUnitRaw) || 0));
+          const amount = perUnit * qty;
+          if (!rid || amount <= 0) continue;
+          refundCosts[rid] = amount;
+        }
+      }
+
+      for (const [resourceIdRaw, amountRaw] of Object.entries(refundCosts)) {
+        const resourceId = resourceIdRaw as BuildingResourceId;
+        const amount = Math.max(0, Math.trunc(Number(amountRaw) || 0));
+        if (amount <= 0) continue;
+        if (isBaseResourceId(resourceId)) {
+          next.values[resourceId] = Math.max(
+            0,
+            Math.trunc(Number(next.values[resourceId] ?? 0) || 0) + amount
+          );
+        } else {
+          const itemName = getItemNameFromBuildingResourceId(resourceId);
+          if (!itemName) continue;
+          const nextWarehouse = { ...(next.warehouse ?? {}) };
+          nextWarehouse[itemName] =
+            Math.max(0, Math.trunc(Number(nextWarehouse[itemName] ?? 0) || 0)) + amount;
+          next.warehouse = nextWarehouse;
+        }
+      }
+
+      let nextMemos = writeTroopStateToTileMemos(activeTileMemos, next.troops);
+      nextMemos = writeCarriageStateToTileMemos(nextMemos, next.carriage);
+
+      setBusy(true);
+      setErr(null);
+      try {
+        const updated = await updateWorldMap(selectedMap.id, {
+          cityGlobal: next,
+          tileMemos: nextMemos,
+        });
+        setMaps((prev) =>
+          prev.map((entry) =>
+            entry.id === updated.id
+              ? mergeMapWithRecoveredTroops(
+                  {
+                    ...(updated as WorldMap),
+                    cityGlobal: next,
+                    tileMemos: nextMemos,
+                  } as WorldMap,
+                  entry
+                )
+              : entry
+          )
+        );
+        setTileMemosByMap((prev) => ({ ...prev, [selectedMap.id]: nextMemos }));
+        setSaveNotice("영입 대기열이 취소되고 비용이 환불되었습니다.");
+      } catch (e: any) {
+        setErr(String(e?.message ?? e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [
+      activeBuildingPresets,
+      activeCarriagePresets,
+      activeCityGlobal,
+      activeTileMemos,
+      mergeMapWithRecoveredTroops,
+      selectedMap,
+    ]
+  );
 
   const handleToggleBuildingEnabled = async (instance: WorldMapBuildingInstanceRow) => {
     if (!selectedMap) return;
@@ -3324,10 +5044,13 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
 
   const tileBuildingInstances = useMemo(() => {
     if (!tileBuildingEditor) return [] as WorldMapBuildingInstanceRow[];
-    return activeBuildingInstances.filter(
-      (entry) => entry.col === tileBuildingEditor.col && entry.row === tileBuildingEditor.row
-    );
-  }, [activeBuildingInstances, tileBuildingEditor]);
+    return activeBuildingInstances.filter((entry) => {
+      if (entry.col !== tileBuildingEditor.col || entry.row !== tileBuildingEditor.row) return false;
+      const preset = activeBuildingPresets.find((item) => item.id === entry.presetId);
+      const presetType = normalizePresetType(preset?.presetType);
+      return presetType === "building";
+    });
+  }, [activeBuildingInstances, activeBuildingPresets, tileBuildingEditor]);
 
   useEffect(() => {
     if (!tileBuildingEditor) {
@@ -3358,14 +5081,19 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
 
   const filteredBuildingPresetsForTile = useMemo(() => {
     if (!tileBuildingEditor) return [] as WorldMapBuildingPresetRow[];
+    const source = activeStructurePresets;
     const q = tileBuildingSearchQuery.trim().toLowerCase();
-    if (!q) return activeBuildingPresets;
-    return activeBuildingPresets.filter((preset) => {
+    if (!q) return source;
+    return source.filter((preset) => {
       const name = preset.name.toLowerCase();
       const tier = String(preset.tier ?? "").toLowerCase();
       return name.includes(q) || tier.includes(q);
     });
-  }, [activeBuildingPresets, tileBuildingEditor, tileBuildingSearchQuery]);
+  }, [
+    activeStructurePresets,
+    tileBuildingEditor,
+    tileBuildingSearchQuery,
+  ]);
 
   useEffect(() => {
     if (!tileBuildingEditor && tileBuildingSearchTimerRef.current != null) {
@@ -3406,7 +5134,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   const presetPanelCtx = {
     presetMode, setPresetMode, isAdmin, busy, activeTilePresets, presetDraftName, setPresetDraftName,
     presetDraftColorHex, setPresetDraftColorHex, presetDraftHasValue, setPresetDraftHasValue,
-    handleCreateTilePreset, handleDeleteTilePreset, activeBuildingPresets, buildingDraft, setBuildingDraft,
+    handleCreateTilePreset, handleDeleteTilePreset, activeBuildingPresets, activeStructurePresets, activeTroopPresets, activeCarriagePresets, buildingDraft, setBuildingDraft,
     placementRuleSearch, setPlacementRuleSearch, handleSaveBuildingPreset, handleDeleteBuildingPreset,
     handleSelectBuildingPreset, resetBuildingDraft, setDraftPlacementRules, handleAddPlacementRule,
     handleRemovePlacementRule, handleAddExecutionRule, setEffectRuleAt, removeEffectRule, addEffectAction,
@@ -3416,8 +5144,10 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   };
 
   const mapModePanelCtx = {
+    isReadOnly,
     selectedMap, settingsOpen, settingsTab, busy, draft, selectedHex, activeTileStates, presetById,
     activeCityGlobal: effectiveCityGlobal,
+    troopPowerByTile,
     totalPopulation, dailyRunDays, dailyRunResult, dailyRunLogs, fileInputRef,
     citySettingsFormRef, setDraft, setSettingsOpen, setSettingsTab, setDailyRunDays, normalizeHexColor,
     handleDelete, handleUploadImage, handleSaveDraft, handleSaveCityGlobal, handleRunDailyRules,
@@ -3435,17 +5165,34 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setResourceStatusModalOpen,
     resourceStatusRows,
     placementReportOpen, setPlacementReportOpen, placementPopulationSummary, placementReportRows,
+    troopCommittedByPreset,
     imageUrl, viewportRef, dragging, handleViewportMouseDown, handleViewportMouseMove, endDragging,
     handleViewportWheel, scheduleVisibleBoundsUpdate, imageWidth, imageHeight, setLoadedSize,
     syncLoadedImageMeta, polygons, visibleImageBounds, selectedHexKeySet, tileStateBadgesByKey, EMPTY_STATE_BADGES,
-    suppressClickRef, setTileContextMenu, setSelectedHexIfChanged, activeTileRegionStates, tileContextMenu,
+    suppressClickRef, setTileContextMenu, setSelectedHexIfChanged, activeTileRegionStates: effectiveTileRegionStates, tileContextMenu,
     activeTileMemos,
-    tileContextMenuRef, handleOpenTileEditor, handleOpenTileMemoEditor, handleOpenTileRegionEditor, handleOpenTileBuildingEditor,
+    tileContextMenuRef, handleOpenTileEditor, handleOpenTileMemoEditor, handleOpenTileRegionEditor, handleOpenTileBuildingEditor, handleOpenTileTroopEditor,
     handleOpenTileYieldViewer,
     tileYieldViewer,
     setTileYieldViewer,
     tileYieldRows: tileYieldPreview.rows,
     tileYieldTotals: tileYieldPreview.totals,
+    troopModalOpen,
+    troopModalScope,
+    setTroopModalScope,
+    setTroopModalOpen,
+    activeTroopPresets,
+    carriageModalOpen,
+    setCarriageModalOpen,
+    activeCarriagePresets,
+    handleRecruitCarriage,
+    handleCancelCarriageRecruit,
+    troopState: activeCityGlobal.troops,
+    handleStartTroopTraining,
+    handleCancelTroopTraining,
+    handleDeployTroopToSelectedTile,
+    handleWithdrawTroopFromSelectedTile,
+    handleDisbandTroop,
     tileBuildingEditor, setTileBuildingEditor, setTileBuildingSearchQuery, tileBuildingSearchInputRef,
     tileBuildingSearchTimerRef, tileBuildingCreateWorkersDraftRef, tileBuildingWorkersDraftByIdRef,
     tileBuildingSearchQuery, filteredBuildingPresetsForTile, activeBuildingPresets, tileBuildingInstances,
@@ -3470,13 +5217,18 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
           onBack={onBack}
           onRefresh={() => void loadMaps(selectedMapId)}
           onRunDailyRules={() => {
-            if (!selectedMap || busy) return;
+            if (isReadOnly || !selectedMap || busy) return;
             const ok = window.confirm("일일 규칙을 실행하고 날짜를 넘기시겠습니까?");
             if (!ok) return;
             void handleRunDailyRules();
           }}
-          onToggleMapList={() => setMapListOpen((prev) => !prev)}
-          onToggleSettings={() => setSettingsOpen((prev) => ((prev ? false : (setSettingsTab("map"), true))))}
+          onToggleMapList={() => {
+            setMapListOpen((prev) => !prev);
+          }}
+          onToggleSettings={() => {
+            if (isReadOnly) return;
+            setSettingsOpen((prev) => (prev ? false : (setSettingsTab("map"), true)));
+          }}
         />
 
         {err ? <div className="mb-4 rounded-lg border border-red-900 bg-red-950/40 p-3 text-sm text-red-200">{err}</div> : null}
@@ -3494,10 +5246,14 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
               maps={maps}
               selectedMapId={selectedMapId}
               busy={busy}
+              canCreate={isAdmin}
+              canClose={true}
               createName={createName}
               onCreateNameChange={setCreateName}
               onCreate={handleCreate}
-              onClose={() => setMapListOpen(false)}
+              onClose={() => {
+                setMapListOpen(false);
+              }}
               onSelectMapId={setSelectedMapId}
             />
           ) : null}

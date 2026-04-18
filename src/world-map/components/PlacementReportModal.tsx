@@ -44,10 +44,25 @@ type PopulationSummaryRow = {
   allocated: number;
 };
 
+type TroopCommittedRow = {
+  presetId: string;
+  presetName: string;
+  units: number;
+  population: {
+    settlers: number;
+    engineers: number;
+    scholars: number;
+    laborers: number;
+    elderly: number;
+    anyNonElderly: number;
+  };
+};
+
 type Props = {
   open: boolean;
   rows: PlacementReportRow[];
   populationSummary: PopulationSummaryRow[];
+  troopCommittedByPreset: TroopCommittedRow[];
   onClose: () => void;
 };
 
@@ -73,9 +88,28 @@ export default function PlacementReportModal({
   open,
   rows,
   populationSummary,
+  troopCommittedByPreset,
   onClose,
 }: Props) {
   const [expandedByTile, setExpandedByTile] = useState<Record<string, boolean>>({});
+
+  const getRowOccupiedByType = (row: PlacementReportRow) => ({
+    settlers: Math.max(0, Math.trunc(Number(row.assigned.settlers ?? 0) || 0)),
+    engineers: Math.max(0, Math.trunc(Number(row.assigned.engineers ?? 0) || 0)),
+    scholars: Math.max(0, Math.trunc(Number(row.assigned.scholars ?? 0) || 0)),
+    laborers: Math.max(0, Math.trunc(Number(row.assigned.laborers ?? 0) || 0)),
+    elderly: Math.max(0, Math.trunc(Number(row.assigned.elderly ?? 0) || 0)),
+  });
+  const getRowOccupiedTotal = (row: PlacementReportRow) => {
+    const occupied = getRowOccupiedByType(row);
+    return (
+      occupied.settlers +
+      occupied.engineers +
+      occupied.scholars +
+      occupied.laborers +
+      occupied.elderly
+    );
+  };
 
   const groupedByTile = useMemo(() => {
     const grouped = new Map<
@@ -95,6 +129,8 @@ export default function PlacementReportModal({
       }
     >();
     for (const row of rows) {
+      if (getRowOccupiedTotal(row) <= 0) continue;
+      const occupiedByType = getRowOccupiedByType(row);
       const key = `${row.tileNumber}:${row.col}:${row.row}`;
       const existing = grouped.get(key);
       if (!existing) {
@@ -104,20 +140,20 @@ export default function PlacementReportModal({
           row: row.row,
           rows: [row],
           occupied: {
-            settlers: Math.max(0, row.assigned.settlers ?? 0),
-            engineers: Math.max(0, row.assigned.engineers ?? 0),
-            scholars: Math.max(0, row.assigned.scholars ?? 0),
-            laborers: Math.max(0, row.assigned.laborers ?? 0),
-            elderly: Math.max(0, row.assigned.elderly ?? 0),
+            settlers: occupiedByType.settlers,
+            engineers: occupiedByType.engineers,
+            scholars: occupiedByType.scholars,
+            laborers: occupiedByType.laborers,
+            elderly: occupiedByType.elderly,
           },
         });
       } else {
         existing.rows.push(row);
-        existing.occupied.settlers += Math.max(0, row.assigned.settlers ?? 0);
-        existing.occupied.engineers += Math.max(0, row.assigned.engineers ?? 0);
-        existing.occupied.scholars += Math.max(0, row.assigned.scholars ?? 0);
-        existing.occupied.laborers += Math.max(0, row.assigned.laborers ?? 0);
-        existing.occupied.elderly += Math.max(0, row.assigned.elderly ?? 0);
+        existing.occupied.settlers += occupiedByType.settlers;
+        existing.occupied.engineers += occupiedByType.engineers;
+        existing.occupied.scholars += occupiedByType.scholars;
+        existing.occupied.laborers += occupiedByType.laborers;
+        existing.occupied.elderly += occupiedByType.elderly;
       }
     }
     return [...grouped.entries()]
@@ -135,7 +171,7 @@ export default function PlacementReportModal({
       >
         <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
           <div className="text-sm font-semibold text-zinc-100">
-            배치 현황 확인
+            인구 배치 현황
           </div>
           <button
             type="button"
@@ -168,6 +204,34 @@ export default function PlacementReportModal({
                 </div>
               ))}
             </div>
+          </section>
+
+          <section className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
+            <div className="mb-2 text-xs font-semibold text-zinc-300">
+              병력 편성 점유 인구
+            </div>
+            {troopCommittedByPreset.length === 0 ? (
+              <div className="text-xs text-zinc-500">병력 편성으로 점유된 인구가 없습니다.</div>
+            ) : (
+              <div className="space-y-1.5">
+                {troopCommittedByPreset.map((row) => (
+                  <div
+                    key={row.presetId}
+                    className="rounded-md border border-zinc-800 bg-zinc-950/50 px-2 py-1.5 text-xs"
+                  >
+                    <div className="font-semibold text-amber-300">
+                      {row.presetName} · {formatWithCommas(row.units)}기
+                    </div>
+                    <div className="mt-0.5 text-zinc-300">
+                      {renderByType(row.population)}
+                      {row.population.anyNonElderly > 0
+                        ? ` · 노약자 제외 아무나 ${formatWithCommas(row.population.anyNonElderly)}`
+                        : ""}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
 
           <section className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
@@ -240,7 +304,7 @@ export default function PlacementReportModal({
                                       {formatWithCommas(row.construction.requiredEffort)}
                                     </div>
                                     <div className="mt-1 text-[11px] text-sky-300">
-                                      건설 투입: {renderByType(row.assigned)}
+                                      건설 투입: {renderByType(getRowOccupiedByType(row))}
                                     </div>
                                   </>
                                 ) : (
@@ -255,7 +319,7 @@ export default function PlacementReportModal({
                                       </div>
                                     ) : null}
                                     <div className="mt-1 text-[11px] text-sky-300">
-                                      배치: {renderByType(row.assigned)}
+                                      배치: {renderByType(getRowOccupiedByType(row))}
                                     </div>
                                   </>
                                 )}

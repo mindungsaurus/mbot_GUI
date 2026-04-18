@@ -129,7 +129,7 @@ export default function ResourceStatusModal({ open, rows, onClose }: Props) {
                               }
                             >
                               <div className="text-sm font-semibold text-zinc-200">
-                                타일 #{tile.tileNumber} · col {tile.col}, row {tile.row}
+                                타일 #{tile.tileNumber}
                               </div>
                               <div className="flex items-center gap-3">
                                 <DeltaChip label={resource.label} value={tile.value} />
@@ -167,4 +167,3 @@ export default function ResourceStatusModal({ open, rows, onClose }: Props) {
     </div>
   );
 }
-

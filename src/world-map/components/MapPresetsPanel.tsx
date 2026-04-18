@@ -14,6 +14,7 @@ import {
   normalizeHexColor,
   toNonNegativeInt,
   exprToEditableNumber,
+  readAutoTroopThreatReduction,
 } from "../utils";
 
 type Props = { ctx: any };
@@ -23,7 +24,7 @@ export default function MapPresetsPanel({ ctx }: Props) {
     presetMode, setPresetMode, isAdmin, busy,
     activeTilePresets, presetDraftName, setPresetDraftName, presetDraftColorHex, setPresetDraftColorHex, presetDraftHasValue, setPresetDraftHasValue,
     handleCreateTilePreset, handleDeleteTilePreset,
-    activeBuildingPresets, buildingDraft, setBuildingDraft, placementRuleSearch, setPlacementRuleSearch,
+    activeBuildingPresets, activeStructurePresets, activeTroopPresets, activeCarriagePresets, buildingDraft, setBuildingDraft, placementRuleSearch, setPlacementRuleSearch,
     handleSaveBuildingPreset, handleDeleteBuildingPreset, handleSelectBuildingPreset, resetBuildingDraft,
     setDraftPlacementRules, handleAddPlacementRule, handleRemovePlacementRule,
     handleAddExecutionRule, setEffectRuleAt, removeEffectRule, addEffectAction, removeEffectAction, setEffectActionAt,
@@ -89,10 +90,39 @@ export default function MapPresetsPanel({ ctx }: Props) {
       .slice(0, 8);
   };
 
+  const editingPresetType = (buildingDraft?.presetType ?? (presetMode === "troop" ? "troop" : presetMode === "carriage" ? "carriage" : "building")) as
+    | "building"
+    | "troop"
+    | "carriage";
+  const activePresetRows =
+    presetMode === "troop"
+      ? activeTroopPresets
+      : presetMode === "carriage"
+        ? activeCarriagePresets
+      : presetMode === "building"
+        ? activeStructurePresets
+        : activeBuildingPresets;
+  const presetEntityLabel =
+    editingPresetType === "troop"
+      ? "병력"
+      : editingPresetType === "carriage"
+        ? "역마차"
+        : "건물";
+  const buildCostBlockTitle =
+    editingPresetType === "troop"
+      ? "훈련 비용 블록"
+      : editingPresetType === "carriage"
+        ? "영입 비용 블록"
+        : "건설 비용 블록";
+  const upkeepResourceBlockTitle =
+    editingPresetType === "carriage" ? "획득 자원 블록" : "유지 자원 블록";
+  const upkeepPopulationBlockTitle =
+    editingPresetType === "carriage" ? "영입 인구 블록" : "유지 인구 블록";
+
   return (
               <div className="rounded-xl border border-zinc-800 bg-zinc-950/30 p-4">
                 <div className="mb-3 text-sm font-semibold text-zinc-100">맵 프리셋</div>
-                <div className="mb-4 grid grid-cols-2 gap-2">
+                <div className="mb-4 grid grid-cols-4 gap-2">
                   <button
                     type="button"
                     className={[
@@ -113,9 +143,53 @@ export default function MapPresetsPanel({ ctx }: Props) {
                         ? "border-sky-700/70 bg-sky-950/30 text-sky-200"
                         : "border-zinc-800 bg-zinc-950/30 text-zinc-300 hover:border-zinc-700",
                     ].join(" ")}
-                    onClick={() => setPresetMode("building")}
+                    onClick={() => {
+                      setPresetMode("building");
+                      setBuildingDraft((prev) => ({ ...prev, presetType: "building" }));
+                    }}
                   >
                     건물 프리셋
+                  </button>
+                  <button
+                    type="button"
+                    className={[
+                      "rounded-lg border px-3 py-1.5 text-xs font-semibold",
+                      presetMode === "troop"
+                        ? "border-indigo-700/70 bg-indigo-950/30 text-indigo-200"
+                        : "border-zinc-800 bg-zinc-950/30 text-zinc-300 hover:border-zinc-700",
+                    ].join(" ")}
+                    onClick={() => {
+                      setPresetMode("troop");
+                      setBuildingDraft((prev) => ({
+                        ...prev,
+                        presetType: "troop",
+                        effort: prev.effort?.trim() ? prev.effort : "1",
+                        space: "0",
+                      }));
+                    }}
+                  >
+                    병력 프리셋
+                  </button>
+                  <button
+                    type="button"
+                    className={[
+                      "rounded-lg border px-3 py-1.5 text-xs font-semibold",
+                      presetMode === "carriage"
+                        ? "border-violet-700/70 bg-violet-950/30 text-violet-200"
+                        : "border-zinc-800 bg-zinc-950/30 text-zinc-300 hover:border-zinc-700",
+                    ].join(" ")}
+                    onClick={() => {
+                      setPresetMode("carriage");
+                      setBuildingDraft((prev) => ({
+                        ...prev,
+                        presetType: "carriage",
+                        effort: prev.effort?.trim() ? prev.effort : "1",
+                        space: "0",
+                        troopThreatReduction: "0",
+                      }));
+                    }}
+                  >
+                    역마차 프리셋
                   </button>
                 </div>
 
@@ -215,20 +289,39 @@ export default function MapPresetsPanel({ ctx }: Props) {
                 ) : (
                   <>
                     <div className="mb-4 text-xs text-zinc-400">
-                      건물 규칙을 블록 단위로 조합해 관리합니다.
+                      {editingPresetType === "troop"
+                        ? "병력 기본 스펙(훈련 비용/인구/시간/위협도 감소)을 관리합니다."
+                        : editingPresetType === "carriage"
+                          ? "역마차 영입 프리셋(영입 비용/인구/획득 자원)을 관리합니다."
+                          : "건물 규칙을 블록 단위로 조합해 관리합니다."}
                     </div>
                     {isAdmin ? (
                       <div className="mb-4 space-y-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
-                        <div className="grid gap-2 md:grid-cols-[1fr_160px_120px_120px]">
+                        <div
+                          className={[
+                            "grid gap-2",
+                            editingPresetType === "troop"
+                              ? "md:grid-cols-[1fr_160px_160px]"
+                              : editingPresetType === "carriage"
+                                ? "md:grid-cols-[1fr_160px_160px]"
+                                : "md:grid-cols-[1fr_160px_120px_120px]",
+                          ].join(" ")}
+                        >
                           <label className="block">
-                            <div className="mb-1 text-[11px] font-semibold text-zinc-400">건물 이름</div>
+                            <div className="mb-1 text-[11px] font-semibold text-zinc-400">{presetEntityLabel} 이름</div>
                             <input
                               value={buildingDraft.name}
                               onChange={(e) =>
                                 setBuildingDraft((prev) => ({ ...prev, name: e.target.value }))
                               }
                               className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
-                              placeholder="예: 감자밭"
+                              placeholder={
+                                editingPresetType === "troop"
+                                  ? "예: 정찰대"
+                                  : editingPresetType === "carriage"
+                                    ? "작은 난민 집단"
+                                    : "예: 감자밭"
+                              }
                             />
                           </label>
                           <label className="block">
@@ -249,7 +342,13 @@ export default function MapPresetsPanel({ ctx }: Props) {
                             </div>
                           </label>
                           <label className="block">
-                            <div className="mb-1 text-[11px] font-semibold text-zinc-400">노력치</div>
+                            <div className="mb-1 text-[11px] font-semibold text-zinc-400">
+                              {editingPresetType === "troop"
+                                ? "훈련 시간 (일)"
+                                : editingPresetType === "carriage"
+                                  ? "영입 기한 (일)"
+                                  : "노력치"}
+                            </div>
                             <input
                               value={buildingDraft.effort}
                               onChange={(e) =>
@@ -259,24 +358,48 @@ export default function MapPresetsPanel({ ctx }: Props) {
                                 }))
                               }
                               className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-amber-200 outline-none focus:border-zinc-600"
-                              placeholder="예: 25"
-                            />
-                          </label>
-                          <label className="block">
-                            <div className="mb-1 text-[11px] font-semibold text-zinc-400">공간</div>
-                            <input
-                              value={buildingDraft.space}
-                              onChange={(e) =>
-                                setBuildingDraft((prev) => ({
-                                  ...prev,
-                                  space: e.target.value.replace(/[^\d]/g, ""),
-                                }))
+                              placeholder={
+                                editingPresetType === "troop" || editingPresetType === "carriage"
+                                  ? "예: 1"
+                                  : "예: 25"
                               }
-                              className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-sky-200 outline-none focus:border-zinc-600"
-                              placeholder="예: 2"
                             />
                           </label>
+                          {editingPresetType === "building" ? (
+                            <label className="block">
+                              <div className="mb-1 text-[11px] font-semibold text-zinc-400">공간</div>
+                              <input
+                                value={buildingDraft.space}
+                                onChange={(e) =>
+                                  setBuildingDraft((prev) => ({
+                                    ...prev,
+                                    space: e.target.value.replace(/[^\d]/g, ""),
+                                  }))
+                                }
+                                className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-sky-200 outline-none focus:border-zinc-600"
+                                placeholder="예: 2"
+                              />
+                            </label>
+                          ) : null}
                         </div>
+                        {editingPresetType === "troop" ? (
+                          <div className="grid gap-2 md:grid-cols-2">
+                            <label className="block">
+                              <div className="mb-1 text-[11px] font-semibold text-zinc-400">기본 위협도 감소</div>
+                              <input
+                                value={buildingDraft.troopThreatReduction ?? ""}
+                                onChange={(e) =>
+                                  setBuildingDraft((prev) => ({
+                                    ...prev,
+                                    troopThreatReduction: e.target.value.replace(/[^\d]/g, ""),
+                                  }))
+                                }
+                                className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-red-200 outline-none focus:border-zinc-600"
+                                placeholder="예: 1"
+                              />
+                            </label>
+                          </div>
+                        ) : null}
                         <div className="grid gap-2 md:grid-cols-2">
                           <label className="block">
                             <div className="mb-1 text-[11px] font-semibold text-zinc-400">티어</div>
@@ -306,7 +429,7 @@ export default function MapPresetsPanel({ ctx }: Props) {
                         </div>
                         <div className="grid gap-3 md:grid-cols-3">
                           <div className="rounded-lg border border-amber-800/60 bg-amber-950/20 p-2.5">
-                            <div className="mb-2 text-xs font-semibold text-zinc-300">건설 비용 블록</div>
+                            <div className="mb-2 text-xs font-semibold text-zinc-300">{buildCostBlockTitle}</div>
                             <div className="grid grid-cols-2 gap-1.5">
                               {BUILDING_PRESET_RESOURCE_IDS.map((id) => (
                                 <label key={`build-${id}`} className="block">
@@ -395,7 +518,7 @@ export default function MapPresetsPanel({ ctx }: Props) {
                             </div>
                           </div>
                           <div className="rounded-lg border border-emerald-800/60 bg-emerald-950/20 p-2.5">
-                            <div className="mb-2 text-xs font-semibold text-zinc-300">유지 자원 블록</div>
+                            <div className="mb-2 text-xs font-semibold text-zinc-300">{upkeepResourceBlockTitle}</div>
                             <div className="grid grid-cols-2 gap-1.5">
                               {BUILDING_PRESET_RESOURCE_IDS.map((id) => (
                                 <label key={`upkeep-res-${id}`} className="block">
@@ -484,7 +607,7 @@ export default function MapPresetsPanel({ ctx }: Props) {
                             </div>
                           </div>
                           <div className="rounded-lg border border-fuchsia-800/60 bg-fuchsia-950/20 p-2.5">
-                            <div className="mb-2 text-xs font-semibold text-zinc-300">유지 인구 블록</div>
+                            <div className="mb-2 text-xs font-semibold text-zinc-300">{upkeepPopulationBlockTitle}</div>
                             <div className="grid grid-cols-2 gap-1.5">
                               {UPKEEP_POPULATION_IDS.map((id) => (
                                 <label key={`upkeep-pop-${id}`} className="block">
@@ -502,7 +625,8 @@ export default function MapPresetsPanel({ ctx }: Props) {
                             </div>
                           </div>
                         </div>
-                        <div className="rounded-lg border border-zinc-800 bg-zinc-950/30 p-3">
+                        {editingPresetType === "building" ? (
+                          <div className="rounded-lg border border-zinc-800 bg-zinc-950/30 p-3">
                           <div className="mb-2 flex items-center justify-between">
                             <div className="text-xs font-semibold text-zinc-300">배치 조건 블록</div>
                             <button
@@ -537,6 +661,7 @@ export default function MapPresetsPanel({ ctx }: Props) {
                                     <option value="tileRegionCompare">지역 상태 비교</option>
                                     <option value="requireTagInRange">거리 내 속성 필요</option>
                                     <option value="requireBuildingInRange">거리 내 건물 필요</option>
+                                    <option value="requireTroopInRange">거리 내 병력 필요</option>
                                     <option value="custom">사용자 정의</option>
                                   </select>
                                   <div className="flex flex-wrap items-center gap-2">
@@ -898,6 +1023,109 @@ export default function MapPresetsPanel({ ctx }: Props) {
                                         </label>
                                       </>
                                     ) : null}
+                                    {rule.kind === "requireTroopInRange" ? (
+                                      <>
+                                        <div className="min-w-[220px] space-y-1">
+                                          <div className="rounded-md border border-zinc-800 bg-zinc-950/50 px-2 py-1 text-[11px] text-zinc-300">
+                                            선택:{" "}
+                                            {activeTroopPresets.find((p) => p.id === rule.presetId)?.name ??
+                                              "없음"}
+                                          </div>
+                                          <div className="relative">
+                                            <input
+                                              value={placementRuleSearch[`troop-${index}`] ?? ""}
+                                              onChange={(e) =>
+                                                setPlacementRuleSearch((prev) => ({
+                                                  ...prev,
+                                                  [`troop-${index}`]: e.target.value,
+                                                }))
+                                              }
+                                              className="h-8 min-w-[140px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
+                                              placeholder="병력 검색"
+                                            />
+                                            {(placementRuleSearch[`troop-${index}`] ?? "").trim() ? (
+                                              <div className="absolute left-0 right-0 top-[calc(100%+2px)] z-30 max-h-28 overflow-auto rounded-md border border-zinc-800 bg-zinc-950 p-1 shadow-xl">
+                                                {activeTroopPresets
+                                                  .filter((preset) =>
+                                                    preset.name.includes(
+                                                      (placementRuleSearch[`troop-${index}`] ?? "").trim()
+                                                    )
+                                                  )
+                                                  .slice(0, 12)
+                                                  .map((preset) => (
+                                                    <button
+                                                      key={`pick-troop-${index}-${preset.id}`}
+                                                      type="button"
+                                                      className="mb-1 block w-full rounded border border-zinc-800 bg-zinc-900/70 px-2 py-1 text-left text-[11px] text-zinc-200 hover:border-zinc-600"
+                                                      onClick={() => {
+                                                        setDraftPlacementRules((prev) =>
+                                                          prev.map((item, i) =>
+                                                            i === index &&
+                                                            item.kind === "requireTroopInRange"
+                                                              ? {
+                                                                  ...item,
+                                                                  presetId: preset.id,
+                                                                }
+                                                              : item
+                                                          )
+                                                        );
+                                                        setPlacementRuleSearch((prev) => ({
+                                                          ...prev,
+                                                          [`troop-${index}`]: "",
+                                                        }));
+                                                      }}
+                                                    >
+                                                      {preset.name}
+                                                    </button>
+                                                  ))}
+                                              </div>
+                                            ) : null}
+                                          </div>
+                                        </div>
+                                        <span className="text-xs text-zinc-400">거리</span>
+                                        <input
+                                          value={String(rule.distance ?? 1)}
+                                          onChange={(e) =>
+                                            setDraftPlacementRules((prev) =>
+                                              prev.map((item, i) =>
+                                                i === index && item.kind === "requireTroopInRange"
+                                                  ? {
+                                                      ...item,
+                                                      distance: Math.max(
+                                                        0,
+                                                        Math.trunc(
+                                                          Number(
+                                                            e.target.value.replace(/[^\d]/g, "")
+                                                          ) || 0
+                                                        )
+                                                      ),
+                                                    }
+                                                  : item
+                                              )
+                                            )
+                                          }
+                                          className="h-8 w-20 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
+                                          placeholder="0"
+                                        />
+                                        <label className="inline-flex items-center gap-2 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-200">
+                                          <input
+                                            type="checkbox"
+                                            checked={!!rule.negate}
+                                            onChange={(e) =>
+                                              setDraftPlacementRules((prev) =>
+                                                prev.map((item, i) =>
+                                                  i === index &&
+                                                  item.kind === "requireTroopInRange"
+                                                    ? { ...item, negate: e.target.checked }
+                                                    : item
+                                                )
+                                              )
+                                            }
+                                          />
+                                          부정
+                                        </label>
+                                      </>
+                                    ) : null}
                                     {rule.kind === "custom" ? (
                                       <input
                                         value={rule.label ?? ""}
@@ -927,11 +1155,14 @@ export default function MapPresetsPanel({ ctx }: Props) {
                               ))
                             )}
                           </div>
-                        </div>
-                        {(
+                          </div>
+                        ) : null}
+                        {editingPresetType === "building"
+                          ? (
                           [
                             ["onBuild", "건설 시 규칙"],
                             ["daily", "일일 규칙"],
+                            ["sustain", "지속 효과"],
                             ["onRemove", "철거 시 규칙"],
                           ] as const
                         ).map(([field, title]) => (
@@ -1022,6 +1253,9 @@ export default function MapPresetsPanel({ ctx }: Props) {
                                               </option>
                                               <option value="requireBuildingInRange">
                                                 거리 내 건물 필요
+                                              </option>
+                                              <option value="requireTroopInRange">
+                                                거리 내 병력 필요
                                               </option>
                                               <option value="custom">사용자 정의</option>
                                             </select>
@@ -1509,6 +1743,131 @@ export default function MapPresetsPanel({ ctx }: Props) {
                                               </label>
                                             </>
                                           ) : null}
+                                          {placementWhen.kind === "requireTroopInRange" ? (
+                                            <>
+                                              <div className="min-w-[220px] space-y-1">
+                                                <div className="rounded-md border border-zinc-800 bg-zinc-950/50 px-2 py-1 text-[11px] text-zinc-300">
+                                                  선택:{" "}
+                                                  {activeTroopPresets.find(
+                                                    (p) => p.id === placementWhen.presetId
+                                                  )?.name ?? "없음"}
+                                                </div>
+                                                <div className="relative">
+                                                  <input
+                                                    value={
+                                                      placementRuleSearch[
+                                                        `when-troop-${field}-${ruleIndex}`
+                                                      ] ?? ""
+                                                    }
+                                                    onChange={(e) =>
+                                                      setPlacementRuleSearch((prev) => ({
+                                                        ...prev,
+                                                        [`when-troop-${field}-${ruleIndex}`]:
+                                                          e.target.value,
+                                                      }))
+                                                    }
+                                                    className="h-8 min-w-[140px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
+                                                    placeholder="병력 검색"
+                                                  />
+                                                  {(
+                                                    placementRuleSearch[
+                                                      `when-troop-${field}-${ruleIndex}`
+                                                    ] ?? ""
+                                                  ).trim() ? (
+                                                    <div className="absolute left-0 right-0 top-[calc(100%+2px)] z-30 max-h-28 overflow-auto rounded-md border border-zinc-800 bg-zinc-950 p-1 shadow-xl">
+                                                      {activeTroopPresets
+                                                        .filter((preset) =>
+                                                          preset.name.includes(
+                                                            (
+                                                              placementRuleSearch[
+                                                                `when-troop-${field}-${ruleIndex}`
+                                                              ] ?? ""
+                                                            ).trim()
+                                                          )
+                                                        )
+                                                        .slice(0, 12)
+                                                        .map((preset) => (
+                                                          <button
+                                                            key={`pick-when-troop-${field}-${rule.id}-${ruleIndex}-${preset.id}`}
+                                                            type="button"
+                                                            className="mb-1 block w-full rounded border border-zinc-800 bg-zinc-900/70 px-2 py-1 text-left text-[11px] text-zinc-200 hover:border-zinc-600"
+                                                            onClick={() => {
+                                                              setEffectRuleAt(field, ruleIndex, {
+                                                                ...rule,
+                                                                when: {
+                                                                  ...placementWhen,
+                                                                  presetId: preset.id,
+                                                                },
+                                                              });
+                                                              setPlacementRuleSearch((prev) => ({
+                                                                ...prev,
+                                                                [`when-troop-${field}-${ruleIndex}`]: "",
+                                                              }));
+                                                            }}
+                                                          >
+                                                            {preset.name}
+                                                          </button>
+                                                        ))}
+                                                    </div>
+                                                  ) : null}
+                                                </div>
+                                              </div>
+                                              <span className="text-xs text-zinc-400">거리</span>
+                                              <input
+                                                value={String(placementWhen.distance ?? 1)}
+                                                onChange={(e) =>
+                                                  setEffectRuleAt(field, ruleIndex, {
+                                                    ...rule,
+                                                    when: {
+                                                      ...placementWhen,
+                                                      distance: Math.max(
+                                                        0,
+                                                        Math.trunc(
+                                                          Number(
+                                                            e.target.value.replace(/[^\d]/g, "")
+                                                          ) || 0
+                                                        )
+                                                      ),
+                                                    },
+                                                  })
+                                                }
+                                                className="h-8 w-20 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
+                                                placeholder="0"
+                                              />
+                                              <label className="inline-flex items-center gap-2 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-200">
+                                                <input
+                                                  type="checkbox"
+                                                  checked={!!placementWhen.negate}
+                                                  onChange={(e) =>
+                                                    setEffectRuleAt(field, ruleIndex, {
+                                                      ...rule,
+                                                      when: {
+                                                        ...placementWhen,
+                                                        negate: e.target.checked,
+                                                      },
+                                                    })
+                                                  }
+                                                />
+                                                부정
+                                              </label>
+                                              <label className="inline-flex items-center gap-2 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-200">
+                                                <input
+                                                  type="checkbox"
+                                                  checked={!!placementWhen.repeat}
+                                                  onChange={(e) =>
+                                                    setEffectRuleAt(field, ruleIndex, {
+                                                      ...rule,
+                                                      when: {
+                                                        ...placementWhen,
+                                                        repeat: e.target.checked,
+                                                      },
+                                                    })
+                                                  }
+                                                />
+                                                반복
+                                              </label>
+                                            </>
+                                          ) : null}
                                           {placementWhen.kind === "custom" ? (
                                             <input
                                               value={placementWhen.label ?? ""}
@@ -1865,6 +2224,10 @@ export default function MapPresetsPanel({ ctx }: Props) {
                                                               )
                                                             )
                                                           : undefined,
+                                                      excludeSelf:
+                                                        target === "range"
+                                                          ? !!(action as any).excludeSelf
+                                                          : false,
                                                     });
                                                   }}
                                                   className="h-8 min-w-[120px] rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
@@ -1897,6 +2260,19 @@ export default function MapPresetsPanel({ ctx }: Props) {
                                                     className="h-8 w-20 rounded-md border border-zinc-700 bg-zinc-950 px-2 text-xs text-zinc-100"
                                                     placeholder="0"
                                                   />
+                                                  <label className="inline-flex items-center gap-2 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-200">
+                                                    <input
+                                                      type="checkbox"
+                                                      checked={!!(action as any).excludeSelf}
+                                                      onChange={(e) =>
+                                                        setEffectActionAt(field, ruleIndex, actionIndex, {
+                                                          ...action,
+                                                          excludeSelf: e.target.checked,
+                                                        })
+                                                      }
+                                                    />
+                                                    본인 타일 제외
+                                                  </label>
                                                 </>
                                               ) : null}
                                             </div>
@@ -1978,7 +2354,8 @@ export default function MapPresetsPanel({ ctx }: Props) {
                               )}
                             </div>
                           </div>
-                        ))}
+                        ))
+                          : null}
                         <div className="flex flex-wrap items-center justify-end gap-2">
                           <button
                             type="button"
@@ -1994,7 +2371,9 @@ export default function MapPresetsPanel({ ctx }: Props) {
                             onClick={handleSaveBuildingPreset}
                             disabled={busy}
                           >
-                            {buildingDraft.id ? "건물 프리셋 수정" : "건물 프리셋 추가"}
+                            {buildingDraft.id
+                              ? `${presetEntityLabel} 프리셋 수정`
+                              : `${presetEntityLabel} 프리셋 추가`}
                           </button>
                         </div>
                       </div>
@@ -2004,12 +2383,12 @@ export default function MapPresetsPanel({ ctx }: Props) {
                       </div>
                     )}
                     <div className="space-y-2">
-                      {activeBuildingPresets.length === 0 ? (
+                      {activePresetRows.length === 0 ? (
                         <div className="rounded-lg border border-dashed border-zinc-800 px-3 py-4 text-sm text-zinc-500">
-                          등록된 건물 프리셋이 없습니다.
+                          등록된 {presetEntityLabel} 프리셋이 없습니다.
                         </div>
                       ) : (
-                        activeBuildingPresets.map((preset) => {
+                        activePresetRows.map((preset) => {
                           const color = normalizeHexColor(preset.color, "#eab308");
                           return (
                             <div
@@ -2023,9 +2402,24 @@ export default function MapPresetsPanel({ ctx }: Props) {
                                   </div>
                                   <div className="mt-0.5 text-[11px] text-zinc-500">
                                     {preset.tier ? `${preset.tier} · ` : ""}
-                                    노력치 {preset.effort ?? 0} · 공간 {preset.space ?? 0}
-                                    {" · "}조건 {preset.placementRules?.length ?? 0}
-                                    {" · "}일일 규칙 {preset.effects?.daily?.length ?? 0}
+                                    {(preset.presetType ?? "building") === "troop" ? (
+                                      <>
+                                        훈련 시간 {preset.effort ?? 1}일 · 기본 위협도 감소{" "}
+                                        {readAutoTroopThreatReduction(preset.effects?.daily)}
+                                      </>
+                                    ) : (preset.presetType ?? "building") === "carriage" ? (
+                                      <>
+                                        영입 비용 {Object.keys(preset.buildCost ?? {}).length}
+                                        {" · "}영입 인구 {Object.keys(preset.upkeep?.population ?? {}).length}
+                                        {" · "}획득 자원 {Object.keys(preset.upkeep?.resources ?? {}).length}
+                                      </>
+                                    ) : (
+                                      <>
+                                        노력치 {preset.effort ?? 0} · 공간 {preset.space ?? 0}
+                                        {" · "}조건 {preset.placementRules?.length ?? 0}
+                                        {" · "}일일 규칙 {preset.effects?.daily?.length ?? 0}
+                                      </>
+                                    )}
                                   </div>
                                 </div>
                                 <div className="flex items-center gap-2">

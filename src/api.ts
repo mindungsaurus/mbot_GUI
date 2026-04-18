@@ -644,6 +644,7 @@ export async function createSharedWorldMapBuildingPreset(body: {
   effects?: {
     onBuild?: Array<Record<string, unknown>>;
     daily?: Array<Record<string, unknown>>;
+    sustain?: Array<Record<string, unknown>>;
     onRemove?: Array<Record<string, unknown>>;
   } | null;
 }) {
@@ -675,6 +676,7 @@ export async function updateSharedWorldMapBuildingPreset(
     effects?: {
       onBuild?: Array<Record<string, unknown>>;
       daily?: Array<Record<string, unknown>>;
+      sustain?: Array<Record<string, unknown>>;
       onRemove?: Array<Record<string, unknown>>;
     } | null;
   }
@@ -716,6 +718,7 @@ export async function createWorldMapBuildingPreset(
     effects?: {
       onBuild?: Array<Record<string, unknown>>;
       daily?: Array<Record<string, unknown>>;
+      sustain?: Array<Record<string, unknown>>;
       onRemove?: Array<Record<string, unknown>>;
     } | null;
   },
@@ -749,6 +752,7 @@ export async function updateWorldMapBuildingPreset(
     effects?: {
       onBuild?: Array<Record<string, unknown>>;
       daily?: Array<Record<string, unknown>>;
+      sustain?: Array<Record<string, unknown>>;
       onRemove?: Array<Record<string, unknown>>;
     } | null;
   },

@@ -5,6 +5,7 @@ import { formatWithCommas } from "../utils";
 
 type Props = {
   open: boolean;
+  readOnly?: boolean;
   busy: boolean;
   warehouseEntries: Array<{ name: string; amount: number }>;
   itemCatalogEntries: ItemCatalogEntry[];
@@ -23,6 +24,7 @@ const toPositiveInt = (raw: string, fallback = 1) => {
 
 export default function WarehouseModal({
   open,
+  readOnly = false,
   busy,
   warehouseEntries,
   itemCatalogEntries,
@@ -197,7 +199,7 @@ export default function WarehouseModal({
 
   if (!open) return null;
 
-  const disabled = busy || actionBusy;
+  const disabled = busy || actionBusy || readOnly;
 
   return (
     <div className="fixed inset-0 z-[95] bg-black/55 p-4">
@@ -238,6 +240,7 @@ export default function WarehouseModal({
                           await onDeleteWarehouseItem(entry.name);
                         })
                       }
+                      style={{ visibility: readOnly ? "hidden" : "visible" }}
                     >
                       삭제
                     </button>
@@ -247,7 +250,8 @@ export default function WarehouseModal({
             </div>
           </section>
 
-          <div className="space-y-4">
+          {!readOnly ? (
+            <div className="space-y-4">
             <section className="rounded-lg border border-zinc-800 bg-zinc-900/30 p-3">
               <div className="mb-2 text-xs font-semibold text-zinc-300">아이템 추가</div>
               <div className="space-y-2">
@@ -623,7 +627,12 @@ export default function WarehouseModal({
                 </div>
               </div>
             </section>
-          </div>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/30 p-3 text-xs text-zinc-400">
+              읽기 전용 모드에서는 창고 아이템 조회만 가능합니다.
+            </div>
+          )}
         </div>
 
         {localErr ? (

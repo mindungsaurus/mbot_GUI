@@ -71,3 +71,10 @@ export default defineConfig([
   },
 ])
 ```
+
+## World Map Handoff Docs
+
+- Context map: `docs/WORLD_MAP_CONTEXT.md`
+- Progress snapshot: `docs/WORLD_MAP_PROGRESS.md`
+
+월드맵 관련 작업은 위 두 파일을 기준으로 재개/인수인계합니다.

@@ -15,6 +15,7 @@ import {
   TRACKED_POPULATION_IDS,
   UNCAPPED_RESOURCE_IDS,
   formatWithCommas,
+  getTileDisplayNumber,
   tileKey,
 } from "../utils";
 
@@ -203,7 +204,9 @@ export default function WorldMapSettingsPanel({
 
           <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-400">
             선택 타일:
-            {selectedHex ? `col ${selectedHex.col}, row ${selectedHex.row}` : "없음"}
+            {selectedHex
+              ? `#${getTileDisplayNumber(selectedMap.cols, selectedHex.col, selectedHex.row)}`
+              : "없음"}
             {selectedHex ? (
               <div className="mt-1 flex flex-wrap gap-1">
                 {(activeTileStates[tileKey(selectedHex.col, selectedHex.row)] ?? []).length === 0 ? (
