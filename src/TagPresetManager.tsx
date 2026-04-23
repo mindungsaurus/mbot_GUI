@@ -148,6 +148,7 @@ export default function TagPresetManager(props: {
   const [kind, setKind] = useState<TagPresetKind>("toggle");
   const [decStart, setDecStart] = useState(false);
   const [decEnd, setDecEnd] = useState(false);
+  const [decByCaster, setDecByCaster] = useState(false);
   const [colorCode, setColorCode] = useState("");
   const [presetFolderId, setPresetFolderId] = useState<string | null>(null);
 
@@ -201,6 +202,7 @@ export default function TagPresetManager(props: {
       setKind("toggle");
       setDecStart(false);
       setDecEnd(false);
+      setDecByCaster(false);
       setColorCode("");
       setPresetFolderId(null);
       return;
@@ -210,6 +212,7 @@ export default function TagPresetManager(props: {
     setKind(selectedPreset.kind ?? "toggle");
     setDecStart(!!selectedPreset.decOnTurnStart);
     setDecEnd(!!selectedPreset.decOnTurnEnd);
+    setDecByCaster(!!selectedPreset.decByCaster);
     setColorCode(
       typeof selectedPreset.colorCode === "number"
         ? String(selectedPreset.colorCode)
@@ -507,6 +510,7 @@ export default function TagPresetManager(props: {
         kind,
         decOnTurnStart: kind === "stack" ? decStart : false,
         decOnTurnEnd: kind === "stack" ? decEnd : false,
+        decByCaster: kind === "stack" ? decByCaster : false,
         colorCode: colorCode.trim() ? normalizeCount(colorCode, 0) : null,
         folderId: nextFolderId,
         order: nextOrder,
@@ -892,6 +896,14 @@ export default function TagPresetManager(props: {
                           onChange={(e) => setDecEnd(e.target.checked)}
                         />
                         턴 종료 시 감소
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={decByCaster}
+                          onChange={(e) => setDecByCaster(e.target.checked)}
+                        />
+                        시전자 기준
                       </label>
                     </div>
                   </div>

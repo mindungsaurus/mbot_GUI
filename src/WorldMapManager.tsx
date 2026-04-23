@@ -2,6 +2,7 @@
 import {
   createWorldMapBuildingInstance,
   createSharedWorldMapBuildingPreset,
+  createSharedWorldMapPresetFolder,
   createSharedWorldMapTilePreset,
   createWorldMap,
   addInventoryItem,
@@ -9,11 +10,13 @@ import {
   deleteWorldMapBuildingInstance,
   deleteWorldMapBuildingPreset,
   deleteSharedWorldMapBuildingPreset,
+  deleteSharedWorldMapPresetFolder,
   deleteSharedWorldMapTilePreset,
   deleteWorldMap,
   listWorldMapBuildingInstances,
   listWorldMapBuildingPresets,
   listSharedWorldMapBuildingPresets,
+  listSharedWorldMapPresetFolders,
   listSharedWorldMapTilePresets,
   listWorldMaps,
   runWorldMapDaily,
@@ -23,6 +26,8 @@ import {
   updateWorldMapBuildingInstance,
   updateWorldMapBuildingPreset,
   updateSharedWorldMapBuildingPreset,
+  updateSharedWorldMapPresetFolder,
+  updateSharedWorldMapTilePreset,
   updateWorldMap,
   uploadWorldMapImage,
 } from "./api";
@@ -45,6 +50,8 @@ import type {
   UpkeepPopulationId,
   WorldMapBuildingInstanceRow,
   WorldMapBuildingPresetRow,
+  WorldMapPresetFolder,
+  WorldMapPresetFolderKind,
   WorldMap,
 } from "./types";
 
@@ -457,6 +464,39 @@ const mergeSharedAndLocalBuildingPresets = (
   return Array.from(merged.values());
 };
 
+const normalizePresetFolderKind = (value: unknown): WorldMapPresetFolderKind => {
+  const kind = String(value ?? "").trim().toLowerCase();
+  return kind === "tile" || kind === "building" || kind === "troop" || kind === "carriage"
+    ? kind
+    : "building";
+};
+
+const normalizePresetFolders = (raw: unknown): WorldMapPresetFolder[] => {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: WorldMapPresetFolder[] = [];
+  for (const entry of raw) {
+    const cast = entry as Partial<WorldMapPresetFolder> | null | undefined;
+    const id = String(cast?.id ?? "").trim();
+    const name = String(cast?.name ?? "").trim();
+    if (!id || !name || seen.has(id)) continue;
+    seen.add(id);
+    const orderNum = Math.trunc(Number(cast?.order));
+    out.push({
+      id,
+      kind: normalizePresetFolderKind(cast?.kind),
+      name,
+      order: Number.isFinite(orderNum) ? orderNum : 0,
+      parentId: String(cast?.parentId ?? "").trim() || null,
+      createdAt: cast?.createdAt ? String(cast.createdAt) : undefined,
+      updatedAt: cast?.updatedAt ? String(cast.updatedAt) : undefined,
+    });
+  }
+  return out.sort(
+    (a, b) => a.order - b.order || a.name.localeCompare(b.name, "ko") || a.id.localeCompare(b.id)
+  );
+};
+
 export default function WorldMapManager({ authUser, mode = "map", onBack }: Props) {
   const isAdmin = !!authUser.isAdmin;
   const isReadOnly = !isAdmin;
@@ -504,6 +544,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   );
   const [tilePresetsByMap, setTilePresetsByMap] = useState<TilePresetsByMap>({});
   const [sharedTilePresets, setSharedTilePresets] = useState<MapTileStatePreset[]>([]);
+  const [presetFolders, setPresetFolders] = useState<WorldMapPresetFolder[]>([]);
   const [tileStatesByMap, setTileStatesByMap] = useState<TileStatesByMap>({});
   const [tileRegionStatesByMap, setTileRegionStatesByMap] = useState<TileRegionStatesByMap>({});
   const [tileMemosByMap, setTileMemosByMap] = useState<TileMemosByMap>({});
@@ -514,6 +555,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   const [presetDraftName, setPresetDraftName] = useState("");
   const [presetDraftColorHex, setPresetDraftColorHex] = useState("#e5e7eb");
   const [presetDraftHasValue, setPresetDraftHasValue] = useState(false);
+  const [presetDraftFolderId, setPresetDraftFolderId] = useState<string | null>(null);
   const [buildingDraft, setBuildingDraft] = useState<BuildingDraftState>(
     createDefaultBuildingDraftState
   );
@@ -639,10 +681,11 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     setBusy(true);
     setErr(null);
     try {
-      const [res, sharedTileRows, sharedBuildingRows] = await Promise.all([
+      const [res, sharedTileRows, sharedBuildingRows, presetFolderRows] = await Promise.all([
         listWorldMaps(),
         listSharedWorldMapTilePresets().catch(() => []),
         listSharedWorldMapBuildingPresets().catch(() => []),
+        listSharedWorldMapPresetFolders().catch(() => []),
       ]);
       const items = Array.isArray(res) ? res : [];
       const hydratedItems = items.map((entry) => mergeMapWithRecoveredTroops(entry, null));
@@ -651,6 +694,7 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       );
       setMaps(hydratedItems);
       setSharedTilePresets(normalizeTilePresets(Array.isArray(sharedTileRows) ? sharedTileRows : []));
+      setPresetFolders(normalizePresetFolders(presetFolderRows));
       setTilePresetsByMap(() => {
         const next: TilePresetsByMap = {};
         for (const entry of hydratedItems) {
@@ -2880,11 +2924,13 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
         name,
         color,
         hasValue,
+        folderId: presetDraftFolderId,
       });
       const latestShared = await listSharedWorldMapTilePresets();
       setSharedTilePresets(normalizeTilePresets(latestShared));
       setPresetDraftName("");
       setPresetDraftHasValue(false);
+      setPresetDraftFolderId(null);
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     } finally {
@@ -2939,6 +2985,31 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       if (selectedMap) {
         await refreshCurrentMapOnly(selectedMap.id);
       }
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleAssignTilePresetFolder = async (presetId: string, folderId: string | null) => {
+    if (!isAdmin) {
+      setErr("관리자만 타일 속성 프리셋 폴더를 변경할 수 있습니다.");
+      return;
+    }
+    const target = sharedTilePresets.find((entry) => entry.id === presetId);
+    if (!target) {
+      setErr("공용 타일 프리셋만 폴더로 관리할 수 있습니다.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const updated = await updateSharedWorldMapTilePreset(presetId, { folderId });
+      const normalized = normalizeTilePresets(
+        sharedTilePresets.map((entry) => (entry.id === presetId ? updated : entry))
+      );
+      setSharedTilePresets(normalized);
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     } finally {
@@ -3381,6 +3452,8 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
     const payload = {
       name,
       color: normalizeHexColor(buildingDraft.color, "#eab308"),
+      folderId: buildingDraft.folderId,
+      folderKind: presetType,
       tier: buildingDraft.tier.trim() || undefined,
       effort,
       space,
@@ -3508,6 +3581,106 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
       }
       await loadMaps(selectedMap.id);
       if (buildingDraft.id === presetId) resetBuildingDraft();
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCreatePresetFolder = async (
+    kind: WorldMapPresetFolderKind,
+    name: string,
+    parentId?: string | null
+  ) => {
+    if (!isAdmin) {
+      setErr("관리자만 프리셋 폴더를 관리할 수 있습니다.");
+      return;
+    }
+    const trimmed = String(name ?? "").trim();
+    if (!trimmed) {
+      setErr("폴더 이름을 입력해 주세요.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await createSharedWorldMapPresetFolder({
+        kind,
+        name: trimmed,
+        order: presetFolders.filter((entry) => entry.kind === kind).length,
+        parentId: parentId ?? null,
+      });
+      await loadMaps(selectedMap?.id);
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRenamePresetFolder = async (folderId: string, name: string) => {
+    if (!isAdmin) {
+      setErr("관리자만 프리셋 폴더를 관리할 수 있습니다.");
+      return;
+    }
+    const trimmed = String(name ?? "").trim();
+    if (!trimmed) {
+      setErr("폴더 이름을 입력해 주세요.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const updated = await updateSharedWorldMapPresetFolder(folderId, { name: trimmed });
+      setPresetFolders((prev) =>
+        normalizePresetFolders(prev.map((entry) => (entry.id === folderId ? { ...entry, ...updated } : entry)))
+      );
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleMovePresetFolder = async (folderId: string, parentId: string | null) => {
+    if (!isAdmin) {
+      setErr("관리자만 프리셋 폴더를 관리할 수 있습니다.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const updated = await updateSharedWorldMapPresetFolder(folderId, { parentId });
+      setPresetFolders((prev) =>
+        normalizePresetFolders(prev.map((entry) => (entry.id === folderId ? { ...entry, ...updated } : entry)))
+      );
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDeletePresetFolder = async (folderId: string) => {
+    if (!isAdmin) {
+      setErr("관리자만 프리셋 폴더를 관리할 수 있습니다.");
+      return;
+    }
+    const target = presetFolders.find((entry) => entry.id === folderId);
+    if (!target) return;
+    const ok = window.confirm(`폴더를 삭제합니다: ${target.name}`);
+    if (!ok) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await deleteSharedWorldMapPresetFolder(folderId);
+      await loadMaps(selectedMap?.id);
+      setPresetDraftFolderId((prev) => (prev === folderId ? null : prev));
+      setBuildingDraft((prev) => ({
+        ...prev,
+        folderId: prev.folderId === folderId ? null : prev.folderId,
+      }));
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     } finally {
@@ -5132,9 +5305,11 @@ export default function WorldMapManager({ authUser, mode = "map", onBack }: Prop
   }, [viewMode]);
 
   const presetPanelCtx = {
-    presetMode, setPresetMode, isAdmin, busy, activeTilePresets, presetDraftName, setPresetDraftName,
+    presetMode, setPresetMode, isAdmin, busy, presetFolders, sharedTilePresets, activeTilePresets, presetDraftName, setPresetDraftName,
     presetDraftColorHex, setPresetDraftColorHex, presetDraftHasValue, setPresetDraftHasValue,
-    handleCreateTilePreset, handleDeleteTilePreset, activeBuildingPresets, activeStructurePresets, activeTroopPresets, activeCarriagePresets, buildingDraft, setBuildingDraft,
+    presetDraftFolderId, setPresetDraftFolderId, handleCreatePresetFolder, handleRenamePresetFolder,
+    handleMovePresetFolder, handleDeletePresetFolder, handleCreateTilePreset, handleDeleteTilePreset, handleAssignTilePresetFolder,
+    activeBuildingPresets, activeStructurePresets, activeTroopPresets, activeCarriagePresets, buildingDraft, setBuildingDraft,
     placementRuleSearch, setPlacementRuleSearch, handleSaveBuildingPreset, handleDeleteBuildingPreset,
     handleSelectBuildingPreset, resetBuildingDraft, setDraftPlacementRules, handleAddPlacementRule,
     handleRemovePlacementRule, handleAddExecutionRule, setEffectRuleAt, removeEffectRule, addEffectAction,

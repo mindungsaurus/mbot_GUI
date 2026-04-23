@@ -1,5 +1,5 @@
 ﻿// @ts-nocheck
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { BuildingPlacementRule, BuildingResourceId, ItemCatalogEntry, ResourceId } from "../../types";
 import {
   ALL_RESOURCE_IDS,
@@ -21,9 +21,10 @@ type Props = { ctx: any };
 
 export default function MapPresetsPanel({ ctx }: Props) {
   const {
-    presetMode, setPresetMode, isAdmin, busy,
+    presetMode, setPresetMode, isAdmin, busy, presetFolders, sharedTilePresets,
     activeTilePresets, presetDraftName, setPresetDraftName, presetDraftColorHex, setPresetDraftColorHex, presetDraftHasValue, setPresetDraftHasValue,
-    handleCreateTilePreset, handleDeleteTilePreset,
+    presetDraftFolderId, setPresetDraftFolderId, handleCreatePresetFolder, handleRenamePresetFolder, handleMovePresetFolder, handleDeletePresetFolder,
+    handleCreateTilePreset, handleDeleteTilePreset, handleAssignTilePresetFolder,
     activeBuildingPresets, activeStructurePresets, activeTroopPresets, activeCarriagePresets, buildingDraft, setBuildingDraft, placementRuleSearch, setPlacementRuleSearch,
     handleSaveBuildingPreset, handleDeleteBuildingPreset, handleSelectBuildingPreset, resetBuildingDraft,
     setDraftPlacementRules, handleAddPlacementRule, handleRemovePlacementRule,
@@ -35,6 +36,9 @@ export default function MapPresetsPanel({ ctx }: Props) {
 
   const [buildCostItemQuery, setBuildCostItemQuery] = useState("");
   const [upkeepItemQuery, setUpkeepItemQuery] = useState("");
+  const [folderDraftName, setFolderDraftName] = useState("");
+  const [folderDraftParentId, setFolderDraftParentId] = useState<string | null>(null);
+  const [folderManagerOpen, setFolderManagerOpen] = useState(false);
 
   const itemNames = useMemo(
     () =>
@@ -94,6 +98,47 @@ export default function MapPresetsPanel({ ctx }: Props) {
     | "building"
     | "troop"
     | "carriage";
+  const activeFolderKind =
+    presetMode === "tile"
+      ? "tile"
+      : presetMode === "troop"
+        ? "troop"
+        : presetMode === "carriage"
+          ? "carriage"
+          : "building";
+  const activeFolders = useMemo(
+    () =>
+      (Array.isArray(presetFolders) ? presetFolders : []).filter((folder: any) => folder?.kind === activeFolderKind),
+    [activeFolderKind, presetFolders]
+  );
+  const folderById = useMemo(() => {
+    const out = new Map<string, any>();
+    for (const folder of activeFolders) out.set(String(folder.id), folder);
+    return out;
+  }, [activeFolders]);
+  const childFoldersByParent = useMemo(() => {
+    const out = new Map<string | null, any[]>();
+    for (const folder of activeFolders) {
+      const parentIdRaw = String(folder?.parentId ?? "").trim();
+      const parentId = parentIdRaw && folderById.has(parentIdRaw) ? parentIdRaw : null;
+      const bucket = out.get(parentId) ?? [];
+      bucket.push({ ...folder, parentId });
+      out.set(parentId, bucket);
+    }
+    for (const [key, rows] of out.entries()) {
+      out.set(
+        key,
+        rows.sort(
+          (a, b) => Number(a.order ?? 0) - Number(b.order ?? 0) || String(a.name ?? "").localeCompare(String(b.name ?? ""), "ko")
+        )
+      );
+    }
+    return out;
+  }, [activeFolders, folderById]);
+  const sharedTilePresetIds = useMemo(
+    () => new Set((Array.isArray(sharedTilePresets) ? sharedTilePresets : []).map((preset: any) => String(preset?.id ?? ""))),
+    [sharedTilePresets]
+  );
   const activePresetRows =
     presetMode === "troop"
       ? activeTroopPresets
@@ -118,6 +163,375 @@ export default function MapPresetsPanel({ ctx }: Props) {
     editingPresetType === "carriage" ? "획득 자원 블록" : "유지 자원 블록";
   const upkeepPopulationBlockTitle =
     editingPresetType === "carriage" ? "영입 인구 블록" : "유지 인구 블록";
+  const getFolderDescendantIds = (folderId: string) => {
+    const seen = new Set<string>();
+    const visit = (parentId: string) => {
+      for (const child of childFoldersByParent.get(parentId) ?? []) {
+        const id = String(child.id ?? "");
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        visit(id);
+      }
+    };
+    visit(folderId);
+    return seen;
+  };
+  const buildFolderOptions = (excludedFolderId?: string | null) => {
+    const excluded = excludedFolderId ? getFolderDescendantIds(excludedFolderId) : new Set<string>();
+    if (excludedFolderId) excluded.add(excludedFolderId);
+    const out: Array<{ id: string; label: string }> = [];
+    const walk = (parentId: string | null, depth: number) => {
+      for (const folder of childFoldersByParent.get(parentId) ?? []) {
+        const id = String(folder.id ?? "");
+        if (!id || excluded.has(id)) continue;
+        out.push({
+          id,
+          label: `${"\u00A0\u00A0".repeat(depth)}${depth > 0 ? "└ " : ""}${String(folder.name ?? "이름 없는 폴더")}`,
+        });
+        walk(id, depth + 1);
+      }
+    };
+    walk(null, 0);
+    return out;
+  };
+  const folderSelectOptions = useMemo(() => buildFolderOptions(null), [childFoldersByParent]);
+  const buildFolderTree = (presets: any[]) => {
+    const byFolder = new Map<string, any[]>();
+    for (const folder of activeFolders) byFolder.set(String(folder.id), []);
+    const unassigned: any[] = [];
+    for (const preset of Array.isArray(presets) ? presets : []) {
+      const folderId = String(preset?.folderId ?? "").trim();
+      if (folderId && byFolder.has(folderId)) byFolder.get(folderId)?.push(preset);
+      else unassigned.push(preset);
+    }
+    const walk = (parentId: string | null, depth: number) =>
+      (childFoldersByParent.get(parentId) ?? []).map((folder: any) => {
+        const id = String(folder.id ?? "");
+        const children = walk(id, depth + 1);
+        const directPresets = byFolder.get(id) ?? [];
+        const totalPresetCount =
+          directPresets.length + children.reduce((sum: number, child: any) => sum + Number(child.totalPresetCount ?? 0), 0);
+        return {
+          id,
+          depth,
+          folder,
+          presets: directPresets,
+          children,
+          totalPresetCount,
+        };
+      });
+    return {
+      unassigned,
+      roots: walk(null, 0),
+    };
+  };
+  const tilePresetTree = useMemo(() => buildFolderTree(activeTilePresets), [activeTilePresets, activeFolders, childFoldersByParent]);
+  const buildingPresetTree = useMemo(
+    () => buildFolderTree(activePresetRows),
+    [activePresetRows, activeFolders, childFoldersByParent]
+  );
+  const activeRenderedTree = presetMode === "tile" ? tilePresetTree : buildingPresetTree;
+  useEffect(() => {
+    if (folderDraftParentId && !folderById.has(folderDraftParentId)) {
+      setFolderDraftParentId(null);
+    }
+  }, [folderById, folderDraftParentId]);
+  const handleCreateFolderClick = () => {
+    const name = String(folderDraftName ?? "").trim();
+    if (!name) return;
+    void handleCreatePresetFolder(activeFolderKind, name, folderDraftParentId);
+    setFolderDraftName("");
+    setFolderDraftParentId(null);
+  };
+  const renderFolderManagerRow = (folder: any, depth: number) => {
+    const id = String(folder.id ?? "");
+    const count = activeRenderedTree.roots
+      .flatMap((node: any) => {
+        const stack = [node];
+        const out: any[] = [];
+        while (stack.length > 0) {
+          const current = stack.pop();
+          if (!current) continue;
+          out.push(current);
+          for (const child of current.children ?? []) stack.push(child);
+        }
+        return out;
+      })
+      .find((node: any) => node.id === id)?.totalPresetCount ?? 0;
+    const parentOptions = buildFolderOptions(id);
+    return (
+      <div key={id} className="space-y-2">
+        <div
+          className="flex flex-col gap-3 rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2"
+          style={{ marginLeft: depth * 16 }}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-zinc-100">{folder.name}</div>
+              <div className="text-[11px] text-zinc-500">프리셋 {count}개</div>
+            </div>
+            {isAdmin ? (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="rounded-md border border-zinc-700 px-2 py-1 text-[11px] font-semibold text-zinc-100 hover:border-zinc-500"
+                  onClick={() => {
+                    const nextName = window.prompt("폴더 이름", String(folder.name ?? ""));
+                    if (nextName == null) return;
+                    void handleRenamePresetFolder(id, nextName);
+                  }}
+                  disabled={busy}
+                >
+                  이름 변경
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-red-800/70 bg-red-950/40 px-2 py-1 text-[11px] font-semibold text-red-200 hover:bg-red-900/40"
+                  onClick={() => void handleDeletePresetFolder(id)}
+                  disabled={busy}
+                >
+                  삭제
+                </button>
+              </div>
+            ) : null}
+          </div>
+          {isAdmin ? (
+            <label className="block">
+              <div className="mb-1 text-[11px] font-semibold text-zinc-400">상위 폴더</div>
+              <select
+                value={folder.parentId ?? ""}
+                onChange={(e) => void handleMovePresetFolder(id, e.target.value || null)}
+                className="h-8 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
+                disabled={busy}
+              >
+                <option value="">루트</option>
+                {parentOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+        </div>
+        {(childFoldersByParent.get(id) ?? []).map((child: any) => renderFolderManagerRow(child, depth + 1))}
+      </div>
+    );
+  };
+  const renderFolderManager = () => (
+    <div className="mt-6 border-t border-dashed border-cyan-900/70 pt-4">
+      <div className="rounded-xl border border-cyan-900/70 bg-cyan-950/20 shadow-[inset_0_1px_0_rgba(34,211,238,0.08)]">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+          onClick={() => setFolderManagerOpen((prev) => !prev)}
+        >
+          <div>
+            <div className="text-xs font-semibold tracking-[0.18em] text-cyan-200/90">FOLDER MANAGER</div>
+            <div className="mt-1 text-[11px] text-cyan-100/60">
+              프리셋 정렬 블록과 분리된 폴더 전용 관리 영역입니다.
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="text-[11px] text-cyan-100/60">{folderManagerOpen ? "접기" : "펼치기"}</div>
+            <div className="rounded-md border border-cyan-800/70 bg-cyan-950/40 px-2 py-1 text-xs font-semibold text-cyan-100">
+              {folderManagerOpen ? "−" : "+"}
+            </div>
+          </div>
+        </button>
+        {folderManagerOpen ? (
+          <div className="border-t border-cyan-900/50 px-4 pb-4 pt-3">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="text-xs font-semibold text-cyan-100">폴더</div>
+              <div className="text-[11px] text-cyan-100/60">삭제해도 프리셋은 유지됩니다.</div>
+            </div>
+            {isAdmin ? (
+              <div className="mb-3 grid gap-2 md:grid-cols-[1fr_220px_auto]">
+                <input
+                  value={folderDraftName}
+                  onChange={(e) => setFolderDraftName(e.target.value)}
+                  className="h-9 flex-1 rounded-lg border border-cyan-900/60 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-cyan-700"
+                  placeholder={`${activeFolderKind === "tile" ? "타일" : presetEntityLabel} 폴더 이름`}
+                />
+                <select
+                  value={folderDraftParentId ?? ""}
+                  onChange={(e) => setFolderDraftParentId(e.target.value || null)}
+                  className="h-9 rounded-lg border border-cyan-900/60 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-cyan-700"
+                >
+                  <option value="">루트</option>
+                  {folderSelectOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="h-9 rounded-lg border border-cyan-700/60 bg-cyan-950/40 px-3 text-xs font-semibold text-cyan-100 hover:bg-cyan-900/40"
+                  onClick={handleCreateFolderClick}
+                  disabled={busy || !String(folderDraftName ?? "").trim()}
+                >
+                  폴더 추가
+                </button>
+              </div>
+            ) : null}
+            <div className="space-y-2">
+              {activeFolders.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-cyan-900/60 px-3 py-3 text-xs text-cyan-100/55">
+                  등록된 폴더가 없습니다.
+                </div>
+              ) : (
+                (childFoldersByParent.get(null) ?? []).map((folder: any) => renderFolderManagerRow(folder, 0))
+              )}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+  const renderTilePresetCard = (preset: any) => {
+    const color = normalizeHexColor(preset.color);
+    const isSharedPreset = sharedTilePresetIds.has(String(preset.id ?? ""));
+    return (
+      <div
+        key={preset.id}
+        className="flex flex-col gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2 md:flex-row md:items-center md:justify-between"
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            className="inline-block h-3 w-3 rounded-full"
+            style={{ backgroundColor: color }}
+            aria-hidden="true"
+          />
+          <span className="truncate text-sm font-semibold" style={{ color }}>
+            {preset.name}
+          </span>
+          <span className="text-[11px] text-zinc-500">
+            {preset.hasValue ? "값 있음" : "값 없음"} · {color}
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {isAdmin && isSharedPreset ? (
+            <select
+              value={preset.folderId ?? ""}
+              onChange={(e) => void handleAssignTilePresetFolder(preset.id, e.target.value || null)}
+              className="h-8 rounded-lg border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-100 outline-none focus:border-zinc-600"
+              disabled={busy}
+            >
+              <option value="">미분류</option>
+              {folderSelectOptions.map((folder: any) => (
+                <option key={folder.id} value={folder.id}>
+                  {folder.label}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          {isAdmin ? (
+            <button
+              type="button"
+              className="rounded-md border border-red-800/70 bg-red-950/40 px-2 py-1 text-[11px] font-semibold text-red-200 hover:bg-red-900/40"
+              onClick={() => handleDeleteTilePreset(preset.id)}
+              disabled={busy}
+            >
+              삭제
+            </button>
+          ) : null}
+        </div>
+      </div>
+    );
+  };
+  const renderBuildingPresetCard = (preset: any) => {
+    const color = normalizeHexColor(preset.color, "#eab308");
+    return (
+      <div
+        key={preset.id}
+        className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold" style={{ color }}>
+              {preset.name}
+            </div>
+            <div className="mt-0.5 text-[11px] text-zinc-500">
+              {preset.tier ? `${preset.tier} · ` : ""}
+              {(preset.presetType ?? "building") === "troop" ? (
+                <>
+                  훈련 시간 {preset.effort ?? 1}일 · 기본 위협도 감소{" "}
+                  {readAutoTroopThreatReduction(preset.effects?.daily)}
+                </>
+              ) : (preset.presetType ?? "building") === "carriage" ? (
+                <>
+                  영입 비용 {Object.keys(preset.buildCost ?? {}).length}
+                  {" · "}영입 인구 {Object.keys(preset.upkeep?.population ?? {}).length}
+                  {" · "}획득 자원 {Object.keys(preset.upkeep?.resources ?? {}).length}
+                </>
+              ) : (
+                <>
+                  노력치 {preset.effort ?? 0} · 공간 {preset.space ?? 0}
+                  {" · "}조건 {preset.placementRules?.length ?? 0}
+                  {" · "}일일 규칙 {preset.effects?.daily?.length ?? 0}
+                </>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {isAdmin ? (
+              <button
+                type="button"
+                className="rounded-md border border-zinc-700 px-2 py-1 text-[11px] font-semibold text-zinc-100 hover:border-zinc-500"
+                onClick={() => handleSelectBuildingPreset(preset.id)}
+                disabled={busy}
+              >
+                편집
+              </button>
+            ) : null}
+            {isAdmin ? (
+              <button
+                type="button"
+                className="rounded-md border border-red-800/70 bg-red-950/40 px-2 py-1 text-[11px] font-semibold text-red-200 hover:bg-red-900/40"
+                onClick={() => handleDeleteBuildingPreset(preset.id)}
+                disabled={busy}
+              >
+                삭제
+              </button>
+            ) : null}
+          </div>
+        </div>
+        {preset.description ? (
+          <div className="mt-1 text-xs text-zinc-400">{preset.description}</div>
+        ) : null}
+      </div>
+    );
+  };
+  const renderPresetTreeNode = (node: any, kind: "tile" | "building") => (
+    <div
+      key={node.id}
+      className="rounded-xl border border-zinc-800 bg-zinc-950/30 p-3"
+      style={{ marginLeft: Number(node.depth ?? 0) * 12 }}
+    >
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="text-sm font-semibold text-zinc-100">{node.folder?.name ?? "이름 없는 폴더"}</div>
+        <div className="text-[11px] text-zinc-500">{node.totalPresetCount}개</div>
+      </div>
+      {node.presets.length > 0 ? (
+        <div className="space-y-2">
+          {kind === "tile"
+            ? node.presets.map((preset: any) => renderTilePresetCard(preset))
+            : node.presets.map((preset: any) => renderBuildingPresetCard(preset))}
+        </div>
+      ) : null}
+      {node.children.length > 0 ? (
+        <div className={node.presets.length > 0 ? "mt-3 space-y-2" : "space-y-2"}>
+          {node.children.map((child: any) => renderPresetTreeNode(child, kind))}
+        </div>
+      ) : null}
+      {node.presets.length === 0 && node.children.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-zinc-800 px-3 py-3 text-xs text-zinc-500">
+          이 폴더에는 프리셋이 없습니다.
+        </div>
+      ) : null}
+    </div>
+  );
 
   return (
               <div className="rounded-xl border border-zinc-800 bg-zinc-950/30 p-4">
@@ -199,7 +613,7 @@ export default function MapPresetsPanel({ ctx }: Props) {
                       타일 속성에서 사용할 프리셋을 관리합니다.
                     </div>
                     {isAdmin ? (
-                      <div className="mb-4 grid gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3 md:grid-cols-[1fr_200px_120px_auto] md:items-end">
+                      <div className="mb-4 grid gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3 md:grid-cols-2 xl:grid-cols-[1fr_200px_120px_180px_auto] xl:items-end">
                         <label className="block">
                           <div className="mb-1 text-[11px] font-semibold text-zinc-400">이름</div>
                           <input
@@ -230,6 +644,21 @@ export default function MapPresetsPanel({ ctx }: Props) {
                           />
                           <span className="text-xs text-zinc-200">값 있음</span>
                         </label>
+                        <label className="block">
+                          <div className="mb-1 text-[11px] font-semibold text-zinc-400">폴더</div>
+                          <select
+                            value={presetDraftFolderId ?? ""}
+                            onChange={(e) => setPresetDraftFolderId(e.target.value || null)}
+                            className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
+                          >
+                            <option value="">미분류</option>
+                            {folderSelectOptions.map((folder: any) => (
+                              <option key={folder.id} value={folder.id}>
+                                {folder.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
                         <button
                           type="button"
                           className="h-9 rounded-lg border border-emerald-700/60 bg-emerald-950/30 px-3 text-xs font-semibold text-emerald-200 hover:bg-emerald-900/40"
@@ -250,41 +679,23 @@ export default function MapPresetsPanel({ ctx }: Props) {
                           등록된 맵 프리셋이 없습니다.
                         </div>
                       ) : (
-                        activeTilePresets.map((preset) => {
-                          const color = normalizeHexColor(preset.color);
-                          return (
-                            <div
-                              key={preset.id}
-                              className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2"
-                            >
-                              <div className="flex min-w-0 items-center gap-2">
-                                <span
-                                  className="inline-block h-3 w-3 rounded-full"
-                                  style={{ backgroundColor: color }}
-                                  aria-hidden="true"
-                                />
-                                <span className="truncate text-sm font-semibold" style={{ color }}>
-                                  {preset.name}
-                                </span>
-                                <span className="text-[11px] text-zinc-500">
-                                  {preset.hasValue ? "값 있음" : "값 없음"} · {color}
-                                </span>
+                        <>
+                          {tilePresetTree.unassigned.length > 0 ? (
+                            <div className="rounded-xl border border-zinc-800 bg-zinc-950/30 p-3">
+                              <div className="mb-2 flex items-center justify-between gap-3">
+                                <div className="text-sm font-semibold text-zinc-100">미분류</div>
+                                <div className="text-[11px] text-zinc-500">{tilePresetTree.unassigned.length}개</div>
                               </div>
-                              {isAdmin ? (
-                                <button
-                                  type="button"
-                                  className="rounded-md border border-red-800/70 bg-red-950/40 px-2 py-1 text-[11px] font-semibold text-red-200 hover:bg-red-900/40"
-                                  onClick={() => handleDeleteTilePreset(preset.id)}
-                                  disabled={busy}
-                                >
-                                  삭제
-                                </button>
-                              ) : null}
+                              <div className="space-y-2">
+                                {tilePresetTree.unassigned.map((preset: any) => renderTilePresetCard(preset))}
+                              </div>
                             </div>
-                          );
-                        })
+                          ) : null}
+                          {tilePresetTree.roots.map((node: any) => renderPresetTreeNode(node, "tile"))}
+                        </>
                       )}
                     </div>
+                    {renderFolderManager()}
                   </>
                 ) : (
                   <>
@@ -382,6 +793,26 @@ export default function MapPresetsPanel({ ctx }: Props) {
                             </label>
                           ) : null}
                         </div>
+                        <label className="block md:max-w-xs">
+                          <div className="mb-1 text-[11px] font-semibold text-zinc-400">폴더</div>
+                          <select
+                            value={buildingDraft.folderId ?? ""}
+                            onChange={(e) =>
+                              setBuildingDraft((prev) => ({
+                                ...prev,
+                                folderId: e.target.value || null,
+                              }))
+                            }
+                            className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
+                          >
+                            <option value="">미분류</option>
+                            {folderSelectOptions.map((folder: any) => (
+                              <option key={folder.id} value={folder.id}>
+                                {folder.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
                         {editingPresetType === "troop" ? (
                           <div className="grid gap-2 md:grid-cols-2">
                             <label className="block">
@@ -2388,71 +2819,23 @@ export default function MapPresetsPanel({ ctx }: Props) {
                           등록된 {presetEntityLabel} 프리셋이 없습니다.
                         </div>
                       ) : (
-                        activePresetRows.map((preset) => {
-                          const color = normalizeHexColor(preset.color, "#eab308");
-                          return (
-                            <div
-                              key={preset.id}
-                              className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2"
-                            >
-                              <div className="flex items-center justify-between gap-3">
-                                <div className="min-w-0">
-                                  <div className="truncate text-sm font-semibold" style={{ color }}>
-                                    {preset.name}
-                                  </div>
-                                  <div className="mt-0.5 text-[11px] text-zinc-500">
-                                    {preset.tier ? `${preset.tier} · ` : ""}
-                                    {(preset.presetType ?? "building") === "troop" ? (
-                                      <>
-                                        훈련 시간 {preset.effort ?? 1}일 · 기본 위협도 감소{" "}
-                                        {readAutoTroopThreatReduction(preset.effects?.daily)}
-                                      </>
-                                    ) : (preset.presetType ?? "building") === "carriage" ? (
-                                      <>
-                                        영입 비용 {Object.keys(preset.buildCost ?? {}).length}
-                                        {" · "}영입 인구 {Object.keys(preset.upkeep?.population ?? {}).length}
-                                        {" · "}획득 자원 {Object.keys(preset.upkeep?.resources ?? {}).length}
-                                      </>
-                                    ) : (
-                                      <>
-                                        노력치 {preset.effort ?? 0} · 공간 {preset.space ?? 0}
-                                        {" · "}조건 {preset.placementRules?.length ?? 0}
-                                        {" · "}일일 규칙 {preset.effects?.daily?.length ?? 0}
-                                      </>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  {isAdmin ? (
-                                    <button
-                                      type="button"
-                                      className="rounded-md border border-zinc-700 px-2 py-1 text-[11px] font-semibold text-zinc-100 hover:border-zinc-500"
-                                      onClick={() => handleSelectBuildingPreset(preset.id)}
-                                      disabled={busy}
-                                    >
-                                      편집
-                                    </button>
-                                  ) : null}
-                                  {isAdmin ? (
-                                    <button
-                                      type="button"
-                                      className="rounded-md border border-red-800/70 bg-red-950/40 px-2 py-1 text-[11px] font-semibold text-red-200 hover:bg-red-900/40"
-                                      onClick={() => handleDeleteBuildingPreset(preset.id)}
-                                      disabled={busy}
-                                    >
-                                      삭제
-                                    </button>
-                                  ) : null}
-                                </div>
+                        <>
+                          {buildingPresetTree.unassigned.length > 0 ? (
+                            <div className="rounded-xl border border-zinc-800 bg-zinc-950/30 p-3">
+                              <div className="mb-2 flex items-center justify-between gap-3">
+                                <div className="text-sm font-semibold text-zinc-100">미분류</div>
+                                <div className="text-[11px] text-zinc-500">{buildingPresetTree.unassigned.length}개</div>
                               </div>
-                              {preset.description ? (
-                                <div className="mt-1 text-xs text-zinc-400">{preset.description}</div>
-                              ) : null}
+                              <div className="space-y-2">
+                                {buildingPresetTree.unassigned.map((preset: any) => renderBuildingPresetCard(preset))}
+                              </div>
                             </div>
-                          );
-                        })
+                          ) : null}
+                          {buildingPresetTree.roots.map((node: any) => renderPresetTreeNode(node, "building"))}
+                        </>
                       )}
                     </div>
+                    {renderFolderManager()}
                   </>
                 )}
               </div>

@@ -162,6 +162,7 @@ export const EMPTY_WORKER_ASSIGNMENT_DRAFT: WorkerAssignmentDraft = {
 export type BuildingDraftState = {
   id: string | null;
   presetType: "building" | "troop" | "carriage";
+  folderId: string | null;
   name: string;
   color: string;
   tier: string;
@@ -638,6 +639,7 @@ export function normalizeTilePresets(raw: unknown): MapTileStatePreset[] {
       name,
       color,
       hasValue: !!item?.hasValue,
+      folderId: String(item?.folderId ?? "").trim() || null,
     });
   }
   return out;
@@ -952,6 +954,7 @@ export function normalizeBuildingPresets(raw: unknown): WorldMapBuildingPresetRo
       mapId: String(cast?.mapId ?? "").trim() || null,
       name,
       color: normalizeHexColor(cast?.color, "#eab308"),
+      folderId: String(cast?.folderId ?? "").trim() || null,
       presetType: normalizePresetType(decoded.presetType),
       tier: String(cast?.tier ?? "").trim() || undefined,
       effort: Number.isFinite(Number(cast?.effort))
@@ -1592,6 +1595,7 @@ export function createDefaultBuildingDraftState(): BuildingDraftState {
   return {
     id: null,
     presetType: "building",
+    folderId: null,
     name: "",
     color: "#eab308",
     tier: "",
@@ -1690,6 +1694,7 @@ export function buildDraftFromPreset(row: WorldMapBuildingPresetRow): BuildingDr
   return {
     id: row.id,
     presetType,
+    folderId: String(row.folderId ?? "").trim() || null,
     name: row.name,
     color: normalizeHexColor(row.color, "#eab308"),
     tier: row.tier ?? "",

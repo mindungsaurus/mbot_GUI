@@ -261,6 +261,7 @@ export async function createTagPreset(body: {
   kind?: "toggle" | "stack";
   decOnTurnStart?: boolean;
   decOnTurnEnd?: boolean;
+  decByCaster?: boolean;
   colorCode?: number | null;
 }) {
   const res = await fetch(`${API_BASE}/tag-presets`, {
@@ -281,6 +282,7 @@ export async function updateTagPreset(
     kind?: "toggle" | "stack";
     decOnTurnStart?: boolean;
     decOnTurnEnd?: boolean;
+    decByCaster?: boolean;
     colorCode?: number | null;
   }
 ) {
@@ -579,10 +581,61 @@ export async function listSharedWorldMapTilePresets() {
   return res.json();
 }
 
+export async function listSharedWorldMapPresetFolders(kind?: "tile" | "building" | "troop" | "carriage") {
+  const qs = kind ? `?kind=${encodeURIComponent(kind)}` : "";
+  const res = await fetch(`${API_BASE}/world-maps/shared/preset-folders${qs}`, {
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createSharedWorldMapPresetFolder(body: {
+  kind?: "tile" | "building" | "troop" | "carriage";
+  name?: string;
+  order?: number | null;
+  parentId?: string | null;
+}) {
+  const res = await fetch(`${API_BASE}/world-maps/shared/preset-folders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateSharedWorldMapPresetFolder(
+  folderId: string,
+  body: {
+    name?: string;
+    order?: number | null;
+    parentId?: string | null;
+  }
+) {
+  const res = await fetch(`${API_BASE}/world-maps/shared/preset-folders/${folderId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteSharedWorldMapPresetFolder(folderId: string) {
+  const res = await fetch(`${API_BASE}/world-maps/shared/preset-folders/${folderId}`, {
+    method: "DELETE",
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function createSharedWorldMapTilePreset(body: {
   name?: string;
   color?: string;
   hasValue?: boolean;
+  folderId?: string | null;
 }) {
   const res = await fetch(`${API_BASE}/world-maps/shared/tile-presets`, {
     method: "POST",
@@ -599,6 +652,7 @@ export async function updateSharedWorldMapTilePreset(
     name?: string;
     color?: string;
     hasValue?: boolean;
+    folderId?: string | null;
   }
 ) {
   const res = await fetch(`${API_BASE}/world-maps/shared/tile-presets/${presetId}`, {
@@ -630,6 +684,8 @@ export async function listSharedWorldMapBuildingPresets() {
 export async function createSharedWorldMapBuildingPreset(body: {
   name?: string;
   color?: string;
+  folderId?: string | null;
+  folderKind?: "building" | "troop" | "carriage" | null;
   tier?: string;
   effort?: number | null;
   space?: number | null;
@@ -662,6 +718,8 @@ export async function updateSharedWorldMapBuildingPreset(
   body: {
     name?: string;
     color?: string;
+    folderId?: string | null;
+    folderKind?: "building" | "troop" | "carriage" | null;
     tier?: string;
     effort?: number | null;
     space?: number | null;
@@ -704,6 +762,8 @@ export async function createWorldMapBuildingPreset(
   body: {
     name?: string;
     color?: string;
+    folderId?: string | null;
+    folderKind?: "building" | "troop" | "carriage" | null;
     tier?: string;
     effort?: number | null;
     space?: number | null;
@@ -738,6 +798,8 @@ export async function updateWorldMapBuildingPreset(
   body: {
     name?: string;
     color?: string;
+    folderId?: string | null;
+    folderKind?: "building" | "troop" | "carriage" | null;
     tier?: string;
     effort?: number | null;
     space?: number | null;

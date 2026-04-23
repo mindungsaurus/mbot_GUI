@@ -721,6 +721,7 @@ export default function App() {
   const [tagGrantStacks, setTagGrantStacks] = useState(1);
   const [tagGrantDecStart, setTagGrantDecStart] = useState(false);
   const [tagGrantDecEnd, setTagGrantDecEnd] = useState(false);
+  const [tagGrantDecByCaster, setTagGrantDecByCaster] = useState(false);
   const [tagGrantErr, setTagGrantErr] = useState<string | null>(null);
   const [tagGrantPresets, setTagGrantPresets] = useState<TagPreset[]>([]);
   const [tagGrantPresetFolders, setTagGrantPresetFolders] = useState<
@@ -1676,6 +1677,7 @@ export default function App() {
       setTagGrantStacks(1);
       setTagGrantDecStart(false);
       setTagGrantDecEnd(false);
+      setTagGrantDecByCaster(false);
       setTagGrantErr(null);
       setTagGrantPresets([]);
       setTagGrantPresetFolders([]);
@@ -2266,6 +2268,7 @@ export default function App() {
     setTagGrantStacks(1);
     setTagGrantDecStart(!!preset.decOnTurnStart);
     setTagGrantDecEnd(!!preset.decOnTurnEnd);
+    setTagGrantDecByCaster(!!preset.decByCaster);
   }
 
   async function applyStatusTagGrant() {
@@ -2305,17 +2308,28 @@ export default function App() {
     }
 
     const stacks = normalizeStacks(tagGrantStacks, 1);
+    const currentEntry = state?.turnOrder?.[state.turnIndex ?? 0] ?? null;
+    const sourceUnitId =
+      tagGrantDecByCaster && currentEntry?.kind === "unit"
+        ? currentEntry.unitId
+        : null;
+    if (tagGrantDecByCaster && !sourceUnitId) {
+      setTagGrantErr("시전자 기준 감소는 현재 턴의 유닛이 있을 때만 부여할 수 있어.");
+      return;
+    }
     const actions = targets.map((unitId) => {
       const unit = units.find((u) => u.id === unitId);
       const current = unit?.tagStates?.[name];
       const hasStack = !!current;
       const tagStatePatch = hasStack
         ? { stacks: { delta: stacks } }
-        : {
-            stacks,
-            decOnTurnStart: tagGrantDecStart,
-            decOnTurnEnd: tagGrantDecEnd,
-          };
+          : {
+              stacks,
+              decOnTurnStart: tagGrantDecStart,
+              decOnTurnEnd: tagGrantDecEnd,
+              decByCaster: tagGrantDecByCaster,
+              sourceUnitId,
+            };
 
       return {
         type: "PATCH_UNIT",
@@ -4040,6 +4054,15 @@ export default function App() {
                       disabled={busy}
                     />
                     턴 종료 시 감소
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-zinc-300">
+                    <input
+                      type="checkbox"
+                      checked={tagGrantDecByCaster}
+                      onChange={(e) => setTagGrantDecByCaster(e.target.checked)}
+                      disabled={busy}
+                    />
+                    시전자 기준
                   </label>
                 </div>
               )}

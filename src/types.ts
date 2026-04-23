@@ -85,6 +85,8 @@ export interface TurnTagState {
   stacks: number;
   decOnTurnStart?: boolean;
   decOnTurnEnd?: boolean;
+  decByCaster?: boolean;
+  sourceUnitId?: string;
 }
 
 export interface TagsPatch {
@@ -100,6 +102,8 @@ export interface TurnTagPatch {
   stacks?: TagStacksPatch;
   decOnTurnStart?: boolean;
   decOnTurnEnd?: boolean;
+  decByCaster?: boolean;
+  sourceUnitId?: string | null;
 }
 
 export type Marker = {
@@ -246,6 +250,7 @@ export type MapTileStatePreset = {
   name: string;
   color: string;
   hasValue: boolean;
+  folderId?: string | null;
 };
 
 export type MapTileStateAssignment = {
@@ -439,6 +444,7 @@ export type WorldMapBuildingPresetRow = {
   mapId: string | null;
   name: string;
   color: string;
+  folderId?: string | null;
   presetType?: "building" | "troop" | "carriage";
   tier?: string;
   effort?: number;
@@ -459,6 +465,18 @@ export type WorldMapBuildingPresetRow = {
   };
   createdAt: string;
   updatedAt: string;
+};
+
+export type WorldMapPresetFolderKind = "tile" | "building" | "troop" | "carriage";
+
+export type WorldMapPresetFolder = {
+  id: string;
+  kind: WorldMapPresetFolderKind;
+  name: string;
+  order: number;
+  parentId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type WorldMapBuildingInstanceRow = {
@@ -550,6 +568,7 @@ export type TagPreset = {
   kind: TagPresetKind;
   decOnTurnStart?: boolean;
   decOnTurnEnd?: boolean;
+  decByCaster?: boolean;
   colorCode?: number;
   createdAt?: string;
   updatedAt?: string;
