@@ -23,7 +23,7 @@ Current Primary Goal:
 - Continue concrete feature work without context-loop re-scans.
 
 Latest User Instruction:
-- Add a Vercel-side API proxy so the deployed web stops calling the Railway public URL directly.
+- Fix the Render startup failure so the migrated backend can run the Discord bot there after the Railway app service is stopped.
 
 DONE:
 - Added persistent tracking docs:
@@ -105,10 +105,35 @@ DONE:
   - updated `src/api.ts` so production defaults to same-origin `/api`
   - added `vercel.json` rewrite for `/api/* -> Railway`
   - verified frontend TypeScript build passes
+- OPS-001 mitigation retest:
+  - live `https://mbot-gui.vercel.app/api/healthz` is still about 15.4s
+  - live `https://mbot-gui.vercel.app/api/auth/me` is still about 12.3-15.5s
+  - response headers show both `Server: Vercel` and `X-Railway-*`, so the rewrite is active
+  - the proxy does not mitigate the latency, which means the bottleneck remains on the path to the Railway public service
+- OPS-001 migration prep:
+  - confirmed an existing backend `Dockerfile` is already present and usable
+  - next code changes are limited to safe host binding and optional Discord bot disablement for the migrated app server
+- OPS-001 migration prep progress:
+  - added `DISCORD_BOT_ENABLED` gating around `NecordModule`
+  - updated backend startup to bind explicitly to `0.0.0.0`
+  - verified backend TypeScript build passes
+- OPS-001 current blocker:
+  - Render now reaches module startup, but bot-enabled deployment fails because Discord `Client` injection is not resolving inside publisher providers like `ItemsPublisher`
+- OPS-001 blocker mitigation progress:
+  - changed `ItemsPublisher` and `EncounterPublisher` to optional `Client` injection
+  - added runtime warnings so missing Discord client no longer crashes app bootstrap
+  - verified backend TypeScript build passes again
+- OPS-001 Render validation:
+  - external checks against `https://mbot2-2uoi.onrender.com` are fast
+  - `/healthz` responds in about 0.39s with 200
+  - `/auth/me` responds in about 0.36s with 401, which is expected without auth
+- OPS-001 cutover progress:
+  - updated Vercel rewrite target from Railway to the Render backend URL
 
 NEXT:
 - `OPS-001` in progress:
-  - redeploy the frontend and retest the production URL
+  - redeploy the frontend so Vercel picks up the new rewrite target
+  - verify live `/api/healthz` and login/bootstrap latency against Render
 
 RISKS:
 - Existing non-ASCII notes can display as mojibake in some terminal encodings.
@@ -118,8 +143,7 @@ FILES TO TOUCH:
 - docs/CODEX_SESSION_STATE.md
 - docs/CODEX_TASK_QUEUE.md
 - docs/CODEX_WORKLOG.md
-- src/api.ts
 - vercel.json
 
 RESUME POINTER:
-- `OPS-001` is active. Production frontend now targets same-origin `/api` and Vercel rewrites `/api/*` to Railway; the next step is redeploy and remeasure live latency.
+- `OPS-001` is active. Render backend is fast and Vercel now points to it; next step is frontend redeploy plus live `/api/*` validation.

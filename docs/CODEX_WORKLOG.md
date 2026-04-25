@@ -162,6 +162,46 @@
   - `npx tsc -p tsconfig.app.json --noEmit`
 - Next validation:
   - redeploy the frontend and remeasure the live site
+- Live retest after frontend deploy:
+  - `https://mbot-gui.vercel.app/api/healthz`: about 15.4s total
+  - `https://mbot-gui.vercel.app/api/auth/me` OPTIONS: about 12.3s total
+  - `https://mbot-gui.vercel.app/api/auth/me` GET: about 15.5s total
+  - headers include both Vercel and Railway edge/request headers, so the proxy path is definitely active
+- Updated conclusion:
+  - Vercel same-origin proxy does not solve this incident
+  - the latency remains on the path to the Railway public service even when the browser only talks to Vercel
+- Migration prep:
+  - confirmed `mbot2` already has a reusable Dockerfile
+  - next step is minimal backend hardening for a second deployment target:
+    - explicit `0.0.0.0` bind
+    - optional Discord bot disablement to avoid dual-login conflicts during cutover
+- Implemented:
+  - added `DISCORD_BOT_ENABLED` gating so a second backend deployment can run HTTP-only without logging the bot in
+  - changed backend listen binding to `0.0.0.0`
+- Verification:
+  - `npx tsc -p C:\Users\USER\Desktop\mbot2\tsconfig.build.json --noEmit`
+- Next action:
+  - deploy the existing Dockerfile on the new platform with `DISCORD_BOT_ENABLED=false`
+- Current blocker after trying bot-enabled startup on Render:
+  - `ItemsPublisher` fails to resolve Discord `Client`
+  - this indicates the Discord client provider is not being surfaced reliably to non-root feature modules in the migrated runtime
+- Implemented blocker mitigation:
+  - changed `ItemsPublisher` and `EncounterPublisher` to inject Discord `Client` optionally
+  - added warning/no-op fallback so a missing client no longer aborts Nest bootstrap
+- Verification:
+  - `npx tsc -p C:\Users\USER\Desktop\mbot2\tsconfig.build.json --noEmit`
+- Next validation:
+  - redeploy Render
+  - if boot succeeds but Discord output is still absent, confirm Render no longer has `DISCORD_BOT_ENABLED=false`
+- Render validation:
+  - `https://mbot2-2uoi.onrender.com/healthz`: about 0.39s total, 200
+  - `https://mbot2-2uoi.onrender.com/auth/me`: about 0.36s total, 401 without auth
+  - this is fast enough to use as the new production backend target
+- Cutover step:
+  - updated `vercel.json` rewrite target from Railway to `https://mbot2-2uoi.onrender.com`
+- Next validation:
+  - redeploy the frontend on Vercel
+  - confirm live `/api/healthz` and login/bootstrap now use the Render backend path
 
 이 파일은 컨텍스트 압축 루프를 방지하기 위한 작업 로그다.
 앞으로 월드맵/프리셋 작업은 이 파일을 기준으로 이어서 진행한다.
