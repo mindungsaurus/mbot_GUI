@@ -23,7 +23,7 @@ Current Primary Goal:
 - Continue concrete feature work without context-loop re-scans.
 
 Latest User Instruction:
-- When caster-based tag decay is enabled, temporary turns must not trigger that caster-based decay.
+- Add a Vercel-side API proxy so the deployed web stops calling the Railway public URL directly.
 
 DONE:
 - Added persistent tracking docs:
@@ -77,9 +77,38 @@ DONE:
   - temp-turn start/end now keep holder-based tag decay but suppress caster-based decay
   - forwarded the same suppression through servant-linked temp-turn decay calls
   - verified backend TypeScript build passes
+- Started `OPS-001`:
+  - investigate deployed web responsiveness regression affecting login/bootstrap
+  - compare frontend request path, backend `/auth/me`, and startup/init candidates without repo-wide rescan
+- OPS-001 findings so far:
+  - direct measurement against `https://motivated-intuition-production-416d.up.railway.app` shows DNS/TCP/TLS are fast but TTFB is about 12-15s
+  - the delay reproduces on `/auth/me`, `/auth/login`, `/`, and a missing route, so it is not specific to auth or the new preset features
+  - direct measurement against `https://mbot-gui.vercel.app/` is fast
+  - current evidence points to Railway public ingress or process-wide response-start delay, not a recent UI route/regression in the new feature code
+- OPS-001 implementation step:
+  - add a lightweight `/healthz` endpoint for HTTP-only response timing checks
+  - add request timing logs around the Nest HTTP app to separate app-internal delay from ingress delay
+- OPS-001 implementation progress:
+  - added `/healthz` in the backend app controller/service
+  - added slow-request timing logs in `main.ts` for requests taking 1000ms or longer
+  - verified backend TypeScript build passes
+- OPS-001 redeploy check:
+  - after redeploy, external `/healthz` still shows about 15.2s TTFB
+  - external `/` still shows about 15.2s TTFB
+  - external `/auth/me` OPTIONS/GET still show about 12.2-12.4s TTFB
+  - the slowdown still reproduces on the new minimal health endpoint
+  - mobile access is also slow, so the issue is less likely to be tied to one desktop environment or one local browser state
+- OPS-001 mitigation step:
+  - move the deployed frontend to same-origin `/api` calls
+  - add a Vercel rewrite that proxies `/api/*` to Railway
+- OPS-001 mitigation progress:
+  - updated `src/api.ts` so production defaults to same-origin `/api`
+  - added `vercel.json` rewrite for `/api/* -> Railway`
+  - verified frontend TypeScript build passes
 
 NEXT:
-- Wait for the next concrete combat or world-map task.
+- `OPS-001` in progress:
+  - redeploy the frontend and retest the production URL
 
 RISKS:
 - Existing non-ASCII notes can display as mojibake in some terminal encodings.
@@ -89,7 +118,8 @@ FILES TO TOUCH:
 - docs/CODEX_SESSION_STATE.md
 - docs/CODEX_TASK_QUEUE.md
 - docs/CODEX_WORKLOG.md
-- c:/Users/USER/Desktop/mbot2/src/encounter/encounter.actions.ts
+- src/api.ts
+- vercel.json
 
 RESUME POINTER:
-- `EC-003` is complete. Temp turns no longer trigger caster-based tag decay, while holder-based temp-turn decay remains active.
+- `OPS-001` is active. Production frontend now targets same-origin `/api` and Vercel rewrites `/api/*` to Railway; the next step is redeploy and remeasure live latency.

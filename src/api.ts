@@ -1,6 +1,20 @@
 import type { Pos } from "./types";
 
-export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:3000";
+function resolveDefaultApiBase() {
+  if (import.meta.env.DEV) return "http://localhost:3000";
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return `${window.location.origin}/api`;
+  }
+  return "/api";
+}
+
+const configuredApiBase = String(import.meta.env.VITE_API_BASE ?? "").trim();
+
+// In production, prefer the same-origin Vercel proxy path over a direct Railway URL.
+export const API_BASE =
+  import.meta.env.PROD
+    ? resolveDefaultApiBase()
+    : configuredApiBase || resolveDefaultApiBase();
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem("operator.auth.token");

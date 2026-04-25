@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "https://motivated-intuition-production-416d.up.railway.app/$1"
+    }
+  ]
+}

@@ -109,6 +109,59 @@
   - used that option only on temp-turn start/end, including the servant-linked temp-turn decay path
 - Verification:
   - `npx tsc -p C:\Users\USER\Desktop\mbot2\tsconfig.build.json --noEmit`
+- [2026-04-25] Started `OPS-001`.
+- Goal: explain why deployed web login/bootstrap became visibly slower after the preset-folder and caster-based tag preset release even though Railway reports fast request handling.
+- Current evidence:
+  - browser shows roughly 15s around `OPTIONS /auth/me`
+  - Railway handler logs show about 200ms
+  - local environment does not reproduce
+  - no recent restart/boot log is present
+  - repeated requests remain slow, so startup-only delay is not sufficient
+- External measurements:
+  - `https://mbot-gui.vercel.app/` responds quickly
+  - `https://motivated-intuition-production-416d.up.railway.app/auth/me`:
+    - OPTIONS: about 12-13s total, with fast DNS/TCP/TLS and slow TTFB
+    - GET: about 13-15s total, with fast DNS/TCP/TLS and slow TTFB
+  - the same 12-15s TTFB reproduces on `/`, `/auth/login`, and a missing route
+- Interim conclusion:
+  - the slowdown is service-wide on the Railway public URL and is not specific to `/auth/me`
+  - current evidence does not support the new preset-folder or caster-based tag feature code as the direct cause
+  - likely focus areas are Railway ingress, service-wide request queueing, or process-wide event-loop contention
+- Next implementation:
+  - add `/healthz` for a minimal HTTP probe that avoids auth and feature paths
+  - add request timing logs before attempting any module-disable experiment
+- Implemented:
+  - added `/healthz` through `AppController`/`AppService`
+  - added slow-request timing logs in `main.ts` for requests taking 1000ms or longer
+- Verification:
+  - `npx tsc -p C:\Users\USER\Desktop\mbot2\tsconfig.build.json --noEmit`
+- Next validation:
+  - redeploy and compare external `curl` timing for `/healthz`, `/`, and `/auth/me`
+  - compare those results against the new app-side slow-request logs
+- Redeploy retest:
+  - `/healthz`: about 15.2s total with slow TTFB
+  - `/`: about 15.2s total with slow TTFB
+  - `/auth/me` OPTIONS: about 12.2s total with slow TTFB
+  - `/auth/me` GET: about 12.4s total with slow TTFB
+- Updated conclusion:
+  - even the new minimal health endpoint is slow from outside
+  - this further weakens any hypothesis tied to auth, preset folders, caster-based tags, or world-map-specific logic
+  - the remaining key check is whether the new app-side `[http-slow]` logs appear for these requests
+- Additional field report:
+  - mobile access is also slow
+- Stronger conclusion:
+  - the problem is unlikely to be limited to one desktop browser, one desktop machine, or one local ISP path only
+  - combined with fast Railway HTTPS logs, the practical next step is an operational front-door change or proxy rather than more feature-code rollback
+- Next mitigation:
+  - switch the deployed frontend to same-origin `/api` requests in production
+  - add a Vercel rewrite so `/api/*` proxies to the Railway backend
+- Implemented:
+  - `src/api.ts` now prefers same-origin `/api` in production instead of a direct Railway origin
+  - added `vercel.json` rewrite so Vercel forwards `/api/*` to the Railway backend
+- Verification:
+  - `npx tsc -p tsconfig.app.json --noEmit`
+- Next validation:
+  - redeploy the frontend and remeasure the live site
 
 이 파일은 컨텍스트 압축 루프를 방지하기 위한 작업 로그다.
 앞으로 월드맵/프리셋 작업은 이 파일을 기준으로 이어서 진행한다.
