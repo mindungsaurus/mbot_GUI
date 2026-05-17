@@ -23,7 +23,7 @@ Current Primary Goal:
 - Continue concrete feature work without context-loop re-scans.
 
 Latest User Instruction:
-- Fix the Render startup failure so the migrated backend can run the Discord bot there after the Railway app service is stopped.
+- Plan an encounter turn-summary system that compares previous-turn snapshots with current unit state and can render in web and Discord.
 
 DONE:
 - Added persistent tracking docs:
@@ -129,11 +129,26 @@ DONE:
   - `/auth/me` responds in about 0.36s with 401, which is expected without auth
 - OPS-001 cutover progress:
   - updated Vercel rewrite target from Railway to the Render backend URL
+- Started `EC-004` planning:
+  - inspected existing encounter snapshot, log, publish, and render paths only
+  - found current snapshot support is limited to spell slots, consumables, toggle tags, and manual stack tags
+  - found web logs are rendered in `App.tsx`, with a natural insertion point directly above Logs
+  - found Discord publish can accept a new option through publish body and `renderAnsi`
+- `EC-004` clarified scope:
+  - turn summary must compare the whole field, not only the current turn actor
+  - summary must include every registered unit with relevant changes
+  - marker creation, removal, movement, duration changes, and expiration should be summarized as field changes
+  - primary use case is Discord player verification after the operator applies strategic actions
+- Completed `EC-004`:
+  - added field-wide turn-summary baselines and current/latest summaries
+  - summaries compare all units and markers against the active baseline
+  - temp turns push their own baseline and restore the prior baseline on resume
+  - web renders the summary above Logs
+  - Discord publish includes the summary by default with an opt-out setting
+  - verified frontend and backend TypeScript builds
 
 NEXT:
-- `OPS-001` in progress:
-  - redeploy the frontend so Vercel picks up the new rewrite target
-  - verify live `/api/healthz` and login/bootstrap latency against Render
+- Await next concrete encounter task.
 
 RISKS:
 - Existing non-ASCII notes can display as mojibake in some terminal encodings.
@@ -143,7 +158,13 @@ FILES TO TOUCH:
 - docs/CODEX_SESSION_STATE.md
 - docs/CODEX_TASK_QUEUE.md
 - docs/CODEX_WORKLOG.md
-- vercel.json
+- src/App.tsx
+- src/types.ts
+- c:/Users/USER/Desktop/mbot2/src/encounter/encounter.types.ts
+- c:/Users/USER/Desktop/mbot2/src/encounter/encounter.actions.ts
+- c:/Users/USER/Desktop/mbot2/src/encounter/encounter.render.ts
+- c:/Users/USER/Desktop/mbot2/src/encounter/encounter.controller.ts
+- c:/Users/USER/Desktop/mbot2/src/encounter/encounter.service.ts
 
 RESUME POINTER:
-- `OPS-001` is active. Render backend is fast and Vercel now points to it; next step is frontend redeploy plus live `/api/*` validation.
+- `EC-004` is complete. Next encounter work can start from the updated queue and this state file.

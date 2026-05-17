@@ -202,6 +202,58 @@
 - Next validation:
   - redeploy the frontend on Vercel
   - confirm live `/api/healthz` and login/bootstrap now use the Render backend path
+- [2026-05-12] Started `EC-004`.
+- Goal:
+  - plan an encounter turn-summary system before implementation
+  - compare each unit's current state against previous turn snapshots
+  - show the summary above web Logs and optionally include it in Discord render
+- Existing flow found:
+  - backend `turnEndSnapshots` and `turnStartSnapshots` already exist but only summarize spell slots, consumables, toggle tags, and manual stack tags
+  - backend captures turn-end snapshot before leaving a turn and turn-start snapshot after entering a turn
+  - temp turns already use the same active-entry path and can be compared if snapshots are captured for them
+  - web Logs panel has a direct insertion point above Logs in `App.tsx`
+  - Discord publish options flow through `PublishBody` and `renderAnsi`
+- Planned direction:
+  - replace ad hoc string-only reminder comparison with a structured unit snapshot and derived summary rows
+  - include hp, death saves, spell slots, consumables, toggle tags, and all stack tags
+  - expose render/publish option to include or omit turn summary in Discord
+- Clarified requirement:
+  - summary scope is the entire field, not only the unit or group whose turn is ending
+  - all registered units with relevant changes should appear in the summary
+  - marker creation, removal, movement, duration changes, and expiration should be included
+  - the summary is primarily a Discord verification aid so players can check operator-applied strategic actions
+- Revised implementation direction:
+  - store a field-wide baseline snapshot at turn start / temp-turn start
+  - compare that field-wide baseline against the full current field at the point a turn or temp turn ends
+  - store the resulting latest summary on encounter state for web and Discord rendering
+  - default Discord publish option for turn summary should be enabled
+- [2026-05-12] Completed `EC-004`.
+- Implementation:
+  - added structured field-wide baseline and summary types to frontend/backend encounter types
+  - backend now captures a full unit/marker baseline at battle start, normal turn start, and temp-turn start
+  - backend refreshes `currentTurnSummary` after applied actions and stores `latestTurnSummary` when a normal or temp turn completes
+  - summary compares all units and markers, including unit create/remove and marker create/remove/update/expiration
+  - Discord render includes turn summary by default and publish accepts `includeTurnSummary=false`
+  - web UI shows Turn Summary directly above Logs
+- Verification:
+  - `npx tsc -p tsconfig.app.json --noEmit`
+  - `npx tsc -p C:\Users\USER\Desktop\mbot2\tsconfig.build.json --noEmit`
+- [2026-05-13] Adjusted Discord turn-summary publishing.
+- Change:
+  - removed turn summary from the main Discord battle-state render body
+  - exported a separate turn-summary ANSI render path
+  - publish now sends the battle-state message first, then sends Turn Summary as a separate message when enabled
+- Verification:
+  - `npx tsc -p C:\Users\USER\Desktop\mbot2\tsconfig.build.json --noEmit`
+- [2026-05-17] Adjusted Discord Turn Summary formatting.
+- Change:
+  - replaced ASCII arrows in Turn Summary output with a single-character arrow
+  - reformatted hp, death saves, spell slots, consumables, tags, stack tags, and markers for verification-focused output
+  - applied red/green/blue ANSI coloring for negative/positive/temp values
+  - applied tag preset colors in Turn Summary tag output
+  - marker output now avoids coordinates and uses hourglass duration notation
+- Verification:
+  - `npx tsc -p C:\Users\USER\Desktop\mbot2\tsconfig.build.json --noEmit`
 
 이 파일은 컨텍스트 압축 루프를 방지하기 위한 작업 로그다.
 앞으로 월드맵/프리셋 작업은 이 파일을 기준으로 이어서 진행한다.

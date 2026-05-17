@@ -34,6 +34,7 @@ import type {
   TagPresetFolder,
   TurnEntry,
   TurnEndSnapshot,
+  EncounterTurnSummary,
   TurnGroup,
   Unit,
   UnitPatch,
@@ -652,6 +653,8 @@ export default function App() {
   const [hideBenchEnemyOnPublish, setHideBenchEnemyOnPublish] = useState(false);
   const [planarBattleModeOnPublish, setPlanarBattleModeOnPublish] =
     useState(false);
+  const [includeTurnSummaryOnPublish, setIncludeTurnSummaryOnPublish] =
+    useState(false);
   const channelInputRef = useRef<HTMLInputElement | null>(null);
 
   // 채널 입력/최근 채널
@@ -828,6 +831,10 @@ export default function App() {
     const logs = state?.logs ?? [];
     return logs.slice(-200).reverse();
   }, [state?.logs]);
+  const turnSummary = useMemo(
+    () => selectTurnSummaryForDisplay(state),
+    [state?.currentTurnSummary, state?.latestTurnSummary]
+  );
   const battleStarted = state?.battleStarted ?? false;
   const activeEncounter = useMemo(
     () => encounters.find((enc) => enc.id === encounterId) ?? null,
@@ -1774,6 +1781,7 @@ export default function App() {
         hideBenchTeam: hideBenchTeamOnPublish,
         hideBenchEnemy: hideBenchEnemyOnPublish,
         planarMode: planarBattleModeOnPublish,
+        includeTurnSummary: includeTurnSummaryOnPublish,
       });
       pushRecent(channelId);
     } catch (e: any) {
@@ -1843,6 +1851,102 @@ export default function App() {
         <span className="font-semibold">{prefix}</span>
         {rest ? ` ${rest}` : ""}
       </>
+    );
+  }
+
+  function selectTurnSummaryForDisplay(
+    source: EncounterState | null
+  ): EncounterTurnSummary | null {
+    const current = source?.currentTurnSummary ?? null;
+    if (current?.hasChanges) return current;
+    const latest = source?.latestTurnSummary ?? null;
+    if (latest?.hasChanges) return latest;
+    return current ?? latest;
+  }
+
+  function summaryStatusClass(status?: string) {
+    if (status === "created") return "text-emerald-300";
+    if (status === "removed") return "text-rose-300";
+    return "text-zinc-200";
+  }
+
+  function renderTurnSummaryPanel(summary: EncounterTurnSummary | null) {
+    const unitChanges = summary?.units ?? [];
+    const markerChanges = summary?.markers ?? [];
+    return (
+      <div className="mt-4 rounded-xl border border-cyan-900/60 bg-cyan-950/20 p-3">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-cyan-100">Turn Summary</div>
+            <div className="text-xs text-cyan-400/80">
+              {summary
+                ? `${summary.isTemp ? "임시 턴" : "턴"} · ${summary.subjectLabel}`
+                : "baseline 없음"}
+            </div>
+          </div>
+          <div className="text-xs text-cyan-300/80">
+            {summary?.hasChanges
+              ? `${unitChanges.length + markerChanges.length} rows`
+              : "변경 없음"}
+          </div>
+        </div>
+
+        {!summary ? (
+          <div className="rounded-lg border border-cyan-900/40 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-500">
+            전투 시작 후 첫 기준 스냅샷이 생성됩니다.
+          </div>
+        ) : !summary.hasChanges ? (
+          <div className="rounded-lg border border-cyan-900/40 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-400">
+            기준 시점 이후 유닛/마커 변경사항이 없습니다.
+          </div>
+        ) : (
+          <div className="max-h-72 space-y-2 overflow-auto pr-1">
+            {unitChanges.map((unit) => (
+              <div
+                key={`summary-unit-${unit.unitId}`}
+                className="rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2 text-xs"
+              >
+                <div className={["font-semibold", summaryStatusClass(unit.status)].join(" ")}>
+                  {unit.alias ? `${unit.name} (${unit.alias})` : unit.name}
+                </div>
+                <div className="mt-1 space-y-1 text-zinc-300">
+                  {unit.changes.map((change, idx) => (
+                    <div key={`${unit.unitId}-${change.kind}-${idx}`}>
+                      <span className="text-cyan-300">{change.label}</span>
+                      {": "}
+                      <span className="text-zinc-500">{change.before ?? "-"}</span>
+                      <span className="px-1 text-zinc-600">-&gt;</span>
+                      <span className="text-zinc-100">{change.after ?? "-"}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+
+            {markerChanges.map((marker) => (
+              <div
+                key={`summary-marker-${marker.markerId}`}
+                className="rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2 text-xs"
+              >
+                <div className={["font-semibold", summaryStatusClass(marker.status)].join(" ")}>
+                  Marker · {marker.alias ? `${marker.name} (${marker.alias})` : marker.name}
+                </div>
+                <div className="mt-1 space-y-1 text-zinc-300">
+                  {marker.changes.map((change, idx) => (
+                    <div key={`${marker.markerId}-${change.kind}-${idx}`}>
+                      <span className="text-cyan-300">{change.label}</span>
+                      {": "}
+                      <span className="text-zinc-500">{change.before ?? "-"}</span>
+                      <span className="px-1 text-zinc-600">-&gt;</span>
+                      <span className="text-zinc-100">{change.after ?? "-"}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -3933,6 +4037,23 @@ export default function App() {
                 </div>
               </div>
 
+              <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2">
+                <label className="flex items-center gap-2 text-sm text-zinc-200">
+                  <input
+                    type="checkbox"
+                    checked={includeTurnSummaryOnPublish}
+                    onChange={(e) =>
+                      setIncludeTurnSummaryOnPublish(e.target.checked)
+                    }
+                    className="h-4 w-4 accent-cyan-500"
+                  />
+                  턴 요약 포함
+                </label>
+                <div className="mt-1 text-xs text-zinc-500">
+                  기준 시점 이후 모든 유닛과 마커 변경사항을 함께 전송
+                </div>
+              </div>
+
               <div className="mt-4 flex justify-end gap-2">
                 <button
                   type="button"
@@ -4966,6 +5087,8 @@ export default function App() {
                   {selected?.pos ? ` (x=${selected.pos.x}, z=${selected.pos.z})` : ""}
                 </div>
               </div>
+
+              {renderTurnSummaryPanel(turnSummary)}
 
               <div className="mt-4">
                 <div className="mb-2 flex items-center justify-between">

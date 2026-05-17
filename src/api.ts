@@ -1000,6 +1000,7 @@ export async function publish(
     hideBenchTeam?: boolean;
     hideBenchEnemy?: boolean;
     planarMode?: boolean;
+    includeTurnSummary?: boolean;
   },
 ) {
   const res = await fetch(`${API_BASE}/encounters/${encounterId}/publish`, {
@@ -1011,6 +1012,7 @@ export async function publish(
       hideBenchTeam: !!opts?.hideBenchTeam,
       hideBenchEnemy: !!opts?.hideBenchEnemy,
       planarMode: !!opts?.planarMode,
+      includeTurnSummary: opts?.includeTurnSummary !== false,
     }),
   });
   if (!res.ok) throw new Error(await res.text());

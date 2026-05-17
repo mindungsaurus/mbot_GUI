@@ -48,6 +48,55 @@ export type TurnEndSnapshot = {
   manualStacks?: string;
 };
 
+export type TurnSummaryChangeKind =
+  | "created"
+  | "removed"
+  | "hp"
+  | "deathSaves"
+  | "spellSlots"
+  | "consumables"
+  | "toggleTags"
+  | "stackTags"
+  | "marker";
+
+export type TurnSummaryChange = {
+  kind: TurnSummaryChangeKind;
+  label: string;
+  before?: string;
+  after?: string;
+};
+
+export type UnitTurnSummary = {
+  unitId: string;
+  name: string;
+  alias?: string;
+  side?: Side;
+  bench?: "TEAM" | "ENEMY";
+  colorCode?: number;
+  status?: "created" | "removed" | "changed";
+  changes: TurnSummaryChange[];
+};
+
+export type MarkerTurnSummary = {
+  markerId: string;
+  name: string;
+  alias?: string;
+  status?: "created" | "removed" | "changed";
+  changes: TurnSummaryChange[];
+};
+
+export type EncounterTurnSummary = {
+  id: string;
+  at: string;
+  baselineAt: string;
+  round: number;
+  isTemp: boolean;
+  subjectLabel: string;
+  units: UnitTurnSummary[];
+  markers: MarkerTurnSummary[];
+  hasChanges: boolean;
+};
+
 export type Side = "TEAM" | "ENEMY" | "NEUTRAL";
 export type UnitKind = "NORMAL" | "SERVANT" | "BUILDING";
 
@@ -144,6 +193,8 @@ export type EncounterState = {
   round?: number;
   tempTurnStack?: string[];
   logs?: any[];
+  currentTurnSummary?: EncounterTurnSummary;
+  latestTurnSummary?: EncounterTurnSummary;
 };
 
 export type EncounterSummary = {
